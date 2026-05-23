@@ -1,0 +1,123 @@
+# =========================
+# IntelliJ IDEA
+# =========================
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+
+# =========================
+# Eclipse
+# =========================
+.project
+.classpath
+.settings/
+.springBeans
+.sts4-cache/
+
+# =========================
+# NetBeans
+# =========================
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# =========================
+# Gradle
+# =========================
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Ignore Gradle GUI config
+gradle-app.setting
+
+# Avoid ignoring wrapper files
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.properties
+
+# =========================
+# Java / Spring Boot
+# =========================
+*.class
+*.log
+*.ctxt
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Spring Boot
+*.pid
+*.seed
+*.pid.lock
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# =========================
+# Application configs
+# =========================
+application-local.yml
+application-local.properties
+application-dev.yml
+application-dev.properties
+.env
+
+# =========================
+# Docker
+# =========================
+.docker/
+docker-data/
+.docker-data/
+*.env
+.env.*
+
+# Docker Compose override
+docker-compose.override.yml
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Test / Coverage
+# =========================
+coverage/
+jacoco.exec
+
+# =========================
+# Maven (optional)
+# =========================
+target/
+
+# =========================
+# Kotlin
+# =========================
+.kotlin/
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.swo
+*~
