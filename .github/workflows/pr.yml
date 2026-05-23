@@ -8,7 +8,78 @@ on:
       - reopened
 
 jobs:
+  wait-for-branch-ci:
+    runs-on: ubuntu-latest
+
+    outputs:
+      branch_sha: ${{ steps.branch.outputs.sha }}
+
+    steps:
+      - name: Get branch SHA
+        id: branch
+        run: |
+          echo "sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Wait for Branch CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Polling Branch CI status for SHA: $SHA"
+          
+          MAX_ATTEMPTS=30
+          SLEEP_SECONDS=10
+          
+          attempt=1
+          
+          while [ $attempt -le $MAX_ATTEMPTS ]
+          do
+            echo ""
+            echo "Attempt $attempt/$MAX_ATTEMPTS"
+          
+            RESPONSE=$(gh api \
+              repos/$REPO/commits/$SHA/check-runs)
+          
+            echo "$RESPONSE" > response.json
+          
+            STATUS=$(jq -r '
+              .check_runs[]
+              | select(.name == "validate-and-build")
+              | .status
+            ' response.json | head -n1)
+          
+            CONCLUSION=$(jq -r '
+              .check_runs[]
+              | select(.name == "validate-and-build")
+              | .conclusion
+            ' response.json | head -n1)
+          
+            echo "Status: $STATUS"
+            echo "Conclusion: $CONCLUSION"
+          
+            if [ "$STATUS" = "completed" ]; then
+          
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "✅ Branch CI succeeded"
+                exit 0
+              fi
+          
+              echo "❌ Branch CI failed"
+              exit 1
+            fi
+          
+            echo "⏳ Branch CI still running..."
+            sleep $SLEEP_SECONDS
+          
+            attempt=$((attempt+1))
+          done
+          
+          echo "❌ Timeout waiting for Branch CI"
+          exit 1
+
   pr-validation:
+    needs: wait-for-branch-ci
     runs-on: ubuntu-latest
 
     steps:
@@ -26,6 +97,7 @@ jobs:
           fi
 
   trello-link:
+    needs: wait-for-branch-ci
     runs-on: ubuntu-latest
 
     steps:
