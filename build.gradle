@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.2.5'
     id 'io.spring.dependency-management' version '1.1.4'
+    id "com.diffplug.spotless" version '6.25.0'
 }
 
 group = 'com.socialapp'
@@ -44,4 +45,23 @@ dependencies {
     // Lombok
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
+}
+
+spotless {
+    format 'misc', {
+        target '*.gradle', '.gitattributes', '.gitignore'
+        trimTrailingWhitespace()
+        indentWithSpaces(3)
+        endWithNewline()
+        setEncoding('utf-8')
+    }
+    java {
+        removeUnusedImports()
+        googleJavaFormat('1.15.0').reorderImports(false).skipJavadocFormatting()
+        indentWithSpaces(2)
+        trimTrailingWhitespace()
+        importOrder('\\#', 'java.', 'org.', 'com.')
+        endWithNewline()
+        toggleOffOn()
+    }
 }

@@ -1,0 +1,50 @@
+name: Branch CI
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  validate-and-build:
+    if: "!startsWith(github.event.head_commit.message, 'Merge')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Validate branch name
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+
+          echo "Branch: $BRANCH_NAME"
+
+          if [[ ! "$BRANCH_NAME" =~ ^task\/[A-Za-z0-9]+.*$ ]]; then
+            echo "❌ Invalid branch name format."
+            exit 1
+          fi
+
+      - name: Validate commit message
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+
+          echo "Commit message: $COMMIT_MSG"
+
+          if [[ ! "$COMMIT_MSG" =~ ^\[[A-Za-z0-9]+\] ]]; then
+            echo "❌ Invalid commit message format."
+            exit 1
+          fi
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build project
+        run: ./gradlew build -x test
