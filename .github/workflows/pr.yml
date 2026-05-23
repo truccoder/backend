@@ -1,0 +1,60 @@
+name: Pull Request
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  pr-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate PR title
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+
+          echo "PR title: $PR_TITLE"
+
+          if [[ ! "$PR_TITLE" =~ ^\[[A-Za-z0-9]+\] ]]; then
+            echo "❌ Invalid PR title format."
+            echo "Expected to start with:"
+            echo "  [TwW5igrB]"
+            exit 1
+          fi
+
+  trello-link:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract Trello short link
+        id: extract
+        run: |
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+
+          echo "Branch: $BRANCH_NAME"
+
+          SHORT_LINK=$(echo "$BRANCH_NAME" | sed -E 's#task/([A-Za-z0-9]+).*#\1#')
+
+          echo "short_link=$SHORT_LINK" >> $GITHUB_OUTPUT
+
+          echo "Detected Trello short link: $SHORT_LINK"
+
+      - name: Attach PR to Trello card
+        run: |
+          PR_URL="${{ github.event.pull_request.html_url }}"
+
+          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
+
+          echo "Attaching PR: $PR_URL"
+          echo "Card short link: $SHORT_LINK"
+
+          curl --fail --request POST \
+            --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments" \
+            --data-urlencode "url=$PR_URL" \
+            --data "key=${{ secrets.TRELLO_API_KEY }}" \
+            --data "token=${{ secrets.TRELLO_API_TOKEN }}"
+
+          echo "✅ Successfully attached PR to Trello card"
