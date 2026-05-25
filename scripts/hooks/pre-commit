@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs spotlessApply then build.
+# If both pass, re-stages originally staged files so the commit proceeds cleanly.
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+log()   { echo -e "${GREEN}[pre-commit]${NC} $*"; }
+error() { echo -e "${RED}[pre-commit] ERROR:${NC} $*" >&2; }
+
+# ── 1. Capture originally staged files ──────────────────────────────────────
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ -z "$STAGED_FILES" ]; then
+    log "No staged files found. Skipping checks."
+    exit 0
+fi
+
+log "Staged files to be committed:"
+echo "$STAGED_FILES" | while IFS= read -r f; do echo "   • $f"; done
+
+# ── 2. Run spotlessApply ─────────────────────────────────────────────────────
+log "Running ./gradlew spotlessApply ..."
+if ! ./gradlew spotlessApply -q 2>&1; then
+    error "spotlessApply failed. Fix formatting issues and try again."
+    exit 1
+fi
+log "spotlessApply completed successfully."
+
+# ── 3. Re-stage the originally staged files (now formatted by spotless) ──────
+# Must happen BEFORE build and BEFORE exit so git sees the final index.
+log "Re-staging originally staged files after spotless formatting..."
+while IFS= read -r f; do
+    if [ -f "$f" ]; then
+        git add "$f"
+    fi
+done <<< "$STAGED_FILES"
+
+# ── 4. Run build ─────────────────────────────────────────────────────────────
+log "Running ./gradlew build ..."
+if ! ./gradlew build -q 2>&1; then
+    error "Build failed. Fix build errors and try again."
+    exit 1
+fi
+log "Build succeeded."
+
+# ── 5. All checks passed ─────────────────────────────────────────────────────
+log "All checks passed. Proceeding with commit."
+exit 0
