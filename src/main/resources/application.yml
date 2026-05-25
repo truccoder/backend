@@ -15,7 +15,15 @@ spring:
     password: postgres
     driver-class-name: org.postgresql.Driver
 
+  flyway:
+    # Schema that Flyway will manage and create its history table in
+    schemas: socialapp
+    default-schema: socialapp
+
   jpa:
     hibernate:
       ddl-auto: none
     show-sql: true
+    properties:
+      hibernate:
+        default_schema: socialapp
