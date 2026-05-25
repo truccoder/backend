@@ -6,9 +6,11 @@ on:
       - opened
       - synchronize
       - reopened
+      - closed
 
 jobs:
   wait-for-branch-ci:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     outputs:
@@ -27,58 +29,60 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           echo "Polling Branch CI status for SHA: $SHA"
-          
+
           MAX_ATTEMPTS=30
           SLEEP_SECONDS=10
-          
+
           attempt=1
-          
+
           while [ $attempt -le $MAX_ATTEMPTS ]
           do
             echo ""
             echo "Attempt $attempt/$MAX_ATTEMPTS"
-          
+
             RESPONSE=$(gh api \
               repos/$REPO/commits/$SHA/check-runs)
-          
+
             echo "$RESPONSE" > response.json
-          
+
             STATUS=$(jq -r '
               .check_runs[]
               | select(.name == "validate-and-build")
               | .status
             ' response.json | head -n1)
-          
+
             CONCLUSION=$(jq -r '
               .check_runs[]
               | select(.name == "validate-and-build")
               | .conclusion
             ' response.json | head -n1)
-          
+
             echo "Status: $STATUS"
             echo "Conclusion: $CONCLUSION"
-          
+
             if [ "$STATUS" = "completed" ]; then
-          
+
               if [ "$CONCLUSION" = "success" ]; then
                 echo "✅ Branch CI succeeded"
                 exit 0
               fi
-          
+
               echo "❌ Branch CI failed"
               exit 1
             fi
-          
+
             echo "⏳ Branch CI still running..."
+
             sleep $SLEEP_SECONDS
-          
+
             attempt=$((attempt+1))
           done
-          
+
           echo "❌ Timeout waiting for Branch CI"
           exit 1
 
   pr-validation:
+    if: github.event.action != 'closed'
     needs: wait-for-branch-ci
     runs-on: ubuntu-latest
 
@@ -96,8 +100,10 @@ jobs:
             exit 1
           fi
 
-  trello-link:
-    needs: wait-for-branch-ci
+  trello-sync:
+    needs:
+      - pr-validation
+    if: always()
     runs-on: ubuntu-latest
 
     steps:
@@ -114,10 +120,73 @@ jobs:
 
           echo "Detected Trello short link: $SHORT_LINK"
 
-      - name: Attach PR to Trello card
+      - name: Determine PR status
+        id: status
+        run: |
+          ACTION="${{ github.event.action }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+
+          if [ "$ACTION" = "opened" ]; then
+            STATUS="OPENED"
+
+          elif [ "$ACTION" = "reopened" ]; then
+            STATUS="REOPENED"
+
+          elif [ "$ACTION" = "synchronize" ]; then
+            STATUS="UPDATED"
+
+          elif [ "$ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then
+            STATUS="MERGED"
+
+          elif [ "$ACTION" = "closed" ]; then
+            STATUS="CLOSED"
+
+          else
+            STATUS="$ACTION"
+          fi
+
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+
+          echo "Resolved PR status: $STATUS"
+
+      - name: Get existing attachments
+        id: attachments
+        run: |
+          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
+
+          RESPONSE=$(curl --silent \
+            --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments?key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_API_TOKEN }}")
+
+          echo "$RESPONSE" > attachments.json
+
+          echo "Fetched existing Trello attachments"
+
+      - name: Check if PR already attached
+        id: existing
         run: |
           PR_URL="${{ github.event.pull_request.html_url }}"
 
+          EXISTING=$(jq -r \
+            --arg PR_URL "$PR_URL" \
+            '.[] | select(.url == $PR_URL) | .id' \
+            attachments.json | head -n1)
+
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "attachment_id=$EXISTING" >> $GITHUB_OUTPUT
+
+            echo "PR attachment already exists: $EXISTING"
+
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+
+            echo "PR attachment does not exist"
+          fi
+
+      - name: Attach PR to Trello card
+        if: steps.existing.outputs.exists == 'false'
+        run: |
+          PR_URL="${{ github.event.pull_request.html_url }}"
           SHORT_LINK="${{ steps.extract.outputs.short_link }}"
 
           echo "Attaching PR: $PR_URL"
@@ -126,7 +195,35 @@ jobs:
           curl --fail --request POST \
             --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments" \
             --data-urlencode "url=$PR_URL" \
+            --data "name=PR #${{ github.event.pull_request.number }}" \
             --data "key=${{ secrets.TRELLO_API_KEY }}" \
             --data "token=${{ secrets.TRELLO_API_TOKEN }}"
 
           echo "✅ Successfully attached PR to Trello card"
+
+      - name: Add PR status comment to Trello
+        run: |
+          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
+          STATUS="${{ steps.status.outputs.status }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          COMMENT=$(cat <<EOF
+          🚀 Pull Request Update
+
+          Title: $PR_TITLE
+          Author: $AUTHOR
+          Status: $STATUS
+
+          $PR_URL
+          EOF
+          )
+
+          curl --fail --request POST \
+            --url "https://api.trello.com/1/cards/${SHORT_LINK}/actions/comments" \
+            --data-urlencode "text=$COMMENT" \
+            --data "key=${{ secrets.TRELLO_API_KEY }}" \
+            --data "token=${{ secrets.TRELLO_API_TOKEN }}"
+
+          echo "✅ Successfully added Trello comment"
