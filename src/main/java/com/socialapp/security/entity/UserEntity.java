@@ -2,12 +2,10 @@ package com.socialapp.security.entity;
 
 import java.time.OffsetDateTime;
 
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedDate;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -19,7 +17,10 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class UserEntity {
 
-  @Id private Long id;
+  @Id
+  @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "users_id_generator")
+  @SequenceGenerator(name = "users_id_generator", sequenceName = "q_users_id", allocationSize = 1)
+  private Integer id;
 
   private String email;
 
@@ -31,7 +32,7 @@ public class UserEntity {
 
   private String profilePictureUrl;
 
-  @CreatedDate private OffsetDateTime createdAt;
+  @CreationTimestamp private OffsetDateTime createdAt;
 
-  @LastModifiedDate private OffsetDateTime updatedAt;
+  @UpdateTimestamp private OffsetDateTime updatedAt;
 }
