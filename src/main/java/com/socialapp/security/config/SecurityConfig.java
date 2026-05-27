@@ -30,7 +30,7 @@ public class SecurityConfig {
         .authorizeHttpRequests(
             requests ->
                 requests
-                    .requestMatchers("/v1/api/auth/**")
+                    .requestMatchers("/v1/api/auth/**", "/v1/api/posts/**")
                     .permitAll()
                     // TODO: remove once JWT authentication is implemented
                     .requestMatchers("/v1/api/friendships/**")
