@@ -1,35 +1,34 @@
-package com.socialapp.security.entity;
+package com.socialapp.friendships.entity;
 
 import java.time.OffsetDateTime;
 
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
-import jakarta.persistence.*;
+import com.socialapp.friendships.entity.enums.FriendRequestStatus;
+
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.SequenceGenerator;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-@Entity
-@Table(name = "t_users")
+@Table(name = "t_friend_requests")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserEntity {
+public class FriendRequestEntity {
   @Id
   @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "users_id_generator")
   @SequenceGenerator(name = "users_id_generator", sequenceName = "q_users_id", allocationSize = 1)
   private Integer id;
 
-  private String email;
-
-  private String password;
-
-  private String username;
-
-  private String fullName;
-
-  private String profilePictureUrl;
+  private Integer requesterId;
+  private Integer addresseeId;
+  private FriendRequestStatus status;
 
   @CreationTimestamp private OffsetDateTime createdAt;
 
