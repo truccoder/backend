@@ -1,5 +1,6 @@
 package com.socialapp.friendships.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.neo4j.repository.Neo4jRepository;
@@ -27,4 +28,11 @@ public interface FriendshipRepository extends Neo4jRepository<UserNode, Long> {
       RETURN u2 IS NOT NULL
       """)
   boolean areFriends(@Param("userId1") Integer userId1, @Param("userId2") Integer userId2);
+
+  @Query(
+      """
+      MATCH (u:User {userId: $userId})-[:FRIENDS_WITH]-(friend:User)
+      RETURN friend.userId
+      """)
+  List<Integer> findFriendIds(@Param("userId") Integer userId);
 }

@@ -4,10 +4,16 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.socialapp.friendships.repository.FriendshipRepository;
+
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class FriendshipQueryService {
-  // TODO: implement Neo4j query — returns friend user IDs for the given user
+  private final FriendshipRepository friendshipRepository;
+
   public List<Integer> getFriendIds(Integer userId) {
-    return List.of();
+    return friendshipRepository.findFriendIds(userId);
   }
 }
