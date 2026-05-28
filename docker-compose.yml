@@ -78,6 +78,17 @@ services:
       - backend-network
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.docker-data/redis:/data
+    networks:
+      - backend-network
+    restart: always
+
 networks:
   backend-network:
     driver: bridge

@@ -27,6 +27,11 @@ spring:
       hibernate:
         default_schema: socialapp
 
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
   neo4j:
     uri: bolt://localhost:7687
     authentication:
