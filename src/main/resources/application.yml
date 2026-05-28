@@ -16,7 +16,6 @@ spring:
     driver-class-name: org.postgresql.Driver
 
   flyway:
-    # Schema that Flyway will manage and create its history table in
     schemas: socialapp
     default-schema: socialapp
 
