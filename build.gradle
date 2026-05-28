@@ -41,6 +41,9 @@ dependencies {
     runtimeOnly  'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly  'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
+    // Neo4j
+    implementation 'org.springframework.boot:spring-boot-starter-data-neo4j'
+
     // MinIO
     implementation 'io.minio:minio:8.5.10'
 
@@ -63,11 +66,11 @@ spotless {
     }
     java {
         removeUnusedImports()
-        googleJavaFormat('1.15.0').reorderImports(false).skipJavadocFormatting()
+        googleJavaFormat('1.22.0').reorderImports(false).skipJavadocFormatting()
         indentWithSpaces(2)
         trimTrailingWhitespace()
         importOrder('\\#', 'java.', 'org.', 'com.')
         endWithNewline()
-        toggleOffOn()
+        toggleOffOn('// spotless:off', '// spotless:on')
     }
 }
