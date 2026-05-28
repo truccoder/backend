@@ -7,6 +7,9 @@ import org.hibernate.annotations.UpdateTimestamp;
 
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -16,18 +19,24 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+@Entity
 @Table(name = "t_friend_requests")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class FriendRequestEntity {
   @Id
-  @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "users_id_generator")
-  @SequenceGenerator(name = "users_id_generator", sequenceName = "q_users_id", allocationSize = 1)
+  @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "friend_requests_id_generator")
+  @SequenceGenerator(
+      name = "friend_requests_id_generator",
+      sequenceName = "q_friend_requests_id",
+      allocationSize = 1)
   private Integer id;
 
   private Integer requesterId;
   private Integer addresseeId;
+
+  @Enumerated(EnumType.STRING)
   private FriendRequestStatus status;
 
   @CreationTimestamp private OffsetDateTime createdAt;

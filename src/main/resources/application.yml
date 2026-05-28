@@ -27,3 +27,9 @@ spring:
     properties:
       hibernate:
         default_schema: socialapp
+
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: neo4j_password
