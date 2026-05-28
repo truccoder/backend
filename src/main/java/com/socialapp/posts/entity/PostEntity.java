@@ -41,7 +41,6 @@ public class PostEntity {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "location_details", columnDefinition = "jsonb")
   private LocationDetails locationDetails;
-
   private Integer authorId;
 
   @CreationTimestamp

@@ -1,14 +1,10 @@
 package com.socialapp.posts.service;
 
-import com.socialapp.common.exception.UnauthorizedException;
 import com.socialapp.posts.dto.CreatePostRequest;
-import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
 
 import lombok.RequiredArgsConstructor;
 
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -20,10 +16,10 @@ public class PostService {
   public void createPost(CreatePostRequest request) {
     Integer authorId = getAuthenticatedUserId();
 
-    PostEntity post = new PostEntity();
+    Post post = new Post();
     post.setContent(request.content());
-    post.setVisibility(request.visibility());
-    post.setImages(request.images());
+    post.setGooglePlaceId(request.googlePlaceId());
+    post.setLocationType(request.locationType());
     post.setLocationDetails(request.location());
     post.setAuthorId(authorId);
 

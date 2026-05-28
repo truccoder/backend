@@ -1,18 +1,15 @@
 package com.socialapp.posts.dto;
 
 import com.socialapp.posts.entity.LocationDetails;
-import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.LocationType;
 
-import jakarta.validation.constraints.NotNull;
-
-import java.util.List;
+import jakarta.validation.constraints.NotBlank;
 
 public record CreatePostRequest(
-    String content,
+    @NotBlank(message = "content is required") String content,
 
-    @NotNull(message = "visibility is required")
-    PostVisibility visibility,
+    String googlePlaceId,
 
-    List<String> images,
+    LocationType locationType,
 
     LocationDetails location) {}
