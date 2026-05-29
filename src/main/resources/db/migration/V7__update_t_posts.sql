@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS socialapp.t_posts (
     content VARCHAR,
     visibility VARCHAR,
     images JSONB,
-    tagged_user_ids JSONB,
     google_place_id VARCHAR,
     location_type VARCHAR,
     location_details JSONB,
@@ -13,10 +12,9 @@ CREATE TABLE IF NOT EXISTS socialapp.t_posts (
     created_at TIMESTAMP with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP with time zone,
 
-    CONSTRAINT fk_posts_author
-    FOREIGN KEY (author_id)
+    CONSTRAINT fk_posts_author FOREIGN KEY (author_id)
     REFERENCES socialapp.t_users(id) ON DELETE CASCADE
-);
+    );
 
 CREATE TABLE socialapp.t_post_tags (
    post_id INT,

@@ -1,6 +1,7 @@
 package com.socialapp.posts.entity;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
@@ -36,10 +37,9 @@ public class PostEntity {
   @Column(name = "images", columnDefinition = "jsonb")
   private List<String> images;
 
-  @ElementCollection
-  @CollectionTable(name = "t_post_tags", joinColumns = @JoinColumn(name = "post_id"))
-  @Column(name = "tagged_user_id")
-  private List<Integer> taggedUserIds;
+  @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
+  @JoinColumn(name = "post_id")
+  private List<PostTagEntity> tags = new ArrayList<>();
 
   private String googlePlaceId;
 
