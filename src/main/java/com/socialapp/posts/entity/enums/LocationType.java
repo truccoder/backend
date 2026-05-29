@@ -1,6 +1,6 @@
 package com.socialapp.posts.entity.enums;
 
-public enum Location {
+public enum LocationType {
   COORDINATE,
   PLACE,
   REGION
