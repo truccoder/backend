@@ -2,6 +2,8 @@ package com.socialapp.newsfeed.dto;
 
 import java.time.OffsetDateTime;
 
+import com.socialapp.posts.entity.enums.PostVisibility;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,7 +19,7 @@ public class FeedPostDataDto {
   private String authorFullName;
   private String authorProfilePictureUrl;
   private String content;
-  private String visibility;
+  private PostVisibility visibility;
   private OffsetDateTime createdAt;
   private int likeCount;
   private int commentCount;

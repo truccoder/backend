@@ -37,6 +37,8 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers("/v1/api/feed/**")
                     .permitAll()
+                    .requestMatchers("/v1/api/posts/**")
+                    .permitAll()
                     .requestMatchers("/v1/api/search/**")
                     .permitAll()
                     .anyRequest()

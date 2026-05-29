@@ -5,12 +5,14 @@ import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_P
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
@@ -18,6 +20,7 @@ import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
+import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.search.service.FriendshipQueryService;
 
 import lombok.RequiredArgsConstructor;
@@ -30,28 +33,39 @@ public class NewsfeedService {
   private final StringRedisTemplate redisTemplate;
   private final ObjectMapper objectMapper;
   private final FriendshipQueryService friendshipQueryService;
-  private final PostScoringService postScoringService;
   private final UserInteractionRepository userInteractionRepository;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
 
-  public void fanOutPost(FeedPostDataDto postData) {
+  public void fanOutPost(FeedPostDataDto postData, List<Integer> taggedUserIds) {
     String postId = String.valueOf(postData.getPostId());
     double score = postData.getCreatedAt().toInstant().toEpochMilli();
 
     cachePostData(postId, postData);
     addToFeed(postData.getAuthorId(), postId, score);
 
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(postData.getAuthorId());
-    for (Integer friendId : friendIds) {
-      addToFeed(friendId, postId, score);
+    if (!PostVisibility.PRIVATE.equals(postData.getVisibility())) {
+      List<Integer> friendIds = friendshipQueryService.getFriendIds(postData.getAuthorId());
+      for (Integer friendId : friendIds) {
+        addToFeed(friendId, postId, score);
+      }
     }
 
-    log.debug("Fan-out post {} to {} friends + author", postData.getPostId(), friendIds.size());
+    if (Objects.nonNull(taggedUserIds)) {
+      for (Integer taggedUserId : taggedUserIds) {
+        addToFeed(taggedUserId, postId, score);
+      }
+    }
+
+    log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
   }
 
-  public void removePost(Integer postId, Integer authorId) {
+  public void updatePostCache(FeedPostDataDto postData) {
+    cachePostData(String.valueOf(postData.getPostId()), postData);
+  }
+
+  public void removePost(Integer postId, Integer authorId, List<Integer> taggedUserIds) {
     String postIdStr = String.valueOf(postId);
 
     redisTemplate.delete(POST_CACHE_KEY_PREFIX + postIdStr);
@@ -60,6 +74,12 @@ public class NewsfeedService {
     List<Integer> friendIds = friendshipQueryService.getFriendIds(authorId);
     for (Integer friendId : friendIds) {
       removeFromFeed(friendId, postIdStr);
+    }
+
+    if (!CollectionUtils.isEmpty(taggedUserIds)) {
+      for (Integer taggedUserId : taggedUserIds) {
+        removeFromFeed(taggedUserId, postIdStr);
+      }
     }
   }
 
@@ -70,7 +90,7 @@ public class NewsfeedService {
 
     Set<String> postIds = redisTemplate.opsForZSet().reverseRange(feedKey, start, end);
 
-    if (Objects.isNull(postIds) || postIds.isEmpty()) {
+    if (CollectionUtils.isEmpty(postIds)) {
       return FeedResponseDto.builder()
           .posts(List.of())
           .page(page)
@@ -79,13 +99,7 @@ public class NewsfeedService {
           .build();
     }
 
-    List<FeedPostDataDto> posts = new ArrayList<>();
-    for (String postId : postIds) {
-      FeedPostDataDto post = postScoringService.loadPostFromCache(postId);
-      if (Objects.nonNull(post)) {
-        posts.add(post);
-      }
-    }
+    List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
 
     boolean hasMore = posts.size() > size;
     if (hasMore) {
@@ -103,6 +117,25 @@ public class NewsfeedService {
     entity.setAuthorId(authorId);
     entity.setType(type);
     userInteractionRepository.save(entity);
+  }
+
+  private List<FeedPostDataDto> loadPostsFromCache(Collection<String> postIds) {
+    List<String> keys = postIds.stream().map(id -> POST_CACHE_KEY_PREFIX + id).toList();
+    List<String> values = redisTemplate.opsForValue().multiGet(keys);
+
+    if (Objects.isNull(values)) {
+      return List.of();
+    }
+
+    List<FeedPostDataDto> posts = new ArrayList<>(values.size());
+    for (String json : values) {
+      try {
+        posts.add(objectMapper.readValue(json, FeedPostDataDto.class));
+      } catch (Exception e) {
+        log.warn("Failed to deserialize cached post", e);
+      }
+    }
+    return posts;
   }
 
   private void cachePostData(String postId, FeedPostDataDto data) {
