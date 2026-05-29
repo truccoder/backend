@@ -22,10 +22,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PostEntity {
-
   @Id
   @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "posts_seq_gen")
-  @SequenceGenerator(name = "posts_seq_gen", sequenceName = "q_posts_id", allocationSize = 10)
+  @SequenceGenerator(name = "posts_seq_gen", sequenceName = "q_posts_id", allocationSize = 1)
   private Integer id;
 
   private String content;
@@ -36,6 +35,11 @@ public class PostEntity {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "images", columnDefinition = "jsonb")
   private List<String> images;
+
+  @ElementCollection
+  @CollectionTable(name = "t_post_tags", joinColumns = @JoinColumn(name = "post_id"))
+  @Column(name = "tagged_user_id")
+  private List<Integer> taggedUserIds;
 
   private String googlePlaceId;
 

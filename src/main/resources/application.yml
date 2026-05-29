@@ -37,3 +37,10 @@ spring:
     authentication:
       username: neo4j
       password: neo4j_password
+
+cache:
+  default-ttl: 30m
+  jitter-percent: 10
+  lock-ttl: 5s
+  lock-retry-delay: 100ms
+  lock-max-retries: 50
