@@ -61,6 +61,35 @@ services:
       - opensearch
     restart: always
 
+  neo4j:
+    image: neo4j:5.20
+    container_name: neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes:
+      - ./.docker-data/neo4j/data:/data
+      - ./.docker-data/neo4j/logs:/logs
+    networks:
+      - backend-network
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.docker-data/redis:/data
+    networks:
+      - backend-network
+    command: redis-server --save 60 1 --loglevel warning
+    restart: always
+
 networks:
   backend-network:
     driver: bridge

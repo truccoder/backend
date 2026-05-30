@@ -32,6 +32,15 @@ public class SecurityConfig {
                 requests
                     .requestMatchers("/v1/api/auth/**")
                     .permitAll()
+                    // TODO: remove once JWT authentication is implemented
+                    .requestMatchers("/v1/api/friendships/**")
+                    .permitAll()
+                    .requestMatchers("/v1/api/feed/**")
+                    .permitAll()
+                    .requestMatchers("/v1/api/posts/**")
+                    .permitAll()
+                    .requestMatchers("/v1/api/search/**")
+                    .permitAll()
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(
