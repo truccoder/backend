@@ -59,3 +59,8 @@ moderation:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
     max-urls-per-post: 3
     duplicate-window-seconds: 60
+
+jwt:
+  secret: ${PERSPECTIVE_API_KEY:}
+  access-token-expiration-ms: 900000
+  refresh-token-expiration-ms: 604800000
