@@ -9,6 +9,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.enums.LocationType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 
@@ -50,6 +51,9 @@ public class PostEntity {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "location_details", columnDefinition = "jsonb")
   private LocationDetails locationDetails;
+
+  @Enumerated(EnumType.STRING)
+  private ModerationStatus moderationStatus;
 
   private Integer authorId;
 

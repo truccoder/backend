@@ -44,3 +44,18 @@ cache:
   lock-ttl: 5s
   lock-retry-delay: 100ms
   lock-max-retries: 50
+
+moderation:
+  enabled: true
+  perspective-api:
+    key: ${PERSPECTIVE_API_KEY:}
+    toxicity-threshold: 0.7
+    review-threshold: 0.5
+  cloud-vision:
+    credentials-path: ${GOOGLE_APPLICATION_CREDENTIALS:}
+    reject-likelihood: VERY_LIKELY
+    review-likelihood: POSSIBLE
+  rules:
+    keyword-blacklist-path: classpath:moderation/blacklist.txt
+    max-urls-per-post: 3
+    duplicate-window-seconds: 60

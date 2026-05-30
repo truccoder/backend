@@ -1,6 +1,7 @@
 package com.socialapp.security.entity;
 
 import java.time.OffsetDateTime;
+import java.util.Objects;
 
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -31,7 +32,13 @@ public class UserEntity {
 
   private String profilePictureUrl;
 
+  private OffsetDateTime bannedUntil;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;
+
+  public boolean isBanned() {
+    return Objects.isNull(bannedUntil) || OffsetDateTime.now().isBefore(bannedUntil);
+  }
 }

@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.socialapp.moderation.exception.ContentViolationException;
+import com.socialapp.moderation.exception.UserBannedException;
+
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 
@@ -25,6 +28,32 @@ public class GlobalExceptionHandler {
   private static final String INVALIDATION_MESSAGE = "Invalid request parameters or payload";
   private static final String FIELD_VALIDATION_MSG_TEMPLATE = "Property %s: %s";
   private static final String PAYLOAD_VALIDATION_MSG_TEMPLATE = "Payload: %s";
+
+  @ResponseStatus(FORBIDDEN)
+  @ExceptionHandler(UserBannedException.class)
+  public ErrorResponseDto handle(UserBannedException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(FORBIDDEN.value())
+        .error("Account Restricted")
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(ContentViolationException.class)
+  public ErrorResponseDto handle(ContentViolationException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error("Content Violation")
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
 
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(ForbiddenException.class)

@@ -26,7 +26,7 @@ public class FriendshipService {
     if (actorId.equals(addresseeId)) {
       throw new ValidationException("You cannot send a friend request to yourself");
     }
-    if (!userRepository.existsById(Long.valueOf(addresseeId))) {
+    if (!userRepository.existsById(addresseeId)) {
       throw new NotFoundException("User not found with ID: " + addresseeId);
     }
     if (friendshipRepository.areFriends(actorId, addresseeId)) {

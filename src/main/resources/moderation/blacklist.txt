@@ -1,0 +1,25 @@
+# Content moderation keyword blacklist
+# Lines starting with # are comments
+# Keywords are case-insensitive and Vietnamese diacritics are normalized
+
+# Vietnamese offensive terms (examples - extend as needed)
+dit me
+du ma
+con cho
+thang cho
+do cho
+mat day
+
+# English offensive terms (examples)
+fuck
+shit
+asshole
+bastard
+nigger
+faggot
+
+# Spam patterns
+casino online
+click here now
+free money
+earn money fast

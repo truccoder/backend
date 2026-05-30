@@ -15,13 +15,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
+import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,9 +40,41 @@ public class NewsfeedService {
   private final ObjectMapper objectMapper;
   private final FriendshipQueryService friendshipQueryService;
   private final UserInteractionRepository userInteractionRepository;
+  private final PostRepository postRepository;
+  private final UserRepository userRepository;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
+
+  public void fanOutPost(Integer postId) {
+    PostEntity post =
+        postRepository
+            .findById(postId)
+            .orElseThrow(() -> new NotFoundException("Post not found: " + postId));
+
+    UserEntity author =
+        userRepository
+            .findById(post.getAuthorId())
+            .orElseThrow(() -> new NotFoundException("Author not found: " + post.getAuthorId()));
+
+    List<Integer> taggedUserIds =
+        Objects.isNull(post.getTags())
+            ? List.of()
+            : post.getTags().stream().map(PostTagEntity::getTaggedUserId).toList();
+
+    FeedPostDataDto postData =
+        FeedPostDataDto.builder()
+            .postId(post.getId())
+            .authorId(post.getAuthorId())
+            .authorFullName(author.getFullName())
+            .authorProfilePictureUrl(author.getProfilePictureUrl())
+            .content(post.getContent())
+            .visibility(post.getVisibility())
+            .createdAt(post.getCreatedAt())
+            .build();
+
+    fanOutPost(postData, taggedUserIds);
+  }
 
   public void fanOutPost(FeedPostDataDto postData, List<Integer> taggedUserIds) {
     String postId = String.valueOf(postData.getPostId());
