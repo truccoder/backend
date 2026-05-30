@@ -15,7 +15,14 @@ import org.springframework.util.CollectionUtils;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
-import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.moderation.config.ModerationProperties;
+import com.socialapp.moderation.dto.ModerationResult;
+import com.socialapp.moderation.enums.ModerationStatus;
+import com.socialapp.moderation.event.ModerationEventPublisher;
+import com.socialapp.moderation.exception.ContentViolationException;
+import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.moderation.rule.ModerationRuleEngine;
+import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
@@ -35,49 +42,74 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class PostService {
-
   private final PostRepository postRepository;
   private final UserRepository userRepository;
   private final NewsfeedService newsfeedService;
+  private final ModerationRuleEngine moderationRuleEngine;
+  private final ModerationEventPublisher moderationEventPublisher;
+  private final ModerationProperties moderationProperties;
+  private final UserBanService userBanService;
 
   private static final int MAX_TAGS = 20;
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
 
   @Transactional
   public void createPost(Integer authorId, CreatePostRequestDto request) {
-    UserEntity author = findUserOrThrow(authorId);
+    checkBanStatus(authorId);
+    findUserOrThrow(authorId);
     validateTags(request.getVisibility(), request.getTaggedUserIds(), request.getContent());
+
+    if (moderationProperties.isEnabled()) {
+      ModerationResult ruleResult = moderationRuleEngine.evaluate(authorId, request.getContent());
+      if (ruleResult.isRejected()) {
+        throw new ContentViolationException(ruleResult.getViolations());
+      }
+    }
 
     PostEntity post = new PostEntity();
     BeanUtils.copyProperties(request, post);
     post.setAuthorId(authorId);
     setTags(post, request.getTaggedUserIds());
-    postRepository.save(post);
 
-    try {
-      newsfeedService.fanOutPost(buildFeedData(post, author), request.getTaggedUserIds());
-    } catch (Exception e) {
-      log.warn("Failed to fan-out post {}: {}", post.getId(), e.getMessage());
+    if (moderationProperties.isEnabled()) {
+      post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
+      postRepository.save(post);
+      moderationEventPublisher.publishForReview(post, request.getTaggedUserIds());
+    } else {
+      post.setModerationStatus(ModerationStatus.APPROVED);
+      postRepository.save(post);
+      newsfeedService.fanOutPost(post.getId());
     }
   }
 
   @Transactional
   public void updatePost(Integer actorId, Integer postId, UpdatePostRequestDto request) {
+    checkBanStatus(actorId);
     PostEntity post = findPostOrThrow(postId);
     verifyAuthor(actorId, post);
-    UserEntity author = findUserOrThrow(actorId);
+    findUserOrThrow(actorId);
     validateTags(request.getVisibility(), request.getTaggedUserIds(), request.getContent());
+
+    if (moderationProperties.isEnabled()) {
+      ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, request.getContent());
+      if (ruleResult.isRejected()) {
+        throw new ContentViolationException(ruleResult.getViolations());
+      }
+    }
 
     BeanUtils.copyProperties(request, post);
     post.getTags().clear();
     postRepository.flush();
     setTags(post, request.getTaggedUserIds());
-    postRepository.save(post);
 
-    try {
-      newsfeedService.updatePostCache(buildFeedData(post, author));
-    } catch (Exception e) {
-      log.warn("Failed to update feed cache for post {}: {}", post.getId(), e.getMessage());
+    if (moderationProperties.isEnabled()) {
+      post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
+      postRepository.save(post);
+      newsfeedService.removePost(postId, actorId, extractTaggedUserIds(post));
+      moderationEventPublisher.publishForReview(post, request.getTaggedUserIds());
+    } else {
+      postRepository.save(post);
+      newsfeedService.fanOutPost(post.getId());
     }
   }
 
@@ -150,18 +182,6 @@ public class PostService {
         .toList();
   }
 
-  private FeedPostDataDto buildFeedData(PostEntity post, UserEntity author) {
-    return FeedPostDataDto.builder()
-        .postId(post.getId())
-        .authorId(post.getAuthorId())
-        .authorFullName(author.getFullName())
-        .authorProfilePictureUrl(author.getProfilePictureUrl())
-        .content(post.getContent())
-        .visibility(post.getVisibility())
-        .createdAt(post.getCreatedAt())
-        .build();
-  }
-
   private PostEntity findPostOrThrow(Integer postId) {
     return postRepository
         .findById(postId)
@@ -170,13 +190,19 @@ public class PostService {
 
   private UserEntity findUserOrThrow(Integer userId) {
     return userRepository
-        .findById(userId.longValue())
+        .findById(userId)
         .orElseThrow(() -> new NotFoundException("User not found with ID: " + userId));
   }
 
   private void verifyAuthor(Integer actorId, PostEntity post) {
     if (!post.getAuthorId().equals(actorId)) {
       throw new ForbiddenException("Only the author can modify this post");
+    }
+  }
+
+  private void checkBanStatus(Integer userId) {
+    if (userBanService.isUserBanned(userId)) {
+      throw new UserBannedException(userBanService.getBanExpiry(userId));
     }
   }
 }
