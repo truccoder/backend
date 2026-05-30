@@ -14,7 +14,10 @@ public interface VaultNoteRepository extends JpaRepository<VaultNoteEntity, Inte
 
   List<VaultNoteEntity> findByUserId(Integer userId);
 
-  @Query("SELECT DISTINCT t FROM VaultNoteEntity v, UNNEST(v.tags) t" + " WHERE v.userId = :userId")
+  @Query(
+      value =
+          "SELECT DISTINCT t FROM t_vault_notes v, jsonb_array_elements_text(v.tags) t WHERE v.user_id = :userId",
+      nativeQuery = true)
   List<String> findDistinctTagsByUserId(Integer userId);
 
   @Query("SELECT v FROM VaultNoteEntity v WHERE v.userId = :userId AND v.tags IS NOT NULL")
