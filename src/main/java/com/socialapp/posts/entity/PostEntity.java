@@ -39,6 +39,7 @@ public class PostEntity {
 
   @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
   @JoinColumn(name = "post_id")
+  @OrderBy("id.position ASC")
   private List<PostTagEntity> tags = new ArrayList<>();
 
   private String googlePlaceId;
