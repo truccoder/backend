@@ -29,6 +29,7 @@ import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -66,9 +67,16 @@ public class PostService {
       }
     }
 
+    if (PostType.EVENT.equals(request.getPostType())) {
+      validateEventDetails(request);
+    }
+
     PostEntity post = new PostEntity();
     BeanUtils.copyProperties(request, post);
     post.setAuthorId(authorId);
+    if (request.getPostType() == null) {
+      post.setPostType(PostType.REGULAR);
+    }
     setTags(post, request.getTaggedUserIds());
 
     if (moderationProperties.isEnabled()) {
@@ -203,6 +211,25 @@ public class PostService {
   private void checkBanStatus(Integer userId) {
     if (userBanService.isUserBanned(userId)) {
       throw new UserBannedException(userBanService.getBanExpiry(userId));
+    }
+  }
+
+  private void validateEventDetails(CreatePostRequestDto request) {
+    if (request.getEventDetails() == null) {
+      throw new ValidationException("Event details are required for event posts");
+    }
+    if (request.getEventDetails().getEventTitle() == null
+        || request.getEventDetails().getEventTitle().isBlank()) {
+      throw new ValidationException("Event title is required");
+    }
+    if (request.getEventDetails().getStartTime() == null) {
+      throw new ValidationException("Event start time is required");
+    }
+    if (request.getEventDetails().getEndTime() == null) {
+      throw new ValidationException("Event end time is required");
+    }
+    if (request.getEventDetails().getEndTime().isBefore(request.getEventDetails().getStartTime())) {
+      throw new ValidationException("Event end time must be after start time");
     }
   }
 }
