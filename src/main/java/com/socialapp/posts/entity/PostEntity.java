@@ -11,6 +11,7 @@ import org.hibernate.type.SqlTypes;
 
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.enums.LocationType;
+import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 
 import jakarta.persistence.*;
@@ -51,6 +52,13 @@ public class PostEntity {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "location_details", columnDefinition = "jsonb")
   private LocationDetails locationDetails;
+
+  @Enumerated(EnumType.STRING)
+  private PostType postType;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "event_details", columnDefinition = "jsonb")
+  private EventDetails eventDetails;
 
   @Enumerated(EnumType.STRING)
   private ModerationStatus moderationStatus;

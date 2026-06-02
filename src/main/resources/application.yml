@@ -59,3 +59,36 @@ moderation:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
     max-urls-per-post: 3
     duplicate-window-seconds: 60
+
+gemini:
+  api-key: ${GEMINI_API_KEY:}
+  model: gemini-2.0-flash
+  base-url: https://generativelanguage.googleapis.com/v1beta
+  max-output-tokens: 8192
+  temperature: 0.7
+
+trending:
+  crawl-interval-ms: 3600000
+
+onesignal:
+  app-id: ${ONESIGNAL_APP_ID:}
+  rest-api-key: ${ONESIGNAL_REST_API_KEY:}
+
+mailtrap:
+  api-token: ${MAILTRAP_API_TOKEN:}
+  base-url: https://send.api.mailtrap.io/api/send
+  from-email: noreply@socialapp.dev
+  from-name: SocialApp
+
+google:
+  calendar:
+    client-id: ${GOOGLE_CALENDAR_CLIENT_ID:}
+    client-secret: ${GOOGLE_CALENDAR_CLIENT_SECRET:}
+    redirect-uri: ${GOOGLE_CALENDAR_REDIRECT_URI:http://localhost:8080/v1/api/events/google/callback}
+
+vnpay:
+  tmn-code: ${VNPAY_TMN_CODE:DEMO1234}
+  hash-secret: ${VNPAY_HASH_SECRET:DEMOSECRETKEY}
+  pay-url: https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
+  return-url: ${VNPAY_RETURN_URL:http://localhost:3000/payment/callback}
+  api-url: https://sandbox.vnpayment.vn/merchant_webapi/api/transaction
