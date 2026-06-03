@@ -1,17 +1,12 @@
 package com.socialapp.security.controller;
 
-import com.socialapp.security.dto.AuthResponse;
-import com.socialapp.security.dto.LoginRequestDto;
-import com.socialapp.security.dto.RefreshTokenRequest;
-import com.socialapp.security.dto.RegisterRequestDto;
+import com.socialapp.security.dto.*;
 import com.socialapp.security.service.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/v1/api/auth")
@@ -32,5 +27,11 @@ public class AuthController {
   @PostMapping("/refresh")
   public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
     return ResponseEntity.ok(authService.refresh(request));
+  }
+
+  @PostMapping("/forgot-password")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto request) {
+    authService.forgotPassword(request);
   }
 }
