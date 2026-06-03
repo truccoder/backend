@@ -1,0 +1,9 @@
+.git
+.github
+.gradle
+.docker-data
+build
+docker
+*.md
+.gitignore
+.editorconfig
