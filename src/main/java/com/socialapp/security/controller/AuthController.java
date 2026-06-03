@@ -34,4 +34,10 @@ public class AuthController {
   public void forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto request) {
     authService.forgotPassword(request);
   }
+
+  @PostMapping("/reset-password")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+    authService.resetPassword(request);
+  }
 }

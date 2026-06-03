@@ -87,6 +87,29 @@ public class AuthService {
             .ifPresent(this::createPasswordResetTokenAndSendEmail);
   }
 
+  @Transactional
+  public void resetPassword(ResetPasswordRequest request) {
+    PasswordResetToken resetToken =
+            passwordResetTokenRepository
+                    .findById(request.token())
+                    .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    if (resetToken.getExpiresAt() == null
+            || resetToken.getExpiresAt().isBefore(OffsetDateTime.now())) {
+      passwordResetTokenRepository.delete(resetToken);
+      throw new BadCredentialsException(INVALID_CREDENTIALS);
+    }
+
+    UserEntity user =
+            userRepository
+                    .findById(resetToken.getUserId())
+                    .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    user.setPassword(passwordEncoder.encode(request.newPassword()));
+    userRepository.save(user);
+    passwordResetTokenRepository.delete(resetToken);
+  }
+
   private void createPasswordResetTokenAndSendEmail(UserEntity user) {
     passwordResetTokenRepository.deleteByUserId(user.getId());
 
