@@ -9,8 +9,10 @@ import lombok.Data;
 @Component
 @ConfigurationProperties(prefix = "mailtrap")
 public class MailTrapProperties {
-  private String apiToken;
-  private String baseUrl = "https://send.api.mailtrap.io/api/send";
+  private String host;
+  private int port;
+  private String username;
+  private String password;
   private String fromEmail = "noreply@socialapp.dev";
   private String fromName = "SocialApp";
 }
