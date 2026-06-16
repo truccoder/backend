@@ -18,6 +18,7 @@ spring:
   flyway:
     schemas: socialapp
     default-schema: socialapp
+    validate-on-migrate: false
 
   jpa:
     hibernate:
@@ -59,6 +60,12 @@ moderation:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
     max-urls-per-post: 3
     duplicate-window-seconds: 60
+
+jwt:
+  secret: ${PERSPECTIVE_API_KEY:defaultSecretKeyThatShouldBeChangedInProduction12345}
+  #  secret: ${PERSPECTIVE_API_KEY:}
+  access-token-expiration-ms: 900000
+  refresh-token-expiration-ms: 604800000
 
 gemini:
   api-key: ${GEMINI_API_KEY:}
