@@ -9,6 +9,18 @@ minio:
   secret-key: minio_admin_password
 
 spring:
+  mail:
+    host: ${MAIL_HOST:sandbox.smtp.mailtrap.io}
+    port: ${MAIL_PORT:2525}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
   datasource:
     url: jdbc:postgresql://localhost:5433/socialapp
     username: postgres
@@ -67,6 +79,9 @@ jwt:
   access-token-expiration-ms: 900000
   refresh-token-expiration-ms: 604800000
 
+auth:
+  reset-password-url: ${RESET_PASSWORD_URL:http://localhost:3000/forgot-password?token=}
+
 gemini:
   api-key: ${GEMINI_API_KEY:}
   model: gemini-2.0-flash
@@ -82,8 +97,10 @@ onesignal:
   rest-api-key: ${ONESIGNAL_REST_API_KEY:}
 
 mailtrap:
-  api-token: ${MAILTRAP_API_TOKEN:}
-  base-url: https://send.api.mailtrap.io/api/send
+  host: ${MAIL_HOST:sandbox.smtp.mailtrap.io}
+  port: ${MAIL_PORT:2525}
+  username: ${MAIL_USERNAME:}
+  password: ${MAIL_PASSWORD:}
   from-email: noreply@socialapp.dev
   from-name: SocialApp
 

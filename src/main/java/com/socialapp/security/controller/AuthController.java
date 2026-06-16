@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialapp.security.dto.ForgotPasswordRequestDto;
 import com.socialapp.security.dto.LoginRequestDto;
 import com.socialapp.security.dto.RefreshTokenRequest;
 import com.socialapp.security.dto.RegisterRequestDto;
@@ -32,5 +33,10 @@ public class AuthController {
   @PostMapping("/refresh")
   public void refresh(@Valid @RequestBody RefreshTokenRequest request) {
     authService.refresh(request);
+  }
+
+  @PostMapping("/forgot-password")
+  public void forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto request) {
+    authService.forgotPassword(request);
   }
 }
