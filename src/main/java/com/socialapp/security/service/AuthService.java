@@ -12,10 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.config.AuthProperties;
-import com.socialapp.security.dto.ForgotPasswordRequestDto;
-import com.socialapp.security.dto.LoginRequestDto;
-import com.socialapp.security.dto.RefreshTokenRequest;
-import com.socialapp.security.dto.RegisterRequestDto;
+import com.socialapp.security.dto.*;
 import com.socialapp.security.entity.PasswordResetToken;
 import com.socialapp.security.entity.RefreshToken;
 import com.socialapp.security.entity.UserEntity;
@@ -65,7 +62,7 @@ public class AuthService {
   }
 
   @Transactional
-  public void refresh(RefreshTokenRequest request) {
+  public void refresh(RefreshTokenRequestDto request) {
     RefreshToken stored =
         refreshTokenRepository
             .findById(request.refreshToken())
@@ -90,6 +87,29 @@ public class AuthService {
     userRepository
         .findByEmailIgnoreCase(EmailNormalizer.normalize(request.email()))
         .ifPresent(this::createPasswordResetTokenAndSendEmail);
+  }
+
+  @Transactional
+  public void resetPassword(ResetPasswordRequestDto request) {
+    PasswordResetToken resetToken =
+        passwordResetTokenRepository
+            .findById(request.token())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    if (resetToken.getExpiresAt() == null
+        || resetToken.getExpiresAt().isBefore(OffsetDateTime.now())) {
+      passwordResetTokenRepository.delete(resetToken);
+      throw new BadCredentialsException(INVALID_CREDENTIALS);
+    }
+
+    UserEntity user =
+        userRepository
+            .findById(resetToken.getUserId())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    user.setPassword(passwordEncoder.encode(request.newPassword()));
+    userRepository.save(user);
+    passwordResetTokenRepository.delete(resetToken);
   }
 
   private void createPasswordResetTokenAndSendEmail(UserEntity user) {
