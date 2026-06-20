@@ -74,8 +74,7 @@ moderation:
     duplicate-window-seconds: 60
 
 jwt:
-  secret: ${PERSPECTIVE_API_KEY:defaultSecretKeyThatShouldBeChangedInProduction12345}
-  #  secret: ${PERSPECTIVE_API_KEY:}
+  secret: ${JWT_SECRET:defaultSecretKeyThatShouldBeChangedInProduction12345}
   access-token-expiration-ms: 900000
   refresh-token-expiration-ms: 604800000
 

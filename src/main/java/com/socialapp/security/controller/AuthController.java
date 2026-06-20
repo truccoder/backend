@@ -23,13 +23,13 @@ public class AuthController {
   }
 
   @PostMapping("/login")
-  public void login(@Valid @RequestBody LoginRequestDto request) {
-    authService.login(request);
+  public AuthResponseDto login(@Valid @RequestBody LoginRequestDto request) {
+    return authService.login(request);
   }
 
   @PostMapping("/refresh")
-  public void refresh(@Valid @RequestBody RefreshTokenRequestDto request) {
-    authService.refresh(request);
+  public AuthResponseDto refresh(@Valid @RequestBody RefreshTokenRequestDto request) {
+    return authService.refresh(request);
   }
 
   @PostMapping("/forgot-password")
