@@ -56,13 +56,13 @@ public class AuthService {
   }
 
   @Transactional
-  public void login(LoginRequestDto request) {
+  public AuthResponseDto login(LoginRequestDto request) {
     UserEntity user = authenticate(request.email(), request.password());
-    tokenService.issueTokens(user);
+    return tokenService.issueTokens(user);
   }
 
   @Transactional
-  public void refresh(RefreshTokenRequestDto request) {
+  public AuthResponseDto refresh(RefreshTokenRequestDto request) {
     RefreshToken stored =
         refreshTokenRepository
             .findById(request.refreshToken())
@@ -79,7 +79,7 @@ public class AuthService {
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     refreshTokenRepository.delete(stored);
-    tokenService.issueTokens(user);
+    return tokenService.issueTokens(user);
   }
 
   @Transactional
