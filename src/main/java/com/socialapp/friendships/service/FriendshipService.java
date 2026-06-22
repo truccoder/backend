@@ -21,7 +21,7 @@ public class FriendshipService {
   private final FriendshipRepository friendshipRepository;
   private final UserRepository userRepository;
 
-  @Transactional("transactionManager")
+  @Transactional
   public void sendFriendRequest(Integer actorId, Integer addresseeId) {
     if (actorId.equals(addresseeId)) {
       throw new ValidationException("You cannot send a friend request to yourself");
@@ -43,7 +43,7 @@ public class FriendshipService {
     friendRequestRepository.save(entity);
   }
 
-  @Transactional("transactionManager")
+  @Transactional
   public void cancelFriendRequest(Integer actorId, Integer requestId) {
     FriendRequestEntity request = findPendingRequestOrThrow(requestId);
 
@@ -55,7 +55,7 @@ public class FriendshipService {
     friendRequestRepository.save(request);
   }
 
-  @Transactional("transactionManager")
+  @Transactional
   public void acceptFriendRequest(Integer actorId, Integer requestId) {
     FriendRequestEntity request = findPendingRequestOrThrow(requestId);
 
@@ -71,7 +71,7 @@ public class FriendshipService {
     friendshipRepository.createFriendship(request.getRequesterId(), request.getAddresseeId());
   }
 
-  @Transactional("transactionManager")
+  @Transactional
   public void rejectFriendRequest(Integer actorId, Integer requestId) {
     FriendRequestEntity request = findPendingRequestOrThrow(requestId);
 

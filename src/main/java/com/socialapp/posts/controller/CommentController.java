@@ -3,6 +3,7 @@ package com.socialapp.posts.controller;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.posts.dto.CreateCommentRequestDto;
+import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.service.CommentService;
 
 import lombok.RequiredArgsConstructor;
@@ -19,5 +20,22 @@ public class CommentController {
       @PathVariable Integer postId,
       @RequestBody CreateCommentRequestDto request) {
     commentService.createComment(authorId, postId, request);
+  }
+
+  @PutMapping("/{commentId}")
+  public void updateComment(
+      @RequestHeader("X-User-Id") Integer actorId,
+      @PathVariable Integer postId,
+      @PathVariable Integer commentId,
+      @RequestBody UpdateCommentRequestDto request) {
+    commentService.updateComment(actorId, postId, commentId, request);
+  }
+
+  @DeleteMapping("/{commentId}")
+  public void deleteComment(
+      @RequestHeader("X-User-Id") Integer actorId,
+      @PathVariable Integer postId,
+      @PathVariable Integer commentId) {
+    commentService.deleteComment(actorId, postId, commentId);
   }
 }
