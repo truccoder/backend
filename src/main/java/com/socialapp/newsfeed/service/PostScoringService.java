@@ -1,11 +1,8 @@
 package com.socialapp.newsfeed.service;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -90,7 +87,9 @@ public class PostScoringService {
   }
 
   public double calculateScore(FeedPostDataDto post, double affinity) {
-    long base = post.getCreatedAt().toInstant().toEpochMilli();
+    Instant createdAt =
+        post.getCreatedAt() != null ? post.getCreatedAt().toInstant() : Instant.now();
+    long base = createdAt.toEpochMilli();
     double engagement = engagementFactor(post);
     return base + engagement * ENGAGEMENT_BOOST_MILLIS + affinity * AFFINITY_BOOST_MILLIS;
   }
