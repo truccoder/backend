@@ -59,7 +59,7 @@ cache:
   lock-max-retries: 50
 
 moderation:
-  enabled: false
+  enabled: true
   perspective-api:
     key: ${PERSPECTIVE_API_KEY:}
     toxicity-threshold: 0.7

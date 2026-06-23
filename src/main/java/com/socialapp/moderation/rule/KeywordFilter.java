@@ -37,7 +37,7 @@ public class KeywordFilter {
   }
 
   public boolean containsBlacklistedContent(String content) {
-    if (Strings.hasText(content)) {
+    if (!Strings.hasText(content)) {
       return false;
     }
 
@@ -45,7 +45,8 @@ public class KeywordFilter {
     String withoutSpaces = normalized.replaceAll("\\s+", "");
 
     for (String keyword : blacklist) {
-      if (normalized.contains(keyword) || withoutSpaces.contains(keyword)) {
+      String keywordWithoutSpaces = keyword.replaceAll("\\s+", "");
+      if (normalized.contains(keyword) || withoutSpaces.contains(keywordWithoutSpaces)) {
         log.debug("Blacklisted keyword detected: {}", keyword);
         return true;
       }
