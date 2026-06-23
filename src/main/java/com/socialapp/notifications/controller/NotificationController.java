@@ -1,21 +1,14 @@
 package com.socialapp.notifications.controller;
 
 import org.springframework.data.domain.Page;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.common.utils.Constants;
 import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationPreferenceEntity;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
@@ -28,36 +21,36 @@ public class NotificationController {
 
   @GetMapping
   public Page<NotificationResponseDto> getNotifications(
-      @RequestHeader("X-User-Id") Integer userId,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
-    return notificationService.getNotifications(userId, page, size);
+    return notificationService.getNotifications(SecurityUtils.getCurrentUserId(), page, size);
   }
 
   @GetMapping("/unread-count")
-  public UnreadCountResponse getUnreadCount(@RequestHeader("X-User-Id") Integer userId) {
-    return new UnreadCountResponse(notificationService.getUnreadCount(userId));
+  public UnreadCountResponse getUnreadCount() {
+    return new UnreadCountResponse(
+        notificationService.getUnreadCount(SecurityUtils.getCurrentUserId()));
   }
 
   @PostMapping("/{id}/read")
-  public void markAsRead(@RequestHeader("X-User-Id") Integer userId, @PathVariable Integer id) {
-    notificationService.markAsRead(userId, id);
+  public void markAsRead(@PathVariable Integer id) {
+    notificationService.markAsRead(SecurityUtils.getCurrentUserId(), id);
   }
 
   @PostMapping("/read-all")
-  public void markAllAsRead(@RequestHeader("X-User-Id") Integer userId) {
-    notificationService.markAllAsRead(userId);
+  public void markAllAsRead() {
+    notificationService.markAllAsRead(SecurityUtils.getCurrentUserId());
   }
 
   @GetMapping("/preferences")
-  public NotificationPreferenceEntity getPreferences(@RequestHeader("X-User-Id") Integer userId) {
-    return notificationService.getPreference(userId);
+  public NotificationPreferenceEntity getPreferences() {
+    return notificationService.getPreference(SecurityUtils.getCurrentUserId());
   }
 
   @PutMapping("/preferences")
   public NotificationPreferenceEntity updatePreferences(
-      @RequestHeader("X-User-Id") Integer userId, @RequestBody UpdatePreferenceRequestDto request) {
-    return notificationService.updatePreference(userId, request);
+      @RequestBody UpdatePreferenceRequestDto request) {
+    return notificationService.updatePreference(SecurityUtils.getCurrentUserId(), request);
   }
 
   record UnreadCountResponse(int count) {}

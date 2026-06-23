@@ -5,18 +5,13 @@ import java.util.List;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.posts.entity.EventRsvpEntity;
 import com.socialapp.posts.entity.enums.RsvpStatus;
 import com.socialapp.posts.service.EventService;
 import com.socialapp.posts.service.GoogleCalendarService;
+import com.socialapp.security.util.SecurityUtils;
 
 import lombok.RequiredArgsConstructor;
 
@@ -28,11 +23,8 @@ public class EventController {
   private final GoogleCalendarService googleCalendarService;
 
   @PostMapping("/{postId}/rsvp")
-  public void rsvp(
-      @RequestHeader("X-User-Id") Integer userId,
-      @PathVariable Integer postId,
-      @RequestParam RsvpStatus status) {
-    eventService.rsvp(userId, postId, status);
+  public void rsvp(@PathVariable Integer postId, @RequestParam RsvpStatus status) {
+    eventService.rsvp(SecurityUtils.getCurrentUserId(), postId, status);
   }
 
   @GetMapping("/{postId}/attendees")
@@ -46,9 +38,8 @@ public class EventController {
   }
 
   @PostMapping("/{postId}/add-to-calendar")
-  public void addToGoogleCalendar(
-      @RequestHeader("X-User-Id") Integer userId, @PathVariable Integer postId) {
-    eventService.addToGoogleCalendar(userId, postId);
+  public void addToGoogleCalendar(@PathVariable Integer postId) {
+    eventService.addToGoogleCalendar(SecurityUtils.getCurrentUserId(), postId);
   }
 
   @GetMapping("/{postId}/export.ics")
@@ -61,8 +52,9 @@ public class EventController {
   }
 
   @GetMapping("/google/auth-url")
-  public AuthUrlResponse getGoogleAuthUrl(@RequestHeader("X-User-Id") Integer userId) {
-    return new AuthUrlResponse(googleCalendarService.getAuthorizationUrl(userId));
+  public AuthUrlResponse getGoogleAuthUrl() {
+    return new AuthUrlResponse(
+        googleCalendarService.getAuthorizationUrl(SecurityUtils.getCurrentUserId()));
   }
 
   @GetMapping("/google/callback")
@@ -72,8 +64,9 @@ public class EventController {
   }
 
   @GetMapping("/google/status")
-  public CalendarStatusResponse getCalendarStatus(@RequestHeader("X-User-Id") Integer userId) {
-    return new CalendarStatusResponse(googleCalendarService.isConnected(userId));
+  public CalendarStatusResponse getCalendarStatus() {
+    return new CalendarStatusResponse(
+        googleCalendarService.isConnected(SecurityUtils.getCurrentUserId()));
   }
 
   record AttendeeCountResponse(int count) {}

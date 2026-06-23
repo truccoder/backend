@@ -1,17 +1,11 @@
 package com.socialapp.posts.controller;
 
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.service.PostService;
+import com.socialapp.security.util.SecurityUtils;
 
 import lombok.RequiredArgsConstructor;
 
@@ -22,22 +16,17 @@ public class PostController {
   private final PostService postService;
 
   @PostMapping
-  public void createPost(
-      @RequestHeader("X-User-Id") Integer authorId, @RequestBody CreatePostRequestDto request) {
-    postService.createPost(authorId, request);
+  public void createPost(@RequestBody CreatePostRequestDto request) {
+    postService.createPost(SecurityUtils.getCurrentUserId(), request);
   }
 
   @PutMapping("/{postId}")
-  public void updatePost(
-      @RequestHeader("X-User-Id") Integer actorId,
-      @PathVariable Integer postId,
-      @RequestBody UpdatePostRequestDto request) {
-    postService.updatePost(actorId, postId, request);
+  public void updatePost(@PathVariable Integer postId, @RequestBody UpdatePostRequestDto request) {
+    postService.updatePost(SecurityUtils.getCurrentUserId(), postId, request);
   }
 
   @DeleteMapping("/{postId}")
-  public void deletePost(
-      @RequestHeader("X-User-Id") Integer actorId, @PathVariable Integer postId) {
-    postService.deletePost(actorId, postId);
+  public void deletePost(@PathVariable Integer postId) {
+    postService.deletePost(SecurityUtils.getCurrentUserId(), postId);
   }
 }

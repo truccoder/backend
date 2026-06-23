@@ -1,18 +1,13 @@
 package com.socialapp.knowledge.controller;
 
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.knowledge.dto.ExplainRequestDto;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
 import com.socialapp.knowledge.dto.SaveExplanationRequestDto;
 import com.socialapp.knowledge.service.ExplanationService;
+import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,22 +20,19 @@ public class ExplanationController {
 
   @PostMapping("/posts/{postId}/explain")
   public ExplanationResponseDto explainPost(
-      @RequestHeader("X-User-Id") Integer userId,
-      @PathVariable Integer postId,
-      @RequestBody(required = false) ExplainRequestDto request) {
+      @PathVariable Integer postId, @RequestBody(required = false) ExplainRequestDto request) {
     String feedbackNote = request != null ? request.getFeedbackNote() : null;
-    return explanationService.explainPost(userId, postId, feedbackNote);
+    return explanationService.explainPost(SecurityUtils.getCurrentUserId(), postId, feedbackNote);
   }
 
   @PostMapping("/save")
   public ExplanationResponseDto saveExplanation(
-      @RequestHeader("X-User-Id") Integer userId,
       @RequestBody @Valid SaveExplanationRequestDto request) {
-    return explanationService.saveExplanation(userId, request);
+    return explanationService.saveExplanation(SecurityUtils.getCurrentUserId(), request);
   }
 
   @GetMapping("/my-library")
-  public KnowledgeLibraryResponseDto getMyLibrary(@RequestHeader("X-User-Id") Integer userId) {
-    return explanationService.getLibrary(userId);
+  public KnowledgeLibraryResponseDto getMyLibrary() {
+    return explanationService.getLibrary(SecurityUtils.getCurrentUserId());
   }
 }
