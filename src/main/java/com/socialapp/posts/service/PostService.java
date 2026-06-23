@@ -174,6 +174,9 @@ public class PostService {
   }
 
   private void setTags(PostEntity post, List<Integer> taggedUserIds) {
+    if (CollectionUtils.isEmpty(taggedUserIds)) {
+      return;
+    }
     for (int i = 0; i < taggedUserIds.size(); i++) {
       PostTagEntity tag = new PostTagEntity(new PostTagId(post.getId(), i), taggedUserIds.get(i));
       post.getTags().add(tag);

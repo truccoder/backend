@@ -4,11 +4,7 @@ import static com.socialapp.newsfeed.service.PostScoringService.FEED_KEY_PREFIX;
 import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_PREFIX;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -78,7 +74,10 @@ public class NewsfeedService {
 
   public void fanOutPost(FeedPostDataDto postData, List<Integer> taggedUserIds) {
     String postId = String.valueOf(postData.getPostId());
-    double score = postData.getCreatedAt().toInstant().toEpochMilli();
+    double score =
+        postData.getCreatedAt() != null
+            ? postData.getCreatedAt().toInstant().toEpochMilli()
+            : java.time.Instant.now().toEpochMilli();
 
     cachePostData(postId, postData);
     addToFeed(postData.getAuthorId(), postId, score);
