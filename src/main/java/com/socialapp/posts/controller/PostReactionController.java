@@ -4,6 +4,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.service.PostReactionService;
+import com.socialapp.security.util.SecurityUtils;
 
 import lombok.RequiredArgsConstructor;
 
@@ -15,15 +16,12 @@ public class PostReactionController {
 
   @PutMapping
   public void upsertReaction(
-      @RequestHeader("X-User-Id") Integer userId,
-      @PathVariable Integer postId,
-      @RequestBody UpsertPostReactionRequestDto request) {
-    postReactionService.upsertReaction(userId, postId, request);
+      @PathVariable Integer postId, @RequestBody UpsertPostReactionRequestDto request) {
+    postReactionService.upsertReaction(SecurityUtils.getCurrentUserId(), postId, request);
   }
 
   @DeleteMapping
-  public void removeReaction(
-      @RequestHeader("X-User-Id") Integer userId, @PathVariable Integer postId) {
-    postReactionService.removeReaction(userId, postId);
+  public void removeReaction(@PathVariable Integer postId) {
+    postReactionService.removeReaction(SecurityUtils.getCurrentUserId(), postId);
   }
 }

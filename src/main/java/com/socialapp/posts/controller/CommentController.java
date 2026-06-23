@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.*;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.service.CommentService;
+import com.socialapp.security.util.SecurityUtils;
 
 import lombok.RequiredArgsConstructor;
 
@@ -16,26 +17,20 @@ public class CommentController {
 
   @PostMapping
   public void createComment(
-      @RequestHeader("X-User-Id") Integer authorId,
-      @PathVariable Integer postId,
-      @RequestBody CreateCommentRequestDto request) {
-    commentService.createComment(authorId, postId, request);
+      @PathVariable Integer postId, @RequestBody CreateCommentRequestDto request) {
+    commentService.createComment(SecurityUtils.getCurrentUserId(), postId, request);
   }
 
   @PutMapping("/{commentId}")
   public void updateComment(
-      @RequestHeader("X-User-Id") Integer actorId,
       @PathVariable Integer postId,
       @PathVariable Integer commentId,
       @RequestBody UpdateCommentRequestDto request) {
-    commentService.updateComment(actorId, postId, commentId, request);
+    commentService.updateComment(SecurityUtils.getCurrentUserId(), postId, commentId, request);
   }
 
   @DeleteMapping("/{commentId}")
-  public void deleteComment(
-      @RequestHeader("X-User-Id") Integer actorId,
-      @PathVariable Integer postId,
-      @PathVariable Integer commentId) {
-    commentService.deleteComment(actorId, postId, commentId);
+  public void deleteComment(@PathVariable Integer postId, @PathVariable Integer commentId) {
+    commentService.deleteComment(SecurityUtils.getCurrentUserId(), postId, commentId);
   }
 }

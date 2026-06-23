@@ -15,6 +15,7 @@ import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.UnifiedSearchResponse;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
+import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
@@ -61,9 +62,7 @@ public class SearchController {
     return searchService.searchPosts(q, page, size, currentUserId, friendIds);
   }
 
-  // TODO: replace with SecurityContextHolder once auth module is ready
   private Integer getCurrentUserId() {
-    // JwtTokenAuthenticationHolder
-    return 0;
+    return SecurityUtils.getCurrentUserId();
   }
 }
