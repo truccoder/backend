@@ -36,6 +36,8 @@ public class SecurityConfig {
                 requests
                     .requestMatchers("/v1/api/auth/**")
                     .permitAll()
+                    .requestMatchers("v1/api/knowledge/sync/**")
+                    .permitAll()
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(
