@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ─── Console appender ─────────────────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ─── Axiom appender ────────────────────────────────────────────── -->
+    <!--
+      Set these two environment variables before starting the app:
+        AXIOM_TOKEN   →  your Axiom API token  (xaat-xxxx)
+        AXIOM_DATASET →  your dataset name     (e.g. socialapp-logs)
+    -->
+    <appender name="AXIOM" class="io.github.yhsj.axiom.AxiomAppender">
+        <endpointUrl>https://api.axiom.co/v1/datasets/${AXIOM_DATASET:-socialapp-logs}/ingest</endpointUrl>
+        <apiToken>${AXIOM_TOKEN}</apiToken>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+    </appender>
+
+    <!-- ─── Root logger ───────────────────────────────────────────────── -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="AXIOM"/>
+    </root>
+
+</configuration>
