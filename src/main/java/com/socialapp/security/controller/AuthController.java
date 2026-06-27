@@ -10,21 +10,24 @@ import com.socialapp.security.service.AuthService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @RestController
 @RequestMapping("/v1/api/auth")
 @RequiredArgsConstructor
+@Slf4j
 public class AuthController {
   private final AuthService authService;
 
   @PostMapping("/register")
   public void register(@Valid @RequestBody RegisterRequestDto request) {
-    System.out.println(">>>>Register called");
+    log.info(">>>> Register endpoint called with request: {}", request);
     authService.register(request);
   }
 
   @PostMapping("/login")
   public AuthResponseDto login(@Valid @RequestBody LoginRequestDto request) {
+    log.info(">>>> Login endpoint called");
     return authService.login(request);
   }
 
