@@ -42,21 +42,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          script: |
-            cd /opt/socialapp
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u truccoder --password-stdin
-            
-            # --- TẠO FILE .ENV TỪ SECRETS ---
-            echo "SPRING_PROFILES_ACTIVE=${{ secrets.SPRING_PROFILES_ACTIVE }}" > .env
-            echo "AXIOM_TOKEN=${{ secrets.AXIOM_TOKEN }}" >> .env
-            
-            # --- CHẠY DOCKER VỚI ĐÚNG TÊN FILE ---
-            docker compose -f docker-compose.yml pull backend
-            docker compose -f docker-compose.yml up -d
-            docker image prune -f
+#      - name: Deploy to server
+#        uses: appleboy/ssh-action@v1
+#        with:
+#          host: ${{ secrets.SERVER_IP }}
+#          username: ${{ secrets.SERVER_USER }}
+#          password: ${{ secrets.SERVER_PASSWORD }}
+#          script: |
+#            cd /opt/socialapp
+#            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u truccoder --password-stdin
+#
+#            # --- TẠO FILE .ENV TỪ SECRETS ---
+#            echo "SPRING_PROFILES_ACTIVE=${{ secrets.SPRING_PROFILES_ACTIVE }}" > .env
+#            echo "AXIOM_TOKEN=${{ secrets.AXIOM_TOKEN }}" >> .env
+#
+#            # --- CHẠY DOCKER VỚI ĐÚNG TÊN FILE ---
+#            docker compose -f docker-compose.yml pull backend
+#            docker compose -f docker-compose.yml up -d
+#            docker image prune -f
