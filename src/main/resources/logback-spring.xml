@@ -24,9 +24,12 @@
 
     <!-- ─── Prod profile: Axiom only ─────────────────────────────────── -->
     <springProfile name="prod">
-        <root level="INFO">
+        <root level="WARN">
             <appender-ref ref="AXIOM"/>
         </root>
+        <logger name="com.socialapp" level="INFO" additivity="false">
+            <appender-ref ref="AXIOM"/>
+        </logger>
     </springProfile>
 
 </configuration>
