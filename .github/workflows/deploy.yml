@@ -51,6 +51,12 @@ jobs:
           script: |
             cd /opt/socialapp
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u truccoder --password-stdin
-            docker compose -f docker-compose.prod.yml pull backend
-            docker compose -f docker-compose.prod.yml up -d
+            
+            # --- TẠO FILE .ENV TỪ SECRETS ---
+            echo "SPRING_PROFILES_ACTIVE=${{ secrets.SPRING_PROFILES_ACTIVE }}" > .env
+            echo "AXIOM_TOKEN=${{ secrets.AXIOM_TOKEN }}" >> .env
+            
+            # --- CHẠY DOCKER VỚI ĐÚNG TÊN FILE ---
+            docker compose -f docker-compose.yml pull backend
+            docker compose -f docker-compose.yml up -d
             docker image prune -f
