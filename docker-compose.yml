@@ -15,21 +15,21 @@ services:
     command: server /data --console-address ":9001"
     restart: always
 
-#  postgres:
-#    image: postgres:16
-#    container_name: postgres
-#    ports:
-#      - "5433:5432"
-#    environment:
-#      POSTGRES_DB: socialapp
-#      POSTGRES_USER: postgres
-#      POSTGRES_PASSWORD: postgres
-#    volumes:
-#      - ./.docker-data/postgres:/var/lib/postgresql/data
-#      - ./docker/postgres/init:/docker-entrypoint-initdb.d
-#    networks:
-#      - backend-network
-#    restart: always
+  #  postgres:
+  #    image: postgres:16
+  #    container_name: postgres
+  #    ports:
+  #      - "5433:5432"
+  #    environment:
+  #      POSTGRES_DB: socialapp
+  #      POSTGRES_USER: postgres
+  #      POSTGRES_PASSWORD: postgres
+  #    volumes:
+  #      - ./.docker-data/postgres:/var/lib/postgresql/data
+  #      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+  #    networks:
+  #      - backend-network
+  #    restart: always
 
   opensearch:
     image: opensearchproject/opensearch:2.13.0
@@ -89,6 +89,19 @@ services:
       - backend-network
     command: redis-server --save 60 1 --loglevel warning
     restart: always
+
+  backend:
+    image: ghcr.io/truccoder/backend:latest
+    container_name: socialapp-backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE}
+      - AXIOM_TOKEN=${AXIOM_TOKEN}
+    networks:
+      - backend-network
 
 networks:
   backend-network:
