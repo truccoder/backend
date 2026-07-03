@@ -39,34 +39,55 @@ public class ModerationEventListener {
   @EventListener
   @Transactional
   public void handleModerationEvent(PostModerationEvent event) {
-    log.info("Processing moderation for post {}", event.getPostId());
+    Integer postId = event.getPostId();
+    Integer authorId = event.getAuthorId();
+    log.info("[postId={}, authorId={}] Processing moderation", postId, authorId);
 
     try {
-      ModerationScores textScores = textModerationService.analyzeText(event.getContent());
+      ModerationScores textScores =
+          textModerationService.analyzeText(postId, authorId, event.getContent());
       ImageSafeSearchResult imageResult =
-          imageModerationService.analyzeImages(event.getImageUrls());
-      ModerationResult result = decisionEngine.decide(textScores, imageResult);
+          imageModerationService.analyzeImages(postId, authorId, event.getImageUrls());
+      ModerationResult result = decisionEngine.decide(postId, authorId, textScores, imageResult);
 
-      updatePostStatus(event.getPostId(), result.getStatus());
-      saveModerationLog(event.getPostId(), result);
+      updatePostStatus(postId, result.getStatus());
+      saveModerationLog(postId, result);
+      log.info(
+          "[postId={}, authorId={}] Persisted moderation status={} and log entry",
+          postId,
+          authorId,
+          result.getStatus());
 
       if (result.isRejected() && !result.getViolations().isEmpty()) {
+        log.info(
+            "[postId={}, authorId={}] Recording violation: {}",
+            postId,
+            authorId,
+            result.getViolations().get(0));
         userBanService.recordViolation(
-            event.getAuthorId(),
-            event.getPostId(),
+            authorId,
+            postId,
             result.getViolations().get(0),
             "AI moderation detected violation: " + result.getViolations());
       }
 
       if (result.isApproved()) {
-        newsfeedService.fanOutPost(event.getPostId());
+        log.info("[postId={}, authorId={}] Approved, fanning out to newsfeed", postId, authorId);
+        newsfeedService.fanOutPost(postId);
       }
 
       log.info(
-          "Moderation completed for post {}: status={}", event.getPostId(), result.getStatus());
+          "[postId={}, authorId={}] Moderation completed: status={}",
+          postId,
+          authorId,
+          result.getStatus());
     } catch (Exception e) {
-      log.error("Moderation failed for post {}", event.getPostId(), e);
-      updatePostStatus(event.getPostId(), ModerationStatus.PENDING_REVIEW);
+      log.error(
+          "[postId={}, authorId={}] Moderation failed, falling back to PENDING_REVIEW",
+          postId,
+          authorId,
+          e);
+      updatePostStatus(postId, ModerationStatus.PENDING_REVIEW);
     }
   }
 

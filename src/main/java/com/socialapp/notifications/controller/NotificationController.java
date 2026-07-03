@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.common.utils.Constants;
 import com.socialapp.notifications.dto.NotificationResponseDto;
+import com.socialapp.notifications.dto.UnreadCountResponse;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationPreferenceEntity;
 import com.socialapp.notifications.services.NotificationService;
@@ -52,6 +53,4 @@ public class NotificationController {
       @RequestBody UpdatePreferenceRequestDto request) {
     return notificationService.updatePreference(SecurityUtils.getCurrentUserId(), request);
   }
-
-  record UnreadCountResponse(int count) {}
 }

@@ -36,6 +36,27 @@ public class BookService {
       CreateBookRequestDto request,
       MultipartFile bookFile,
       MultipartFile coverFile) {
+    BookEntity book = buildAndSaveBook(authorId, request.getPostId(), request, bookFile, coverFile);
+    return toResponseDto(book, authorId);
+  }
+
+  /** Creates a book already linked to a post, used when a book is attached inline to a post. */
+  @Transactional
+  public BookEntity createBookForPost(
+      Integer authorId,
+      Integer postId,
+      CreateBookRequestDto bookDetails,
+      MultipartFile bookFile,
+      MultipartFile coverFile) {
+    return buildAndSaveBook(authorId, postId, bookDetails, bookFile, coverFile);
+  }
+
+  private BookEntity buildAndSaveBook(
+      Integer authorId,
+      Integer postId,
+      CreateBookRequestDto request,
+      MultipartFile bookFile,
+      MultipartFile coverFile) {
     validateFile(bookFile);
 
     String fileKey = bookStorageService.uploadBook(authorId, bookFile);
@@ -54,7 +75,7 @@ public class BookService {
     BookEntity book =
         BookEntity.builder()
             .authorId(authorId)
-            .postId(request.getPostId())
+            .postId(postId)
             .title(request.getTitle())
             .description(request.getDescription())
             .fileKey(fileKey)
@@ -67,7 +88,7 @@ public class BookService {
             .build();
 
     bookRepository.save(book);
-    return toResponseDto(book, authorId);
+    return book;
   }
 
   public BookResponseDto getBook(Integer bookId, Integer requesterId) {

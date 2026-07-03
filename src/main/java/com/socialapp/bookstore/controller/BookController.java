@@ -6,10 +6,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.socialapp.bookstore.dto.BookResponseDto;
-import com.socialapp.bookstore.dto.BookReviewResponseDto;
-import com.socialapp.bookstore.dto.CreateBookRequestDto;
-import com.socialapp.bookstore.dto.CreateReviewRequestDto;
+import com.socialapp.bookstore.dto.*;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookService;
 import com.socialapp.security.util.SecurityUtils;
@@ -61,8 +58,7 @@ public class BookController {
 
   @PostMapping("/{bookId}/reviews")
   public BookReviewResponseDto createReview(
-      @PathVariable Integer bookId,
-      @Valid @org.springframework.web.bind.annotation.RequestBody CreateReviewRequestDto request) {
+      @PathVariable Integer bookId, @Valid @RequestBody CreateReviewRequestDto request) {
     return reviewService.createOrUpdateReview(SecurityUtils.getCurrentUserId(), bookId, request);
   }
 
@@ -70,6 +66,4 @@ public class BookController {
   public List<BookReviewResponseDto> getReviews(@PathVariable Integer bookId) {
     return reviewService.getReviews(bookId);
   }
-
-  record DownloadUrlResponse(String url) {}
 }

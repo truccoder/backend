@@ -88,13 +88,6 @@ public class NewsfeedService {
         addToFeed(friendId, postId, score);
       }
     }
-
-    if (Objects.nonNull(taggedUserIds)) {
-      for (Integer taggedUserId : taggedUserIds) {
-        addToFeed(taggedUserId, postId, score);
-      }
-    }
-
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
   }
 

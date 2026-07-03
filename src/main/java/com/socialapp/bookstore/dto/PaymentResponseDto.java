@@ -12,4 +12,5 @@ import lombok.NoArgsConstructor;
 public class PaymentResponseDto {
   private String paymentUrl;
   private String transactionRef;
+  private String qrCode;
 }

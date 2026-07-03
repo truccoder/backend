@@ -33,6 +33,8 @@ public class UserEntity {
 
   private OffsetDateTime bannedUntil;
 
+  private boolean emailVerified;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;

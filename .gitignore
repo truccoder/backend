@@ -36,6 +36,7 @@ out/
 .gradle/
 gradle.properties
 build/
+.tomcat-temp/
 !gradle/wrapper/gradle-wrapper.jar
 
 # Ignore Gradle GUI config

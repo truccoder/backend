@@ -2,6 +2,7 @@ package com.socialapp.posts.dto;
 
 import java.util.List;
 
+import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.LocationDetails;
 import com.socialapp.posts.entity.enums.LocationType;
@@ -21,4 +22,5 @@ public class CreatePostRequestDto {
   private List<Integer> taggedUserIds;
   private PostType postType;
   private EventDetails eventDetails;
+  private CreateBookRequestDto bookDetails;
 }
