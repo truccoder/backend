@@ -41,7 +41,9 @@ public class BookPurchaseEntity {
 
   private String transactionRef;
 
-  private String vnpayTransactionNo;
+  private String paymentLinkId;
+
+  private String gatewayTransactionNo;
 
   private String paymentMethod;
 

@@ -33,7 +33,5 @@ public class ModerationProperties {
   @Data
   public static class Rules {
     private String keywordBlacklistPath = "classpath:moderation/blacklist.txt";
-    private int maxUrlsPerPost = 3;
-    private int duplicateWindowSeconds = 60;
   }
 }

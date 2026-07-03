@@ -10,4 +10,6 @@ import lombok.Data;
 @ConfigurationProperties(prefix = "auth")
 public class AuthProperties {
   private String resetPasswordUrl = "http://localhost:3000/forgot-password?token=";
+  private String verifyEmailUrl = "http://localhost:3000/verify-email?token=";
+  private String magicLinkUrl = "http://localhost:3000/magic-login?token=";
 }

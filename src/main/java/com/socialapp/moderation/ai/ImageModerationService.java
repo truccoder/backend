@@ -12,6 +12,7 @@ import com.socialapp.moderation.config.ModerationProperties;
 import com.socialapp.moderation.dto.ImageSafeSearchResult;
 import com.socialapp.moderation.enums.Likelihood;
 
+import io.jsonwebtoken.lang.Strings;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -27,7 +28,17 @@ public class ImageModerationService {
     this.properties = properties;
   }
 
-  public ImageSafeSearchResult analyzeImage(String imageUrl) {
+  public ImageSafeSearchResult analyzeImage(Integer postId, Integer authorId, String imageUrl) {
+    if (!Strings.hasText(properties.getPerspectiveApi().getKey())) {
+      log.warn(
+          "[postId={}, authorId={}] Cloud Vision API key is not configured, skipping image"
+              + " moderation for {} (treated as no signal, not rejected)",
+          postId,
+          authorId,
+          imageUrl);
+      return ImageSafeSearchResult.pending();
+    }
+
     try {
       Map<String, Object> requestBody = buildAnnotateRequest(imageUrl);
 
@@ -46,22 +57,36 @@ public class ImageModerationService {
               .bodyToMono(Map.class)
               .block();
 
-      return parseResponse(response);
+      ImageSafeSearchResult result = parseResponse(response);
+      log.info(
+          "[postId={}, authorId={}] Cloud Vision result for {}: worst={}",
+          postId,
+          authorId,
+          imageUrl,
+          result.getWorstLikelihood());
+      return result;
     } catch (Exception e) {
-      log.error("Failed to call Cloud Vision API for image {}: {}", imageUrl, e.getMessage());
+      log.error(
+          "[postId={}, authorId={}] Failed to call Cloud Vision API for image {}: {}",
+          postId,
+          authorId,
+          imageUrl,
+          e.getMessage());
       return ImageSafeSearchResult.pending();
     }
   }
 
-  public ImageSafeSearchResult analyzeImages(List<String> imageUrls) {
+  public ImageSafeSearchResult analyzeImages(
+      Integer postId, Integer authorId, List<String> imageUrls) {
     if (imageUrls == null || imageUrls.isEmpty()) {
+      log.info("[postId={}, authorId={}] Skipping image moderation: no images", postId, authorId);
       return ImageSafeSearchResult.safe();
     }
 
     ImageSafeSearchResult worstResult = ImageSafeSearchResult.safe();
 
     for (String imageUrl : imageUrls) {
-      ImageSafeSearchResult result = analyzeImage(imageUrl);
+      ImageSafeSearchResult result = analyzeImage(postId, authorId, imageUrl);
       if (result.getWorstLikelihood().getScore() > worstResult.getWorstLikelihood().getScore()) {
         worstResult = result;
       }

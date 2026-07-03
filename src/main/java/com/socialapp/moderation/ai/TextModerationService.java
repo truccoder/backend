@@ -30,10 +30,24 @@ public class TextModerationService {
   }
 
   @SuppressWarnings("unchecked")
-  public ModerationScores analyzeText(String text) {
+  public ModerationScores analyzeText(Integer postId, Integer authorId, String text) {
     if (!Strings.hasText(text)) {
+      log.info(
+          "[postId={}, authorId={}] Skipping text moderation: content is blank", postId, authorId);
       return ModerationScores.builder().build();
     }
+
+    if (!Strings.hasText(properties.getPerspectiveApi().getKey())) {
+      log.warn(
+          "[postId={}, authorId={}] Perspective API key is not configured, skipping text moderation"
+              + " call (treated as no signal, not as toxic)",
+          postId,
+          authorId);
+      return ModerationScores.builder().build();
+    }
+
+    log.info(
+        "[postId={}, authorId={}] Calling Perspective API for text moderation", postId, authorId);
 
     try {
       Map<String, Object> requestedAttributes =
@@ -64,21 +78,39 @@ public class TextModerationService {
               .block();
 
       if (Objects.isNull(response)) {
-        log.warn("Perspective API returned null response");
+        log.warn(
+            "[postId={}, authorId={}] Perspective API returned null response, falling back to"
+                + " default scores",
+            postId,
+            authorId);
         return buildDefaultScores();
       }
 
       Map<String, Object> attributeScores = (Map<String, Object>) response.get("attributeScores");
 
-      return ModerationScores.builder()
-          .toxicity(extractScore(attributeScores, PerspectiveAttribute.TOXICITY))
-          .severeToxicity(extractScore(attributeScores, PerspectiveAttribute.SEVERE_TOXICITY))
-          .insult(extractScore(attributeScores, PerspectiveAttribute.INSULT))
-          .threat(extractScore(attributeScores, PerspectiveAttribute.THREAT))
-          .sexuallyExplicit(extractScore(attributeScores, PerspectiveAttribute.SEXUALLY_EXPLICIT))
-          .build();
+      ModerationScores scores =
+          ModerationScores.builder()
+              .toxicity(extractScore(attributeScores, PerspectiveAttribute.TOXICITY))
+              .severeToxicity(extractScore(attributeScores, PerspectiveAttribute.SEVERE_TOXICITY))
+              .insult(extractScore(attributeScores, PerspectiveAttribute.INSULT))
+              .threat(extractScore(attributeScores, PerspectiveAttribute.THREAT))
+              .sexuallyExplicit(
+                  extractScore(attributeScores, PerspectiveAttribute.SEXUALLY_EXPLICIT))
+              .build();
+
+      log.info(
+          "[postId={}, authorId={}] Perspective API scores: highest={}",
+          postId,
+          authorId,
+          scores.getHighestTextScore());
+
+      return scores;
     } catch (Exception e) {
-      log.error("Failed to call Perspective API: {}", e.getMessage());
+      log.error(
+          "[postId={}, authorId={}] Failed to call Perspective API, falling back to default scores: {}",
+          postId,
+          authorId,
+          e.getMessage());
       return buildDefaultScores();
     }
   }

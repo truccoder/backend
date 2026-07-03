@@ -38,6 +38,8 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers("v1/api/knowledge/sync/**")
                     .permitAll()
+                    .requestMatchers("/v1/api/payments/payos/webhook")
+                    .permitAll()
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(

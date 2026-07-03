@@ -1,6 +1,8 @@
 package com.socialapp.posts.controller;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
@@ -18,6 +20,14 @@ public class PostController {
   @PostMapping
   public void createPost(@RequestBody CreatePostRequestDto request) {
     postService.createPost(SecurityUtils.getCurrentUserId(), request);
+  }
+
+  @PostMapping(value = "/books", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public void createBookPost(
+      @RequestPart("metadata") CreatePostRequestDto request,
+      @RequestPart("file") MultipartFile bookFile,
+      @RequestPart(value = "cover", required = false) MultipartFile coverFile) {
+    postService.createBookPost(SecurityUtils.getCurrentUserId(), request, bookFile, coverFile);
   }
 
   @PutMapping("/{postId}")

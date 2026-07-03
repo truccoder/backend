@@ -45,4 +45,19 @@ public class AuthController {
   public void resetPassword(@Valid @RequestBody ResetPasswordRequestDto request) {
     authService.resetPassword(request);
   }
+
+  @PostMapping("/verify-email")
+  public void verifyEmail(@Valid @RequestBody VerifyEmailRequestDto request) {
+    authService.verifyEmail(request);
+  }
+
+  @PostMapping("/magic-link")
+  public void requestMagicLink(@Valid @RequestBody MagicLinkRequestDto request) {
+    authService.requestMagicLink(request);
+  }
+
+  @PostMapping("/magic-link/login")
+  public AuthResponseDto loginWithMagicLink(@Valid @RequestBody MagicLinkLoginRequestDto request) {
+    return authService.loginWithMagicLink(request);
+  }
 }

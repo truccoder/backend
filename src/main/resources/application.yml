@@ -10,10 +10,10 @@ minio:
 
 spring:
   mail:
-    host: ${MAIL_HOST:sandbox.smtp.mailtrap.io}
-    port: ${MAIL_PORT:2525}
-    username: ${MAIL_USERNAME:}
-    password: ${MAIL_PASSWORD:}
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:thanhtre3651@gmail.com}
+    password: ${GOOGLE_APP_PASSWORD:}
     properties:
       mail:
         smtp:
@@ -22,7 +22,7 @@ spring:
             enable: true
 
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/socialapp}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/socialapp}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -80,6 +80,8 @@ jwt:
 
 auth:
   reset-password-url: ${RESET_PASSWORD_URL:http://localhost:3000/forgot-password?token=}
+  verify-email-url: ${VERIFY_EMAIL_URL:http://localhost:3000/verify-email?token=}
+  magic-link-url: ${MAGIC_LINK_URL:http://localhost:3000/magic-login?token=}
 
 gemini:
   api-key: ${GEMINI_API_KEY:}
@@ -95,13 +97,9 @@ onesignal:
   app-id: ${ONESIGNAL_APP_ID:}
   rest-api-key: ${ONESIGNAL_REST_API_KEY:}
 
-mailtrap:
-  host: ${MAIL_HOST:sandbox.smtp.mailtrap.io}
-  port: ${MAIL_PORT:2525}
-  username: ${MAIL_USERNAME:}
-  password: ${MAIL_PASSWORD:}
-  from-email: noreply@socialapp.dev
-  from-name: SocialApp
+mail:
+  from-email: ${MAIL_FROM_EMAIL:thanhtre3651@gmail.com}
+  from-name: ${MAIL_FROM_NAME:SocialApp}
 
 google:
   calendar:
@@ -109,9 +107,9 @@ google:
     client-secret: ${GOOGLE_CALENDAR_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_CALENDAR_REDIRECT_URI:http://localhost:8080/v1/api/events/google/callback}
 
-vnpay:
-  tmn-code: ${VNPAY_TMN_CODE:DEMO1234}
-  hash-secret: ${VNPAY_HASH_SECRET:DEMOSECRETKEY}
-  pay-url: https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
-  return-url: ${VNPAY_RETURN_URL:http://localhost:3000/payment/callback}
-  api-url: https://sandbox.vnpayment.vn/merchant_webapi/api/transaction
+payos:
+  client-id: ${PAYOS_CLIENT_ID:}
+  api-key: ${PAYOS_API_KEY:}
+  checksum-key: ${PAYOS_CHECKSUM_KEY:}
+  return-url: ${PAYOS_RETURN_URL:http://localhost:3000/payment/success}
+  cancel-url: ${PAYOS_CANCEL_URL:http://localhost:3000/payment/cancel}

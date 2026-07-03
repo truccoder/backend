@@ -13,9 +13,13 @@ import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.config.AuthProperties;
 import com.socialapp.security.dto.*;
+import com.socialapp.security.entity.EmailVerificationToken;
+import com.socialapp.security.entity.MagicLinkToken;
 import com.socialapp.security.entity.PasswordResetToken;
 import com.socialapp.security.entity.RefreshToken;
 import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.EmailVerificationTokenRepository;
+import com.socialapp.security.repository.MagicLinkTokenRepository;
 import com.socialapp.security.repository.PasswordResetTokenRepository;
 import com.socialapp.security.repository.RefreshTokenRepository;
 import com.socialapp.security.repository.UserRepository;
@@ -29,6 +33,8 @@ public class AuthService {
 
   private static final String INVALID_CREDENTIALS = "Invalid credentials";
   private static final long RESET_TOKEN_EXPIRATION_HOURS = 1;
+  private static final long VERIFICATION_TOKEN_EXPIRATION_HOURS = 24;
+  private static final long MAGIC_LINK_EXPIRATION_MINUTES = 15;
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
   private final UserRepository userRepository;
@@ -36,6 +42,8 @@ public class AuthService {
   private final TokenService tokenService;
   private final RefreshTokenRepository refreshTokenRepository;
   private final PasswordResetTokenRepository passwordResetTokenRepository;
+  private final EmailVerificationTokenRepository emailVerificationTokenRepository;
+  private final MagicLinkTokenRepository magicLinkTokenRepository;
   private final MailService mailService;
   private final AuthProperties authProperties;
 
@@ -53,6 +61,7 @@ public class AuthService {
     user.setProfilePictureUrl(request.profilePictureUrl());
 
     userRepository.save(user);
+    createVerificationTokenAndSendEmail(user);
   }
 
   @Transactional
@@ -107,22 +116,105 @@ public class AuthService {
             .findById(resetToken.getUserId())
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
+    if (!user.isEmailVerified()) {
+      throw new ValidationException("Please verify your email before resetting your password");
+    }
+
     user.setPassword(passwordEncoder.encode(request.newPassword()));
     userRepository.save(user);
     passwordResetTokenRepository.delete(resetToken);
+  }
+
+  @Transactional
+  public void verifyEmail(VerifyEmailRequestDto request) {
+    EmailVerificationToken verificationToken =
+        emailVerificationTokenRepository
+            .findById(request.token())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    if (verificationToken.getExpiresAt() == null
+        || verificationToken.getExpiresAt().isBefore(OffsetDateTime.now())) {
+      emailVerificationTokenRepository.delete(verificationToken);
+      throw new BadCredentialsException(INVALID_CREDENTIALS);
+    }
+
+    UserEntity user =
+        userRepository
+            .findById(verificationToken.getUserId())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    user.setEmailVerified(true);
+    userRepository.save(user);
+    emailVerificationTokenRepository.delete(verificationToken);
+  }
+
+  @Transactional
+  public void requestMagicLink(MagicLinkRequestDto request) {
+    userRepository
+        .findByEmailIgnoreCase(EmailNormalizer.normalize(request.email()))
+        .ifPresent(this::createMagicLinkTokenAndSendEmail);
+  }
+
+  @Transactional
+  public AuthResponseDto loginWithMagicLink(MagicLinkLoginRequestDto request) {
+    MagicLinkToken magicLinkToken =
+        magicLinkTokenRepository
+            .findById(request.token())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    magicLinkTokenRepository.delete(magicLinkToken);
+
+    if (magicLinkToken.getExpiresAt() == null
+        || magicLinkToken.getExpiresAt().isBefore(OffsetDateTime.now())) {
+      throw new BadCredentialsException(INVALID_CREDENTIALS);
+    }
+
+    UserEntity user =
+        userRepository
+            .findById(magicLinkToken.getUserId())
+            .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
+
+    return tokenService.issueTokens(user);
   }
 
   private void createPasswordResetTokenAndSendEmail(UserEntity user) {
     passwordResetTokenRepository.deleteByUserId(user.getId());
 
     PasswordResetToken resetToken = new PasswordResetToken();
-    resetToken.setToken(generateResetToken());
+    resetToken.setToken(generateSecureToken());
     resetToken.setUserId(user.getId());
     resetToken.setExpiresAt(OffsetDateTime.now().plusHours(RESET_TOKEN_EXPIRATION_HOURS));
     passwordResetTokenRepository.save(resetToken);
 
     mailService.sendPasswordResetEmail(
         user.getEmail(), getRecipientName(user), resetToken.getToken());
+  }
+
+  private void createVerificationTokenAndSendEmail(UserEntity user) {
+    emailVerificationTokenRepository.deleteByUserId(user.getId());
+
+    EmailVerificationToken verificationToken = new EmailVerificationToken();
+    verificationToken.setToken(generateSecureToken());
+    verificationToken.setUserId(user.getId());
+    verificationToken.setExpiresAt(
+        OffsetDateTime.now().plusHours(VERIFICATION_TOKEN_EXPIRATION_HOURS));
+    emailVerificationTokenRepository.save(verificationToken);
+
+    mailService.sendVerificationEmail(
+        user.getEmail(), getRecipientName(user), verificationToken.getToken());
+  }
+
+  private void createMagicLinkTokenAndSendEmail(UserEntity user) {
+    magicLinkTokenRepository.deleteByUserId(user.getId());
+
+    MagicLinkToken magicLinkToken = new MagicLinkToken();
+    magicLinkToken.setToken(generateSecureToken());
+    magicLinkToken.setUserId(user.getId());
+    magicLinkToken.setExpiresAt(OffsetDateTime.now().plusMinutes(MAGIC_LINK_EXPIRATION_MINUTES));
+    magicLinkTokenRepository.save(magicLinkToken);
+
+    mailService.sendMagicLinkEmail(
+        user.getEmail(), getRecipientName(user), magicLinkToken.getToken());
   }
 
   private String getRecipientName(UserEntity user) {
@@ -132,7 +224,7 @@ public class AuthService {
     return user.getFullName();
   }
 
-  private String generateResetToken() {
+  private String generateSecureToken() {
     byte[] randomBytes = new byte[32];
     SECURE_RANDOM.nextBytes(randomBytes);
     return Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);

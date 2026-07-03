@@ -5,38 +5,32 @@ import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.bookstore.dto.PaymentResponseDto;
-import com.socialapp.bookstore.service.VNPayService;
+import com.socialapp.bookstore.service.PayOSService;
 import com.socialapp.security.util.SecurityUtils;
 
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/v1/api/payments")
 @RequiredArgsConstructor
 public class PaymentController {
-  private final VNPayService vnPayService;
+  private final PayOSService payOSService;
 
   @PostMapping("/books/{bookId}")
-  public PaymentResponseDto createPayment(
-      @PathVariable Integer bookId, HttpServletRequest request) {
-    String ipAddress = getClientIp(request);
-    return vnPayService.createPayment(SecurityUtils.getCurrentUserId(), bookId, ipAddress);
+  public PaymentResponseDto createPayment(@PathVariable Integer bookId) {
+    return payOSService.createPayment(SecurityUtils.getCurrentUserId(), bookId);
   }
 
-  @GetMapping("/vnpay/callback")
-  public VNPayCallbackResponse handleVNPayCallback(@RequestParam Map<String, String> params) {
-    boolean success = vnPayService.handleCallback(params);
-    return new VNPayCallbackResponse(success, success ? "Payment successful" : "Payment failed");
+  @PostMapping("/payos/webhook")
+  public void handlePayOSWebhook(@RequestBody Map<String, Object> payload) {
+    payOSService.handleWebhook(payload);
   }
 
-  private String getClientIp(HttpServletRequest request) {
-    String xForwardedFor = request.getHeader("X-Forwarded-For");
-    if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
-      return xForwardedFor.split(",")[0].trim();
-    }
-    return request.getRemoteAddr();
+  @PostMapping("/{transactionRef}/sync")
+  public PaymentStatusResponse syncPaymentStatus(@PathVariable String transactionRef) {
+    boolean paid = payOSService.syncPaymentStatus(transactionRef);
+    return new PaymentStatusResponse(transactionRef, paid);
   }
 
-  record VNPayCallbackResponse(boolean success, String message) {}
+  record PaymentStatusResponse(String transactionRef, boolean paid) {}
 }

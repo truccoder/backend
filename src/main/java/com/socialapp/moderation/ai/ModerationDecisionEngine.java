@@ -22,7 +22,11 @@ import lombok.extern.slf4j.Slf4j;
 public class ModerationDecisionEngine {
   private final ModerationProperties properties;
 
-  public ModerationResult decide(ModerationScores textScores, ImageSafeSearchResult imageResult) {
+  public ModerationResult decide(
+      Integer postId,
+      Integer authorId,
+      ModerationScores textScores,
+      ImageSafeSearchResult imageResult) {
     List<ViolationType> violations = new ArrayList<>();
 
     ModerationStatus textStatus = evaluateTextScores(textScores, violations);
@@ -41,7 +45,10 @@ public class ModerationDecisionEngine {
             .build();
 
     log.info(
-        "Moderation decision: status={}, violations={}, highestText={}, imageWorst={}",
+        "[postId={}, authorId={}] Moderation decision: status={}, violations={}, highestText={},"
+            + " imageWorst={}",
+        postId,
+        authorId,
         finalStatus,
         violations,
         textScores.getHighestTextScore(),
