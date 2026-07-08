@@ -12,20 +12,23 @@ import lombok.Data;
 @ConfigurationProperties(prefix = "moderation")
 public class ModerationProperties {
   private boolean enabled;
-  private PerspectiveApi perspectiveApi = new PerspectiveApi();
+  private TextModeration textModeration = new TextModeration();
   private CloudVision cloudVision = new CloudVision();
   private Rules rules = new Rules();
 
+  /**
+   * Thresholds for the Gemini-backed text scoring in {@link com.socialapp.moderation.ai.TextModerationService}.
+   */
   @Data
-  public static class PerspectiveApi {
-    private String key;
+  public static class TextModeration {
     private double toxicityThreshold = 0.7;
     private double reviewThreshold = 0.5;
   }
 
   @Data
   public static class CloudVision {
-    private String credentialsPath;
+    private boolean enabled = false;
+    private String apiKey;
     private Likelihood rejectLikelihood = Likelihood.LIKELY;
     private Likelihood reviewLikelihood = Likelihood.POSSIBLE;
   }

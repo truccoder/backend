@@ -75,8 +75,8 @@ public class ModerationDecisionEngine {
 
   private ModerationStatus evaluateTextScores(
       ModerationScores scores, List<ViolationType> violations) {
-    double rejectThreshold = properties.getPerspectiveApi().getToxicityThreshold();
-    double reviewThreshold = properties.getPerspectiveApi().getReviewThreshold();
+    double rejectThreshold = properties.getTextModeration().getToxicityThreshold();
+    double reviewThreshold = properties.getTextModeration().getReviewThreshold();
     double highest = scores.getHighestTextScore();
 
     if (scores.getSevereToxicity() >= rejectThreshold) {

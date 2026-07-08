@@ -3,6 +3,8 @@ package com.socialapp.knowledge.dto;
 import java.util.List;
 
 import com.socialapp.knowledge.entity.WorkExperience;
+import com.socialapp.knowledge.entity.enums.ExplanationStyle;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 
 import jakarta.validation.constraints.Max;
@@ -19,6 +21,10 @@ public class UpdateProfessionalProfileDto {
   @Min(0)
   @Max(50)
   private Integer yearsOfExperience;
+
+  private PrimaryRole primaryRole;
+
+  private ExplanationStyle explanationStyle;
 
   private List<String> knownTechStack;
 

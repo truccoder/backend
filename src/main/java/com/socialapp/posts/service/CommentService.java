@@ -9,11 +9,17 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
+import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -23,12 +29,14 @@ public class CommentService {
   private final CommentRepository commentRepository;
   private final PostRepository postRepository;
   private final UserBanService userBanService;
+  private final UserRepository userRepository;
+  private final NotificationService notificationService;
 
   @Transactional
   public void createComment(Integer authorId, Integer postId, CreateCommentRequestDto request) {
     checkBanStatus(authorId);
     validateContent(request.getContent());
-    verifyPostExists(postId);
+    PostEntity post = findPostOrThrow(postId);
 
     if (request.getParentId() != null) {
       validateParentComment(request.getParentId(), postId);
@@ -40,6 +48,8 @@ public class CommentService {
     comment.setContent(request.getContent());
     comment.setParentId(request.getParentId());
     commentRepository.save(comment);
+
+    notifyPostAuthor(post, authorId);
   }
 
   @Transactional
@@ -107,9 +117,39 @@ public class CommentService {
     }
   }
 
+  private PostEntity findPostOrThrow(Integer postId) {
+    return postRepository
+        .findById(postId)
+        .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
+  }
+
   private void checkBanStatus(Integer userId) {
     if (userBanService.isUserBanned(userId)) {
       throw new UserBannedException(userBanService.getBanExpiry(userId));
     }
+  }
+
+  private void notifyPostAuthor(PostEntity post, Integer commenterId) {
+    if (post.getAuthorId().equals(commenterId)) {
+      return;
+    }
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(post.getAuthorId())
+            .actorId(commenterId)
+            .type(NotificationType.POST_COMMENTED)
+            .title("New comment on your post")
+            .body(actorName(commenterId) + " commented on your post")
+            .referenceId(post.getId())
+            .referenceType("POST")
+            .build());
+  }
+
+  private String actorName(Integer userId) {
+    return userRepository
+        .findById(userId)
+        .map(UserEntity::getFullName)
+        .filter(name -> name != null && !name.isBlank())
+        .orElse("Someone");
   }
 }

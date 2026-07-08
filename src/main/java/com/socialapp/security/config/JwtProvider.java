@@ -18,18 +18,27 @@ public class JwtProvider {
 
   private final JwtProperties jwtProperties;
 
-  public String generateAccessToken(String email) {
-    return Jwts.builder()
-        .subject(email)
-        .issuedAt(new Date())
-        .expiration(
-            new Date(System.currentTimeMillis() + jwtProperties.accessTokenTtl().toMillis()))
-        .signWith(getSigningKey())
-        .compact();
+  public String generateAccessToken(String email, String jobTitle) {
+    var builder =
+        Jwts.builder()
+            .subject(email)
+            .issuedAt(new Date())
+            .expiration(
+                new Date(System.currentTimeMillis() + jwtProperties.accessTokenTtl().toMillis()));
+
+    if (jobTitle != null) {
+      builder.claim("jobTitle", jobTitle);
+    }
+
+    return builder.signWith(getSigningKey()).compact();
   }
 
   public String extractEmail(String token) {
     return extractClaim(token, Claims::getSubject);
+  }
+
+  public String extractJobTitle(String token) {
+    return extractClaim(token, claims -> claims.get("jobTitle", String.class));
   }
 
   public boolean isTokenValid(String token) {

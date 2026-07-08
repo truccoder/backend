@@ -3,6 +3,7 @@ package com.socialapp.bookstore.entity;
 import java.time.OffsetDateTime;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 
@@ -50,4 +51,6 @@ public class BookPurchaseEntity {
   private OffsetDateTime paidAt;
 
   @CreationTimestamp private OffsetDateTime createdAt;
+
+  @UpdateTimestamp private OffsetDateTime updatedAt;
 }

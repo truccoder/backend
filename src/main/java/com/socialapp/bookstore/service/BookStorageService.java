@@ -37,6 +37,19 @@ public class BookStorageService {
     }
   }
 
+  public String uploadPreview(Integer authorId, byte[] previewBytes, String extension) {
+    String objectKey = "previews/" + authorId + "/" + UUID.randomUUID() + "." + extension;
+    String contentType = "epub".equals(extension) ? "application/epub+zip" : "application/pdf";
+
+    try {
+      minIOService.uploadBytes(BOOKS_BUCKET, objectKey, previewBytes, contentType);
+      log.info("Uploaded book preview file: {}", objectKey);
+      return objectKey;
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to upload book preview file", e);
+    }
+  }
+
   public String uploadCover(Integer authorId, MultipartFile file) {
     String extension = getExtension(file.getOriginalFilename());
     String objectKey = "covers/" + authorId + "/" + UUID.randomUUID() + "." + extension;

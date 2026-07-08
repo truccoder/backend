@@ -9,19 +9,22 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialapp.common.utils.Constants;
-import com.socialapp.search.document.PostDocument;
-import com.socialapp.search.document.UserDocument;
-import com.socialapp.search.dto.SearchResult;
-import com.socialapp.search.dto.UnifiedSearchResponse;
+import com.socialapp.search.dto.PostDto;
+import com.socialapp.search.dto.SearchResponse;
+import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 
+/**
+ * Single-call unified search, directly against Postgres (t_users, t_posts, t_books) — no search
+ * index. A book match doesn't get its own list: it surfaces as its linked post, with book info
+ * attached inline.
+ */
 @Validated
 @RestController
 @RequestMapping("/v1/api/search")
@@ -31,38 +34,16 @@ public class SearchController {
   private final FriendshipQueryService friendshipQueryService;
 
   @GetMapping
-  public UnifiedSearchResponse searchAll(
+  public SearchResponse search(
       @RequestParam @NotBlank String q,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
           int size) {
-    Integer currentUserId = getCurrentUserId();
+    Integer currentUserId = SecurityUtils.getCurrentUserId();
     List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
-    return searchService.searchAll(q, size, currentUserId, friendIds);
-  }
 
-  @GetMapping("/users")
-  public SearchResult<UserDocument> searchUsers(
-      @RequestParam @NotBlank String q,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
-          int size) {
-    Integer currentUserId = getCurrentUserId();
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
-    return searchService.searchUsers(q, page, size, friendIds);
-  }
+    List<UserDto> users = searchService.searchUsers(q, 1, size, friendIds).getItems();
+    List<PostDto> posts = searchService.searchPostsWithBookInfo(q, size, currentUserId, friendIds);
 
-  @GetMapping("/posts")
-  public SearchResult<PostDocument> searchPosts(
-      @RequestParam @NotBlank @Size(min = 2) String q,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
-          int size) {
-    Integer currentUserId = getCurrentUserId();
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
-    return searchService.searchPosts(q, page, size, currentUserId, friendIds);
-  }
-
-  private Integer getCurrentUserId() {
-    return SecurityUtils.getCurrentUserId();
+    return new SearchResponse(users, posts);
   }
 }

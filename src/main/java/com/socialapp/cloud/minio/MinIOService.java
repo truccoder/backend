@@ -1,5 +1,6 @@
 package com.socialapp.cloud.minio;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +14,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.Result;
+import io.minio.SetBucketPolicyArgs;
 import io.minio.messages.Item;
 import lombok.RequiredArgsConstructor;
 
@@ -37,6 +39,43 @@ public class MinIOService {
     }
 
     return objectName;
+  }
+
+  public String uploadBytes(String bucketName, String objectName, byte[] data, String contentType)
+      throws Exception {
+
+    ensureBucketExists(bucketName);
+
+    try (InputStream inputStream = new ByteArrayInputStream(data)) {
+      minioClient.putObject(
+          PutObjectArgs.builder().bucket(bucketName).object(objectName).stream(
+                  inputStream, data.length, -1)
+              .contentType(contentType)
+              .build());
+    }
+
+    return objectName;
+  }
+
+  public void ensurePublicReadPolicy(String bucketName) throws Exception {
+    String policy =
+        """
+                        {
+                          "Version": "2012-10-17",
+                          "Statement": [
+                            {
+                              "Effect": "Allow",
+                              "Principal": "*",
+                              "Action": ["s3:GetObject"],
+                              "Resource": ["arn:aws:s3:::%s/*"]
+                            }
+                          ]
+                        }
+                        """
+            .formatted(bucketName);
+
+    minioClient.setBucketPolicy(
+        SetBucketPolicyArgs.builder().bucket(bucketName).config(policy).build());
   }
 
   public List<String> listAllFiles(String bucketName) throws Exception {

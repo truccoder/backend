@@ -2,9 +2,7 @@ package com.socialapp.bookstore.controller;
 
 import java.util.List;
 
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.bookstore.dto.*;
 import com.socialapp.bookstore.service.BookReviewService;
@@ -20,14 +18,6 @@ import lombok.RequiredArgsConstructor;
 public class BookController {
   private final BookService bookService;
   private final BookReviewService reviewService;
-
-  @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public BookResponseDto createBook(
-      @RequestPart("metadata") @Valid CreateBookRequestDto request,
-      @RequestPart("file") MultipartFile bookFile,
-      @RequestPart(value = "cover", required = false) MultipartFile coverFile) {
-    return bookService.createBook(SecurityUtils.getCurrentUserId(), request, bookFile, coverFile);
-  }
 
   @GetMapping("/{bookId}")
   public BookResponseDto getBook(@PathVariable Integer bookId) {
@@ -65,5 +55,10 @@ public class BookController {
   @GetMapping("/{bookId}/reviews")
   public List<BookReviewResponseDto> getReviews(@PathVariable Integer bookId) {
     return reviewService.getReviews(bookId);
+  }
+
+  @GetMapping("/{bookId}/reviews/breakdown")
+  public RatingBreakdownDto getRatingBreakdown(@PathVariable Integer bookId) {
+    return reviewService.getRatingBreakdown(bookId);
   }
 }

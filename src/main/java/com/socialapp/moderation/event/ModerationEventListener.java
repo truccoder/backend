@@ -2,10 +2,12 @@ package com.socialapp.moderation.event;
 
 import java.util.List;
 
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.socialapp.moderation.ai.ImageModerationService;
 import com.socialapp.moderation.ai.ModerationDecisionEngine;
@@ -36,8 +38,8 @@ public class ModerationEventListener {
   private final UserBanService userBanService;
 
   @Async
-  @EventListener
-  @Transactional
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void handleModerationEvent(PostModerationEvent event) {
     Integer postId = event.getPostId();
     Integer authorId = event.getAuthorId();

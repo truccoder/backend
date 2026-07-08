@@ -53,9 +53,13 @@ dependencies {
     // MinIO
     implementation 'io.minio:minio:8.5.10'
 
-    // OpenSearch
-    implementation 'org.opensearch.client:opensearch-java:2.13.0'
-    implementation 'org.opensearch.client:opensearch-rest-client:2.13.0'
+    // Book preview generation (PDF page slicing, EPUB chapter slicing)
+    implementation 'org.apache.pdfbox:pdfbox:3.0.7'
+    implementation('com.positiondev.epublib:epublib-core:3.1') {
+        // Pulls in slf4j-simple, which fights logback-classic for the SLF4J provider slot and
+        // crashes Spring Boot's LogbackLoggingSystem on startup. We only need epublib's API.
+        exclude group: 'org.slf4j', module: 'slf4j-simple'
+    }
 
     // Axiom Logback Appender
     implementation 'io.github.yhsj:axiom-appender:1.0.2'

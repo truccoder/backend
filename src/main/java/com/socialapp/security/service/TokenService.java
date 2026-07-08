@@ -5,6 +5,8 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 
+import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.security.config.JwtProperties;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.dto.AuthResponseDto;
@@ -23,9 +25,15 @@ public class TokenService {
   private final JwtProvider jwtProvider;
   private final JwtProperties jwtProperties;
   private final RefreshTokenRepository refreshTokenRepository;
+  private final UserProfessionalProfileRepository professionalProfileRepository;
 
   public AuthResponseDto issueTokens(UserEntity user) {
-    String accessToken = jwtProvider.generateAccessToken(user.getEmail());
+    String jobTitle =
+        professionalProfileRepository
+            .findById(user.getId())
+            .map(UserProfessionalProfileEntity::getJobTitle)
+            .orElse(null);
+    String accessToken = jwtProvider.generateAccessToken(user.getEmail(), jobTitle);
     RefreshToken refreshToken = persistRefreshToken(user.getId());
     return new AuthResponseDto(
         accessToken,

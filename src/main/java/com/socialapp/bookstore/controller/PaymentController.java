@@ -5,7 +5,7 @@ import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.bookstore.dto.PaymentResponseDto;
-import com.socialapp.bookstore.service.PayOSService;
+import com.socialapp.bookstore.service.MomoService;
 import com.socialapp.security.util.SecurityUtils;
 
 import lombok.RequiredArgsConstructor;
@@ -14,21 +14,21 @@ import lombok.RequiredArgsConstructor;
 @RequestMapping("/v1/api/payments")
 @RequiredArgsConstructor
 public class PaymentController {
-  private final PayOSService payOSService;
+  private final MomoService momoService;
 
   @PostMapping("/books/{bookId}")
   public PaymentResponseDto createPayment(@PathVariable Integer bookId) {
-    return payOSService.createPayment(SecurityUtils.getCurrentUserId(), bookId);
+    return momoService.createPayment(SecurityUtils.getCurrentUserId(), bookId);
   }
 
-  @PostMapping("/payos/webhook")
-  public void handlePayOSWebhook(@RequestBody Map<String, Object> payload) {
-    payOSService.handleWebhook(payload);
+  @PostMapping("/momo/webhook")
+  public void handleMomoWebhook(@RequestBody Map<String, Object> payload) {
+    momoService.handleWebhook(payload);
   }
 
   @PostMapping("/{transactionRef}/sync")
   public PaymentStatusResponse syncPaymentStatus(@PathVariable String transactionRef) {
-    boolean paid = payOSService.syncPaymentStatus(transactionRef);
+    boolean paid = momoService.syncPaymentStatus(transactionRef);
     return new PaymentStatusResponse(transactionRef, paid);
   }
 

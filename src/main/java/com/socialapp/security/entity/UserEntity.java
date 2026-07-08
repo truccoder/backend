@@ -35,6 +35,9 @@ public class UserEntity {
 
   private boolean emailVerified;
 
+  @Enumerated(EnumType.STRING)
+  private UserRole role = UserRole.USER;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;

@@ -6,9 +6,11 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.moderation.entity.UserBanEntity;
 import com.socialapp.moderation.entity.UserViolationEntity;
 import com.socialapp.moderation.enums.ViolationSeverity;
 import com.socialapp.moderation.enums.ViolationType;
+import com.socialapp.moderation.repository.UserBanRepository;
 import com.socialapp.moderation.repository.UserViolationRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class UserBanService {
   private final UserViolationRepository violationRepository;
+  private final UserBanRepository userBanRepository;
   private final UserRepository userRepository;
 
   private static final int VIOLATIONS_BEFORE_BAN = 2;
@@ -52,15 +55,15 @@ public class UserBanService {
     log.info(
         "Recorded violation for user {}: type={}, severity={}", userId, violationType, severity);
 
-    evaluateAndBanIfNeeded(userId);
+    evaluateAndBanIfNeeded(userId, postId);
   }
 
-  private void evaluateAndBanIfNeeded(Integer userId) {
+  private void evaluateAndBanIfNeeded(Integer userId, Integer triggeringPostId) {
     OffsetDateTime countSince = getViolationCountStartDate(userId);
     long recentViolationCount = violationRepository.countRecentViolations(userId, countSince);
 
     if (recentViolationCount >= VIOLATIONS_BEFORE_BAN && !isUserBanned(userId)) {
-      issueBan(userId);
+      issueBan(userId, triggeringPostId);
     }
   }
 
@@ -69,10 +72,10 @@ public class UserBanService {
     if (Objects.nonNull(bannedUntil) && OffsetDateTime.now().isAfter(bannedUntil)) {
       return bannedUntil;
     }
-    return OffsetDateTime.MIN;
+    return OffsetDateTime.of(2000, 1, 1, 0, 0, 0, 0, java.time.ZoneOffset.UTC);
   }
 
-  private void issueBan(Integer userId) {
+  private void issueBan(Integer userId, Integer triggeringPostId) {
     OffsetDateTime expiresAt = OffsetDateTime.now().plusDays(BAN_DURATION_DAYS);
 
     userRepository
@@ -82,6 +85,13 @@ public class UserBanService {
               user.setBannedUntil(expiresAt);
               userRepository.save(user);
             });
+
+    userBanRepository.save(
+        UserBanEntity.builder()
+            .userId(userId)
+            .postId(triggeringPostId)
+            .bannedUntil(expiresAt)
+            .build());
 
     log.warn("User {} has been banned until {}", userId, expiresAt);
   }
