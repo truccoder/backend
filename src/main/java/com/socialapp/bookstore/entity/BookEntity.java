@@ -36,6 +36,11 @@ public class BookEntity {
 
   private String fileKey;
 
+  /**
+   * Trimmed copy (first {@code previewPages} pages/chapters) served for paid, unpurchased reads.
+   */
+  private String previewFileKey;
+
   private String coverImageUrl;
 
   @Enumerated(EnumType.STRING)

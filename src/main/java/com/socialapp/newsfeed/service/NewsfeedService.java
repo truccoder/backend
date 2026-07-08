@@ -11,14 +11,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.bookstore.dto.RatingBreakdownDto;
+import com.socialapp.bookstore.entity.BookEntity;
+import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.utils.GoogleMapsUrlBuilder;
+import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
+import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
@@ -38,6 +48,9 @@ public class NewsfeedService {
   private final UserInteractionRepository userInteractionRepository;
   private final PostRepository postRepository;
   private final UserRepository userRepository;
+  private final NotificationService notificationService;
+  private final BookRepository bookRepository;
+  private final BookReviewService bookReviewService;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
@@ -66,10 +79,23 @@ public class NewsfeedService {
             .authorProfilePictureUrl(author.getProfilePictureUrl())
             .content(post.getContent())
             .visibility(post.getVisibility())
+            .googlePlaceId(post.getGooglePlaceId())
+            .locationType(post.getLocationType())
+            .locationDetails(post.getLocationDetails())
+            .googleMapsUrl(
+                post.getLocationDetails() != null
+                    ? GoogleMapsUrlBuilder.build(
+                        post.getLocationDetails().getLatitude(),
+                        post.getLocationDetails().getLongitude())
+                    : null)
+            .postType(post.getPostType())
+            .eventDetails(post.getEventDetails())
+            .book(loadBookSummary(post))
             .createdAt(post.getCreatedAt())
             .build();
 
     fanOutPost(postData, taggedUserIds);
+    notifyTaggedUsers(post, author, taggedUserIds);
   }
 
   public void fanOutPost(FeedPostDataDto postData, List<Integer> taggedUserIds) {
@@ -88,7 +114,78 @@ public class NewsfeedService {
         addToFeed(friendId, postId, score);
       }
     }
+
+    if (Objects.nonNull(taggedUserIds)) {
+      for (Integer taggedUserId : taggedUserIds) {
+        addToFeed(taggedUserId, postId, score);
+      }
+    }
+
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
+  }
+
+  private FeedBookSummaryDto loadBookSummary(PostEntity post) {
+    if (!PostType.BOOK.equals(post.getPostType())) {
+      return null;
+    }
+
+    return bookRepository.findByPostId(post.getId()).stream()
+        .findFirst()
+        .map(this::toBookSummary)
+        .orElse(null);
+  }
+
+  private FeedBookSummaryDto toBookSummary(BookEntity book) {
+    RatingBreakdownDto ratings = bookReviewService.getRatingBreakdown(book.getId());
+
+    return FeedBookSummaryDto.builder()
+        .bookId(book.getId())
+        .title(book.getTitle())
+        .description(book.getDescription())
+        .coverImageUrl(book.getCoverImageUrl())
+        .fileFormat(book.getFileFormat())
+        .fileSizeBytes(book.getFileSizeBytes())
+        .totalPages(book.getTotalPages())
+        .previewPages(book.getPreviewPages())
+        .price(book.getPrice())
+        .currency(book.getCurrency())
+        .isFree(book.getIsFree())
+        .avgRating(book.getAvgRating())
+        .reviewCount(book.getReviewCount())
+        .oneStarCount(ratings.oneStarCount())
+        .twoStarsCount(ratings.twoStarsCount())
+        .threeStarsCount(ratings.threeStarsCount())
+        .fourStarsCount(ratings.fourStarsCount())
+        .fiveStarsCount(ratings.fiveStarsCount())
+        .totalRatings(ratings.totalRatings())
+        .build();
+  }
+
+  private void notifyTaggedUsers(PostEntity post, UserEntity author, List<Integer> taggedUserIds) {
+    if (CollectionUtils.isEmpty(taggedUserIds)) {
+      return;
+    }
+    for (Integer taggedUserId : taggedUserIds) {
+      if (taggedUserId.equals(post.getAuthorId())) {
+        continue;
+      }
+      notificationService.send(
+          SendNotificationRequest.builder()
+              .recipientId(taggedUserId)
+              .actorId(post.getAuthorId())
+              .type(NotificationType.POST_TAGGED)
+              .title("You were tagged in a post")
+              .body(displayName(author) + " tagged you in a post")
+              .referenceId(post.getId())
+              .referenceType("POST")
+              .build());
+    }
+  }
+
+  private String displayName(UserEntity user) {
+    return user.getFullName() != null && !user.getFullName().isBlank()
+        ? user.getFullName()
+        : "Someone";
   }
 
   public void updatePostCache(FeedPostDataDto postData) {

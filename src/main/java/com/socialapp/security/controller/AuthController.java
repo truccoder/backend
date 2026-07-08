@@ -1,9 +1,12 @@
 package com.socialapp.security.controller;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.security.dto.*;
 import com.socialapp.security.service.AuthService;
@@ -19,15 +22,15 @@ import lombok.extern.slf4j.Slf4j;
 public class AuthController {
   private final AuthService authService;
 
-  @PostMapping("/register")
-  public void register(@Valid @RequestBody RegisterRequestDto request) {
-    log.info(">>>> Register endpoint called with request: {}", request);
-    authService.register(request);
+  @PostMapping(value = "/register", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public void register(
+      @Valid @RequestPart("metadata") RegisterRequestDto request,
+      @RequestPart(value = "profilePicture", required = false) MultipartFile profilePicture) {
+    authService.register(request, profilePicture);
   }
 
   @PostMapping("/login")
   public AuthResponseDto login(@Valid @RequestBody LoginRequestDto request) {
-    log.info(">>>> Login endpoint called");
     return authService.login(request);
   }
 
@@ -59,5 +62,10 @@ public class AuthController {
   @PostMapping("/magic-link/login")
   public AuthResponseDto loginWithMagicLink(@Valid @RequestBody MagicLinkLoginRequestDto request) {
     return authService.loginWithMagicLink(request);
+  }
+
+  @PostMapping("/logout")
+  public void logout(@Valid @RequestBody RefreshTokenRequestDto request) {
+    authService.logout(request);
   }
 }

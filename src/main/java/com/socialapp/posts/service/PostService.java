@@ -60,6 +60,10 @@ public class PostService {
 
   @Transactional
   public void createPost(Integer authorId, CreatePostRequestDto request) {
+    if (PostType.BOOK.equals(request.getPostType())) {
+      throw new ValidationException(
+          "Use POST /v1/api/posts/books to create a post with an attached book");
+    }
     buildAndSavePost(authorId, request);
   }
 
@@ -120,11 +124,18 @@ public class PostService {
     if (request.getPostType() == null) {
       post.setPostType(PostType.REGULAR);
     }
-    setTags(post, request.getTaggedUserIds());
 
-    if (moderationProperties.isEnabled()) {
-      post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
-      postRepository.save(post);
+    boolean moderationEnabled = moderationProperties.isEnabled();
+    post.setModerationStatus(
+        moderationEnabled ? ModerationStatus.PENDING_MODERATION : ModerationStatus.APPROVED);
+    postRepository.save(post);
+
+    // Tags reference post.getId() via their composite key, so they can only be built once the
+    // post has been saved and assigned an id.
+    setTags(post, request.getTaggedUserIds());
+    postRepository.save(post);
+
+    if (moderationEnabled) {
       log.info(
           "[postId={}, authorId={}] createPost: saved as PENDING_MODERATION, publishing async"
               + " moderation event",
@@ -132,8 +143,6 @@ public class PostService {
           authorId);
       moderationEventPublisher.publishForReview(post, request.getTaggedUserIds());
     } else {
-      post.setModerationStatus(ModerationStatus.APPROVED);
-      postRepository.save(post);
       log.info(
           "[postId={}, authorId={}] createPost: moderation disabled, saved as APPROVED and fanning"
               + " out immediately",

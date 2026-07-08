@@ -18,4 +18,15 @@ public interface BookReviewRepository extends JpaRepository<BookReviewEntity, In
   Optional<Double> getAverageRating(Integer bookId);
 
   int countByBookId(Integer bookId);
+
+  @Query(
+      "SELECT r.rating AS rating, COUNT(r) AS count FROM BookReviewEntity r WHERE r.bookId ="
+          + " :bookId GROUP BY r.rating")
+  List<RatingCount> countGroupedByRating(Integer bookId);
+
+  interface RatingCount {
+    Integer getRating();
+
+    Long getCount();
+  }
 }

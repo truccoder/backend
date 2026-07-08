@@ -8,6 +8,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
+import com.socialapp.knowledge.entity.enums.ExplanationStyle;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 
 import jakarta.persistence.*;
@@ -29,6 +31,18 @@ public class UserProfessionalProfileEntity {
   private SeniorityLevel seniorityLevel;
 
   private Integer yearsOfExperience;
+
+  /**
+   * Main area of specialization; distinct from {@code knownTechStack}'s freeform tech list.
+   */
+  @Enumerated(EnumType.STRING)
+  private PrimaryRole primaryRole;
+
+  /**
+   * How the reader prefers explanations to be framed, used directly in the explain-post prompt.
+   */
+  @Enumerated(EnumType.STRING)
+  private ExplanationStyle explanationStyle;
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(columnDefinition = "jsonb")

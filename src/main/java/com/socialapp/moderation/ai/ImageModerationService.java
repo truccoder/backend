@@ -29,7 +29,7 @@ public class ImageModerationService {
   }
 
   public ImageSafeSearchResult analyzeImage(Integer postId, Integer authorId, String imageUrl) {
-    if (!Strings.hasText(properties.getPerspectiveApi().getKey())) {
+    if (!Strings.hasText(properties.getCloudVision().getApiKey())) {
       log.warn(
           "[postId={}, authorId={}] Cloud Vision API key is not configured, skipping image"
               + " moderation for {} (treated as no signal, not rejected)",
@@ -50,7 +50,7 @@ public class ImageModerationService {
                   uriBuilder ->
                       uriBuilder
                           .path("/images:annotate")
-                          .queryParam("key", properties.getPerspectiveApi().getKey())
+                          .queryParam("key", properties.getCloudVision().getApiKey())
                           .build())
               .bodyValue(requestBody)
               .retrieve()
@@ -78,6 +78,14 @@ public class ImageModerationService {
 
   public ImageSafeSearchResult analyzeImages(
       Integer postId, Integer authorId, List<String> imageUrls) {
+    if (!properties.getCloudVision().isEnabled()) {
+      log.debug(
+          "[postId={}, authorId={}] Cloud Vision image moderation is disabled, skipping",
+          postId,
+          authorId);
+      return ImageSafeSearchResult.safe();
+    }
+
     if (imageUrls == null || imageUrls.isEmpty()) {
       log.info("[postId={}, authorId={}] Skipping image moderation: no images", postId, authorId);
       return ImageSafeSearchResult.safe();

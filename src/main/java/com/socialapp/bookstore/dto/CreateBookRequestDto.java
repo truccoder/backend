@@ -10,8 +10,6 @@ public class CreateBookRequestDto {
 
   private String description;
 
-  private Integer postId;
-
   @Min(0)
   private Long price;
 

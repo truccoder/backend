@@ -1,20 +1,28 @@
 package com.socialapp.moderation.service;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.moderation.dto.ModerationScores;
-import com.socialapp.moderation.dto.PendingReviewPostDto;
+import com.socialapp.moderation.dto.BannedUserDto;
+import com.socialapp.moderation.dto.ModerationLogDto;
+import com.socialapp.moderation.dto.PostModerationDetailDto;
 import com.socialapp.moderation.entity.ModerationLogEntity;
+import com.socialapp.moderation.entity.UserBanEntity;
 import com.socialapp.moderation.enums.Likelihood;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.repository.ModerationLogRepository;
+import com.socialapp.moderation.repository.UserBanRepository;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
@@ -31,12 +39,24 @@ public class AdminModerationService {
   private final PostRepository postRepository;
   private final UserRepository userRepository;
   private final ModerationLogRepository moderationLogRepository;
+  private final UserBanRepository userBanRepository;
   private final NewsfeedService newsfeedService;
   private final UserBanService userBanService;
 
-  public List<PendingReviewPostDto> getPendingReviewPosts() {
-    List<PostEntity> posts = postRepository.findByModerationStatus(ModerationStatus.PENDING_REVIEW);
-    return posts.stream().map(this::toPendingDto).toList();
+  public Page<PostModerationDetailDto> searchPosts(
+      Integer postId, Integer authorId, ModerationStatus status, Pageable pageable) {
+    return postRepository.search(postId, authorId, status, pageable).map(this::toDetailDto);
+  }
+
+  public Page<ModerationLogDto> searchLogs(
+      Integer postId, Integer authorId, ModerationStatus status, Pageable pageable) {
+    return moderationLogRepository.search(postId, authorId, status, pageable).map(this::toLogDto);
+  }
+
+  public Page<BannedUserDto> getBannedUsers(Pageable pageable) {
+    Page<Integer> userIds = userBanRepository.findBannedUserIds(pageable);
+    List<BannedUserDto> dtos = userIds.getContent().stream().map(this::toBannedUserDto).toList();
+    return new PageImpl<>(dtos, pageable, userIds.getTotalElements());
   }
 
   @Transactional
@@ -71,48 +91,85 @@ public class AdminModerationService {
       log.info("Admin approved post {} (decision={})", postId, decision);
     }
 
-    saveModerationLog(postId, isViolation ? ModerationStatus.REJECTED : ModerationStatus.APPROVED);
+    saveModerationLog(
+        postId,
+        isViolation ? ModerationStatus.REJECTED : ModerationStatus.APPROVED,
+        isViolation ? ViolationType.HATE_SPEECH : null);
   }
 
-  private void saveModerationLog(Integer postId, ModerationStatus status) {
+  private void saveModerationLog(
+      Integer postId, ModerationStatus status, ViolationType violationType) {
     ModerationLogEntity logEntity =
         ModerationLogEntity.builder()
             .postId(postId)
             .status(status)
+            .violationType(violationType)
             .reviewedAt(OffsetDateTime.now())
             .build();
 
     moderationLogRepository.save(logEntity);
   }
 
-  private PendingReviewPostDto toPendingDto(PostEntity post) {
+  private PostModerationDetailDto toDetailDto(PostEntity post) {
     String authorName =
         userRepository.findById(post.getAuthorId()).map(UserEntity::getFullName).orElse("Unknown");
 
-    ModerationScores aiScores = getLatestScores(post.getId());
+    List<ModerationLogDto> history =
+        moderationLogRepository.findByPostIdOrderByCreatedAtAsc(post.getId()).stream()
+            .map(this::toLogDto)
+            .toList();
 
-    return PendingReviewPostDto.builder()
+    return PostModerationDetailDto.builder()
         .postId(post.getId())
         .authorId(post.getAuthorId())
         .authorName(authorName)
         .content(post.getContent())
         .images(post.getImages())
         .currentStatus(post.getModerationStatus())
-        .aiScores(aiScores)
         .createdAt(post.getCreatedAt())
+        .updatedAt(post.getUpdatedAt())
+        .history(history)
         .build();
   }
 
-  private ModerationScores getLatestScores(Integer postId) {
-    List<ModerationLogEntity> logs = moderationLogRepository.findByPostId(postId);
-    if (logs.isEmpty()) {
-      return null;
-    }
+  private ModerationLogDto toLogDto(ModerationLogEntity log) {
+    return ModerationLogDto.builder()
+        .id(log.getId())
+        .postId(log.getPostId())
+        .status(log.getStatus())
+        .violationType(log.getViolationType())
+        .textToxicityScore(log.getTextToxicityScore())
+        .imageSafeScore(log.getImageSafeScore())
+        .ruleViolations(log.getRuleViolations())
+        .reviewedAt(log.getReviewedAt())
+        .createdAt(log.getCreatedAt())
+        .build();
+  }
 
-    ModerationLogEntity latest = logs.get(logs.size() - 1);
-    return ModerationScores.builder()
-        .toxicity(Optional.ofNullable(latest.getTextToxicityScore()).orElse(0.0))
-        .imageSafeScore(Optional.ofNullable(latest.getImageSafeScore()).orElse(0.0))
+  private BannedUserDto toBannedUserDto(Integer userId) {
+    UserEntity user =
+        userRepository
+            .findById(userId)
+            .orElseThrow(() -> new NotFoundException("User not found: " + userId));
+
+    List<UserBanEntity> bans = userBanRepository.findByUserIdOrderByCreatedAtDesc(userId);
+    List<Integer> triggeringPostIds =
+        bans.stream().map(UserBanEntity::getPostId).filter(Objects::nonNull).distinct().toList();
+
+    long remainingSeconds =
+        user.isBanned()
+            ? Duration.between(OffsetDateTime.now(), user.getBannedUntil()).getSeconds()
+            : 0;
+
+    return BannedUserDto.builder()
+        .userId(user.getId())
+        .email(user.getEmail())
+        .fullName(user.getFullName())
+        .currentlyBanned(user.isBanned())
+        .bannedUntil(user.getBannedUntil())
+        .remainingSeconds(remainingSeconds)
+        .banCount(bans.size())
+        .triggeringPostIds(triggeringPostIds)
         .build();
   }
 }

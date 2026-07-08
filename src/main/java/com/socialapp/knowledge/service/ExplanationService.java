@@ -18,6 +18,7 @@ import com.socialapp.knowledge.dto.SaveExplanationRequestDto;
 import com.socialapp.knowledge.entity.ExplanationEntity;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.entity.VaultNoteEntity;
+import com.socialapp.knowledge.entity.enums.ExplanationStyle;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.ExplanationRepository;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
@@ -154,6 +155,7 @@ public class ExplanationService {
 
     sb.append("=== READER PROFILE ===\n");
     sb.append("- Job title: ").append(profile.getJobTitle()).append("\n");
+    sb.append("- Primary role: ").append(profile.getPrimaryRole()).append("\n");
     sb.append("- Seniority: ").append(profile.getSeniorityLevel()).append("\n");
     sb.append("- Years of experience: ").append(profile.getYearsOfExperience()).append("\n");
     sb.append("- Known tech stack: ").append(profile.getKnownTechStack()).append("\n");
@@ -162,7 +164,13 @@ public class ExplanationService {
       profile.getWorkHistory().forEach(w -> sb.append(w.getDomain()).append(", "));
     }
     sb.append("\n");
-    sb.append("- Interested in: ").append(profile.getInterestedDomains()).append("\n\n");
+    sb.append("- Interested in: ").append(profile.getInterestedDomains()).append("\n");
+    sb.append("- Preferred explanation style: ")
+        .append(
+            profile.getExplanationStyle() != null
+                ? explanationStyleInstruction(profile.getExplanationStyle())
+                : "no preference stated, use your best judgement")
+        .append("\n\n");
 
     if (Objects.nonNull(vaultContext) && !vaultContext.isBlank()) {
       sb.append("=== READER'S EXISTING KNOWLEDGE (from their personal vault/notes) ===\n");
@@ -199,6 +207,15 @@ public class ExplanationService {
         """);
 
     return sb.toString();
+  }
+
+  private String explanationStyleInstruction(ExplanationStyle style) {
+    return switch (style) {
+      case CONCISE -> "CONCISE: keep the explanation short, bullet points over prose";
+      case DETAILED -> "DETAILED: thorough explanation, cover edge cases and nuance";
+      case CODE_HEAVY -> "CODE_HEAVY: prefer runnable code snippets over prose descriptions";
+      case ANALOGY_HEAVY -> "ANALOGY_HEAVY: lean on real-world analogies before technical detail";
+    };
   }
 
   private GeminiExplanationResult parseGeminiResponse(String response) {

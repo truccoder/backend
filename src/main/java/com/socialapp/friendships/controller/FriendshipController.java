@@ -1,10 +1,15 @@
 package com.socialapp.friendships.controller;
 
+import java.util.List;
+
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.friendships.dto.FriendListResponseDto;
+import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -12,6 +17,19 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class FriendshipController {
   private final FriendshipService friendshipService;
+
+  @GetMapping
+  public FriendListResponseDto getFriends(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = "20") @Positive int limit) {
+    return friendshipService.getFriends(SecurityUtils.getCurrentUserId(), cursor, limit);
+  }
+
+  @GetMapping("/suggestions")
+  public List<FriendSuggestionDto> getSuggestions(
+      @RequestParam(defaultValue = "10") @Positive int limit) {
+    return friendshipService.getSuggestions(SecurityUtils.getCurrentUserId(), limit);
+  }
 
   @PostMapping("/requests/{addresseeId}")
   public void sendFriendRequest(@PathVariable Integer addresseeId) {

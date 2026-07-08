@@ -1,5 +1,6 @@
 package com.socialapp.bookstore.service;
 
+import java.io.IOException;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -27,20 +28,17 @@ public class BookService {
   private final BookRepository bookRepository;
   private final BookPurchaseRepository purchaseRepository;
   private final BookStorageService bookStorageService;
+  private final BookPreviewGenerator bookPreviewGenerator;
 
   private static final List<String> ALLOWED_FORMATS = List.of("pdf", "epub");
 
-  @Transactional
-  public BookResponseDto createBook(
-      Integer authorId,
-      CreateBookRequestDto request,
-      MultipartFile bookFile,
-      MultipartFile coverFile) {
-    BookEntity book = buildAndSaveBook(authorId, request.getPostId(), request, bookFile, coverFile);
-    return toResponseDto(book, authorId);
-  }
+  private record GeneratedPreview(String fileKey, int totalUnits) {}
 
-  /** Creates a book already linked to a post, used when a book is attached inline to a post. */
+  /**
+   * Creates a book already linked to a post. This is the only way to create a book — always
+   * called from {@code PostService.createBookPost} with the post's freshly generated ID, so a
+   * book can never exist without a post to belong to.
+   */
   @Transactional
   public BookEntity createBookForPost(
       Integer authorId,
@@ -72,6 +70,18 @@ public class BookService {
       throw new ValidationException("Paid books must have preview pages configured");
     }
 
+    String previewFileKey = null;
+    Integer totalPages;
+
+    if (isFree) {
+      totalPages = countPages(format, bookFile);
+    } else {
+      GeneratedPreview preview =
+          generatePreview(authorId, format, bookFile, request.getPreviewPages());
+      previewFileKey = preview.fileKey();
+      totalPages = preview.totalUnits();
+    }
+
     BookEntity book =
         BookEntity.builder()
             .authorId(authorId)
@@ -79,9 +89,11 @@ public class BookService {
             .title(request.getTitle())
             .description(request.getDescription())
             .fileKey(fileKey)
+            .previewFileKey(previewFileKey)
             .coverImageUrl(coverUrl)
             .fileFormat(format)
             .fileSizeBytes(bookFile.getSize())
+            .totalPages(totalPages)
             .previewPages(isFree ? 0 : request.getPreviewPages())
             .price(isFree ? 0L : request.getPrice())
             .isFree(isFree)
@@ -89,6 +101,49 @@ public class BookService {
 
     bookRepository.save(book);
     return book;
+  }
+
+  private int countPages(FileFormat format, MultipartFile bookFile) {
+    try {
+      byte[] original = bookFile.getBytes();
+      return format == FileFormat.EPUB
+          ? bookPreviewGenerator.countEpubChapters(original)
+          : bookPreviewGenerator.countPdfPages(original);
+    } catch (IOException e) {
+      throw new RuntimeException("Failed to count book pages", e);
+    }
+  }
+
+  /**
+   * Generates and uploads a trimmed preview containing only the first {@code previewPages}
+   * pages/chapters, so previewing a paid book can never expose more than that regardless of what
+   * URL the client has.
+   */
+  private GeneratedPreview generatePreview(
+      Integer authorId, FileFormat format, MultipartFile bookFile, int previewPages) {
+    try {
+      byte[] original = bookFile.getBytes();
+      BookPreviewResult result =
+          format == FileFormat.EPUB
+              ? bookPreviewGenerator.generateEpubPreview(original, previewPages)
+              : bookPreviewGenerator.generatePdfPreview(original, previewPages);
+
+      if (previewPages >= result.totalUnits()) {
+        throw new ValidationException(
+            "Preview pages/chapters ("
+                + previewPages
+                + ") must be less than the book's total ("
+                + result.totalUnits()
+                + ")");
+      }
+
+      String extension = format == FileFormat.EPUB ? "epub" : "pdf";
+      String previewFileKey =
+          bookStorageService.uploadPreview(authorId, result.previewBytes(), extension);
+      return new GeneratedPreview(previewFileKey, result.totalUnits());
+    } catch (IOException e) {
+      throw new RuntimeException("Failed to generate book preview", e);
+    }
   }
 
   public BookResponseDto getBook(Integer bookId, Integer requesterId) {
@@ -121,7 +176,11 @@ public class BookService {
 
   public String getPreviewUrl(Integer bookId) {
     BookEntity book = findBookOrThrow(bookId);
-    return bookStorageService.getPreviewUrl(book.getFileKey());
+    return bookStorageService.getPreviewUrl(previewKeyOrFallback(book));
+  }
+
+  private String previewKeyOrFallback(BookEntity book) {
+    return book.getPreviewFileKey() != null ? book.getPreviewFileKey() : book.getFileKey();
   }
 
   @Transactional
@@ -173,7 +232,7 @@ public class BookService {
     if (book.getIsFree() || purchased) {
       downloadUrl = bookStorageService.getDownloadUrl(book.getFileKey());
     } else {
-      previewUrl = bookStorageService.getPreviewUrl(book.getFileKey());
+      previewUrl = bookStorageService.getPreviewUrl(previewKeyOrFallback(book));
     }
 
     return BookResponseDto.builder()

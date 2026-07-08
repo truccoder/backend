@@ -1,18 +1,26 @@
-opensearch:
-  host: localhost
-  port: 9200
-  scheme: http
-
+# minio.url is baked directly into t_users.profile_picture_url / t_books.cover_image_url at
+# upload time (ProfileService/BookStorageService) — must be the publicly reachable address
+# *before* any uploads happen in an environment, since existing DB rows won't be rewritten
+# retroactively if this changes later.
 minio:
-  url: http://localhost:9000
-  access-key: minio_admin
-  secret-key: minio_admin_password
+  url: ${MINIO_URL:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minio_admin}
+  secret-key: ${MINIO_SECRET_KEY:minio_admin_password}
 
 spring:
+  servlet:
+    multipart:
+      # Spring Boot's own defaults (1MB/file, 10MB/request) were silently rejecting anything
+      # over 1MB with a 413 before ProfileService's own 5MB check ever ran, even though
+      # ProfileService.MAX_PROFILE_PICTURE_SIZE documents a 5MB limit. Sized with headroom for
+      # profile pictures and book cover/preview uploads.
+      max-file-size: 20MB
+      max-request-size: 25MB
+
   mail:
-    host: ${MAIL_HOST:smtp.gmail.com}
-    port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:thanhtre3651@gmail.com}
+    host: smtp.gmail.com
+    port: 587
+    username: thanhtre3651@gmail.com
     password: ${GOOGLE_APP_PASSWORD:}
     properties:
       mail:
@@ -60,18 +68,16 @@ cache:
 
 moderation:
   enabled: true
-  perspective-api:
-    key: ${PERSPECTIVE_API_KEY:}
+  text-moderation:
     toxicity-threshold: 0.7
     review-threshold: 0.5
   cloud-vision:
-    credentials-path: ${GOOGLE_APPLICATION_CREDENTIALS:}
+    enabled: false
+    api-key: ${GOOGLE_CLOUD_VISION_API_KEY:}
     reject-likelihood: VERY_LIKELY
     review-likelihood: POSSIBLE
   rules:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
-    max-urls-per-post: 3
-    duplicate-window-seconds: 60
 
 jwt:
   secret: ${JWT_SECRET:defaultSecretKeyThatShouldBeChangedInProduction12345}
@@ -79,13 +85,16 @@ jwt:
   refresh-token-expiration-ms: 604800000
 
 auth:
-  reset-password-url: ${RESET_PASSWORD_URL:http://localhost:3000/forgot-password?token=}
+  reset-password-url: ${RESET_PASSWORD_URL:http://localhost:3000/reset-password?token=}
   verify-email-url: ${VERIFY_EMAIL_URL:http://localhost:3000/verify-email?token=}
   magic-link-url: ${MAGIC_LINK_URL:http://localhost:3000/magic-login?token=}
 
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
 gemini:
   api-key: ${GEMINI_API_KEY:}
-  model: gemini-3.5-flash
+  model: gemini-2.5-flash-lite
   base-url: https://generativelanguage.googleapis.com/v1beta
   max-output-tokens: 8192
   temperature: 0.7
@@ -107,9 +116,13 @@ google:
     client-secret: ${GOOGLE_CALENDAR_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_CALENDAR_REDIRECT_URI:http://localhost:8080/v1/api/events/google/callback}
 
-payos:
-  client-id: ${PAYOS_CLIENT_ID:}
-  api-key: ${PAYOS_API_KEY:}
-  checksum-key: ${PAYOS_CHECKSUM_KEY:}
-  return-url: ${PAYOS_RETURN_URL:http://localhost:3000/payment/success}
-  cancel-url: ${PAYOS_CANCEL_URL:http://localhost:3000/payment/cancel}
+# MoMo AIO v2 sandbox. partner-code/access-key/secret-key default to MoMo's own publicly
+# published test credentials (github.com/momo-wallet/payment) so this works out of the box
+# against test-payment.momo.vn; override once you have your own sandbox merchant.
+momo:
+  partner-code: ${MOMO_PARTNER_CODE:MOMO}
+  access-key: ${MOMO_ACCESS_KEY:F8BBA842ECF85}
+  secret-key: ${MOMO_SECRET_KEY:K951B6PE1waDMi640xX08PD3vg6EkVlz}
+  api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
+  redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
+  ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}

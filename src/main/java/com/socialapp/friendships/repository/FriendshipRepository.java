@@ -35,4 +35,22 @@ public interface FriendshipRepository extends Neo4jRepository<UserNode, Long> {
       RETURN friend.userId
       """)
   List<Integer> findFriendIds(@Param("userId") Integer userId);
+
+  @Query(
+      """
+                    MATCH (u:User {userId: $userId})-[:FRIENDS_WITH]-(friend:User)
+                    WHERE $cursor IS NULL OR friend.userId > $cursor
+                    RETURN friend.userId AS userId
+                    ORDER BY friend.userId ASC
+                    LIMIT $limit
+                    """)
+  List<Integer> findFriendIdsAfterCursor(
+      @Param("userId") Integer userId, @Param("cursor") Integer cursor, @Param("limit") int limit);
+
+  @Query(
+      """
+                    MATCH (u:User {userId: $userId})-[:FRIENDS_WITH]-(friend:User)
+                    RETURN COUNT(friend)
+                    """)
+  long countFriends(@Param("userId") Integer userId);
 }
