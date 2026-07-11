@@ -2,11 +2,14 @@ package com.socialapp.notifications.services;
 
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
 
 import com.socialapp.notifications.config.MailProperties;
 import com.socialapp.security.config.AuthProperties;
 
+import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +28,7 @@ public class MailService {
       MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
       helper.setFrom(properties.getFromEmail(), properties.getFromName());
-      helper.setTo(toEmail);
+      helper.setTo(new InternetAddress(toEmail, toName, "UTF-8"));
       helper.setSubject(subject);
       helper.setText(htmlBody, true);
 
@@ -37,21 +40,25 @@ public class MailService {
     }
   }
 
+  @Async
   public void sendNotificationEmail(String toEmail, String toName, String title, String body) {
-    String html = buildNotificationHtml(title, body);
+    String html = buildNotificationHtml(HtmlUtils.htmlEscape(title), HtmlUtils.htmlEscape(body));
     sendEmail(toEmail, toName, title, html);
   }
 
+  @Async
   public void sendPasswordResetEmail(String toEmail, String toName, String token) {
     String html = buildResetPasswordEmail(token);
     sendEmail(toEmail, toName, "Reset your SocialApp password", html);
   }
 
+  @Async
   public void sendVerificationEmail(String toEmail, String toName, String token) {
     String html = buildVerificationEmail(token);
     sendEmail(toEmail, toName, "Verify your SocialApp email", html);
   }
 
+  @Async
   public void sendMagicLinkEmail(String toEmail, String toName, String token) {
     String html = buildMagicLinkEmail(token);
     sendEmail(toEmail, toName, "Your SocialApp login link", html);
