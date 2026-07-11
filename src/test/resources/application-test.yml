@@ -1,0 +1,43 @@
+# Test profile overrides. Datasource/Redis/Neo4j/MinIO connection properties are injected at
+# runtime by AbstractIntegrationTest via @DynamicPropertySource once the Testcontainers are
+# started, so they are intentionally not hardcoded here.
+
+scheduling:
+  enabled: false
+
+spring:
+  mail:
+    host: localhost
+    port: 3025
+    username: test@example.com
+    password: test
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+  flyway:
+    enabled: true
+    validate-on-migrate: false
+
+moderation:
+  enabled: false
+  cloud-vision:
+    enabled: false
+
+onesignal:
+  app-id: test-app-id
+  rest-api-key: test-rest-api-key
+
+gemini:
+  api-key: test-gemini-api-key
+
+jwt:
+  secret: testSecretKeyForIntegrationTestsOnlyDoNotUseInProduction123456
