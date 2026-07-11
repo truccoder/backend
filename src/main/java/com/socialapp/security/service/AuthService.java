@@ -12,7 +12,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.services.MailService;
-import com.socialapp.security.config.AuthProperties;
 import com.socialapp.security.dto.*;
 import com.socialapp.security.entity.EmailVerificationToken;
 import com.socialapp.security.entity.MagicLinkToken;
@@ -49,7 +48,6 @@ public class AuthService {
   private final EmailVerificationTokenRepository emailVerificationTokenRepository;
   private final MagicLinkTokenRepository magicLinkTokenRepository;
   private final MailService mailService;
-  private final AuthProperties authProperties;
   private final ProfileService profileService;
 
   @Transactional
