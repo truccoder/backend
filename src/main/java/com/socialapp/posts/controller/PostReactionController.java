@@ -6,6 +6,7 @@ import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.service.PostReactionService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -16,7 +17,7 @@ public class PostReactionController {
 
   @PutMapping
   public void upsertReaction(
-      @PathVariable Integer postId, @RequestBody UpsertPostReactionRequestDto request) {
+      @PathVariable Integer postId, @Valid @RequestBody UpsertPostReactionRequestDto request) {
     postReactionService.upsertReaction(SecurityUtils.getCurrentUserId(), postId, request);
   }
 

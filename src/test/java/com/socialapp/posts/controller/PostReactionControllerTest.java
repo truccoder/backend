@@ -1,0 +1,257 @@
+package com.socialapp.posts.controller;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.posts.service.PostReactionService;
+import com.socialapp.security.config.CustomAccessDeniedHandler;
+import com.socialapp.security.config.CustomAuthenticationEntryPoint;
+import com.socialapp.security.config.JwtAuthenticationFilter;
+import com.socialapp.security.config.JwtProvider;
+import com.socialapp.security.config.SecurityConfig;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.entity.UserRole;
+import com.socialapp.security.repository.UserRepository;
+
+/**
+ * System/API integration tests for {@link PostReactionController}, per ISTQB CTFL v4.0.1 Section
+ * 2.2.2, using {@code @WebMvcTest} + {@code MockMvc}. {@link PostReactionService} is mocked.
+ *
+ * <p>{@code upsertReaction}'s {@code @RequestBody} carries {@code @Valid}, which activates
+ * {@link com.socialapp.posts.dto.UpsertPostReactionRequestDto#reactionType}'s {@code @NotNull}:
+ * a missing {@code reactionType} is rejected with 422, the same {@code
+ * MethodArgumentNotValidException} path used by {@code AuthController}/{@code
+ * ProfileController}'s {@code @RequestBody @Valid} DTOs. (Previously the controller had no
+ * {@code @Valid} at all, so this constraint was dead — fixed after this gap was found via
+ * testing.)
+ */
+@WebMvcTest(PostReactionController.class)
+@Import({
+  SecurityConfig.class,
+  CustomAuthenticationEntryPoint.class,
+  CustomAccessDeniedHandler.class,
+  JwtAuthenticationFilter.class
+})
+class PostReactionControllerTest {
+
+  @Autowired private MockMvc mockMvc;
+
+  @MockBean private PostReactionService postReactionService;
+  @MockBean private JwtProvider jwtProvider;
+  @MockBean private UserRepository userRepository;
+
+  private static final String VALID_TOKEN = "a-valid-jwt-token";
+
+  private UserEntity currentUser;
+
+  @BeforeEach
+  void setUpDefaultUser() {
+    currentUser = new UserEntity();
+    currentUser.setId(1);
+    currentUser.setEmail("reactor@example.com");
+    currentUser.setUsername("reactor");
+    currentUser.setFullName("Reactor One");
+    currentUser.setRole(UserRole.USER);
+    currentUser.setEmailVerified(true);
+
+    when(jwtProvider.isTokenValid(VALID_TOKEN)).thenReturn(true);
+    when(jwtProvider.extractEmail(VALID_TOKEN)).thenReturn(currentUser.getEmail());
+    when(userRepository.findByEmailIgnoreCase(currentUser.getEmail()))
+        .thenReturn(Optional.of(currentUser));
+  }
+
+  private static MockHttpServletRequestBuilder authed(MockHttpServletRequestBuilder builder) {
+    return builder.header("Authorization", "Bearer " + VALID_TOKEN);
+  }
+
+  private static String reactionsUrl(Integer postId) {
+    return "/v1/api/posts/" + postId + "/reactions";
+  }
+
+  // =====================================================================
+  // PUT /v1/api/posts/{postId}/reactions
+  // =====================================================================
+
+  @Nested
+  @DisplayName("PUT /v1/api/posts/{postId}/reactions")
+  class UpsertReactionTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenReactionTypeIsValid_happyPath")
+    void shouldReturn200_whenReactionTypeIsValid_happyPath() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "reactionType": "LIKE" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(reactionsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isOk());
+
+      verify(postReactionService).upsertReaction(eq(currentUser.getId()), eq(1), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenReactionTypeIsMissing")
+    void shouldReturn422_whenReactionTypeIsMissing() throws Exception {
+      // Given — @NotNull on reactionType is now enforced via @Valid on the controller
+      String requestJson = "{}";
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(reactionsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPostDoesNotExist")
+    void shouldReturn404_whenPostDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Post not found with ID: 999"))
+          .when(postReactionService)
+          .upsertReaction(anyInt(), eq(999), any());
+      String requestJson =
+          """
+          { "reactionType": "LIKE" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(reactionsUrl(999)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.message").value("Post not found with ID: 999"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenUserIsBannedFromReacting")
+    void shouldReturn403_whenUserIsBannedFromReacting() throws Exception {
+      // Given
+      doThrow(new UserBannedException(OffsetDateTime.parse("2026-12-31T00:00:00Z")))
+          .when(postReactionService)
+          .upsertReaction(anyInt(), anyInt(), any());
+      String requestJson =
+          """
+          { "reactionType": "LOVE" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(reactionsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.error").value("Account Restricted"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenPostIdPathVariableIsNotANumber")
+    void shouldReturn400_whenPostIdPathVariableIsNotANumber() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "reactionType": "LIKE" }
+          """;
+
+      // When / Then — EP: postId must be an Integer
+      mockMvc
+          .perform(
+              authed(put("/v1/api/posts/not-a-number/reactions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "reactionType": "LIKE" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(reactionsUrl(1)).contentType(MediaType.APPLICATION_JSON).content(requestJson))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // DELETE /v1/api/posts/{postId}/reactions
+  // =====================================================================
+
+  @Nested
+  @DisplayName("DELETE /v1/api/posts/{postId}/reactions")
+  class RemoveReactionTests {
+
+    @Test
+    @DisplayName("shouldReturn200_happyPath")
+    void shouldReturn200_happyPath() throws Exception {
+      // When / Then
+      mockMvc.perform(authed(delete(reactionsUrl(1)))).andExpect(status().isOk());
+
+      verify(postReactionService).removeReaction(currentUser.getId(), 1);
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenReactionDoesNotExist")
+    void shouldReturn404_whenReactionDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Reaction not found for this post"))
+          .when(postReactionService)
+          .removeReaction(anyInt(), anyInt());
+
+      // When / Then
+      mockMvc
+          .perform(authed(delete(reactionsUrl(1))))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.message").value("Reaction not found for this post"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc.perform(delete(reactionsUrl(1))).andExpect(status().isUnauthorized());
+    }
+  }
+}
