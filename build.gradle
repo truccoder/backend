@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'jacoco'
     id 'org.springframework.boot' version '3.2.5'
     id 'io.spring.dependency-management' version '1.1.4'
     id "com.diffplug.spotless" version '6.25.0'
@@ -7,6 +8,10 @@ plugins {
 
 group = 'com.socialapp'
 version = '0.0.1-SNAPSHOT'
+
+// Spring Boot 3.2.5 manages an older Testcontainers release by default; override it so the
+// version pulled in by the testcontainers-bom import below (dependencies block) actually wins.
+ext['testcontainers.version'] = '1.21.3'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -68,6 +73,39 @@ dependencies {
     // Lombok
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
+
+    // Test
+    testImplementation('org.springframework.boot:spring-boot-starter-test') {
+        exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
+    }
+
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.mockito:mockito-core'
+    testImplementation 'org.mockito:mockito-junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Testcontainers
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.21.3')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:neo4j'
+    testImplementation 'org.testcontainers:minio'
+
+    // No official Testcontainers module for Redis; GenericContainer + redis image is used instead.
+    testImplementation 'org.testcontainers:testcontainers'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
 }
 
 spotless {

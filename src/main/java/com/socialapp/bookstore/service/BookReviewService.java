@@ -68,7 +68,7 @@ public class BookReviewService {
     return userRepository
         .findById(userId)
         .map(UserEntity::getFullName)
-        .filter(name -> name != null && !name.isBlank())
+        .filter(name -> !name.isBlank())
         .orElse("Someone");
   }
 
