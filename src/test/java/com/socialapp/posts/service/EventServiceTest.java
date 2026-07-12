@@ -1,0 +1,358 @@
+package com.socialapp.posts.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
+import com.socialapp.posts.entity.EventDetails;
+import com.socialapp.posts.entity.EventRsvpEntity;
+import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.entity.enums.RsvpStatus;
+import com.socialapp.posts.repository.EventRsvpRepository;
+import com.socialapp.posts.repository.PostRepository;
+
+/**
+ * Component (unit) tests for {@link EventService}, per ISTQB CTFL v4.0.1 Section 2.2.1
+ * (component testing) — every collaborator is mocked with Mockito so the service is tested in
+ * isolation, without a Spring context. BDD Given/When/Then per Section 2.1.3.
+ */
+@ExtendWith(MockitoExtension.class)
+class EventServiceTest {
+
+  private static final Integer USER_ID = 1;
+  private static final Integer POST_ID = 100;
+
+  @Mock private PostRepository postRepository;
+  @Mock private EventRsvpRepository rsvpRepository;
+  @Mock private GoogleCalendarService googleCalendarService;
+
+  @InjectMocks private EventService eventService;
+
+  @Captor private ArgumentCaptor<EventRsvpEntity> rsvpCaptor;
+
+  private static PostEntity sampleEventPost(Integer maxAttendees) {
+    EventDetails details = new EventDetails();
+    details.setEventTitle("Tech Meetup");
+    details.setEventDescription("A meetup");
+    details.setStartTime(OffsetDateTime.parse("2026-08-01T10:00:00Z"));
+    details.setEndTime(OffsetDateTime.parse("2026-08-01T12:00:00Z"));
+    details.setLocation("Hanoi");
+    details.setMaxAttendees(maxAttendees);
+
+    PostEntity post = new PostEntity();
+    post.setId(POST_ID);
+    post.setPostType(PostType.EVENT);
+    post.setEventDetails(details);
+    return post;
+  }
+
+  private static PostEntity sampleRegularPost() {
+    PostEntity post = new PostEntity();
+    post.setId(POST_ID);
+    post.setPostType(PostType.REGULAR);
+    return post;
+  }
+
+  // =====================================================================
+  // rsvp
+  // =====================================================================
+
+  @Nested
+  @DisplayName("rsvp")
+  class RsvpTests {
+
+    @Test
+    @DisplayName("should create a new RSVP when the user has not RSVP'd yet")
+    void shouldCreateNewRsvp_whenUserHasNotRsvpdYet() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING);
+
+      // Then
+      verify(rsvpRepository).save(rsvpCaptor.capture());
+      assertThat(rsvpCaptor.getValue().getPostId()).isEqualTo(POST_ID);
+      assertThat(rsvpCaptor.getValue().getUserId()).isEqualTo(USER_ID);
+      assertThat(rsvpCaptor.getValue().getStatus()).isEqualTo(RsvpStatus.GOING);
+    }
+
+    @Test
+    @DisplayName("should update the existing RSVP's status when the user already RSVP'd")
+    void shouldUpdateExistingRsvp_whenUserAlreadyRsvpd() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      EventRsvpEntity existing =
+          EventRsvpEntity.builder()
+              .postId(POST_ID)
+              .userId(USER_ID)
+              .status(RsvpStatus.INTERESTED)
+              .build();
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID))
+          .thenReturn(Optional.of(existing));
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.NOT_GOING);
+
+      // Then
+      verify(rsvpRepository).save(rsvpCaptor.capture());
+      assertThat(rsvpCaptor.getValue().getStatus()).isEqualTo(RsvpStatus.NOT_GOING);
+    }
+
+    @Test
+    @DisplayName("should allow GOING when maxAttendees is set but the event is not yet full")
+    void shouldAllowGoing_whenEventHasCapacityLeft() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
+      when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(9);
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING);
+
+      // Then
+      verify(rsvpRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("should throw ValidationException when GOING and the event is already full")
+    void shouldThrowValidationException_whenEventIsFull() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
+      when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(10);
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Event is full");
+      verify(rsvpRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should allow NOT_GOING even when the event is already at max capacity")
+    void shouldAllowNotGoing_whenEventIsFull() {
+      // Given — the capacity check only blocks GOING, not other statuses
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
+      when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(10);
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.NOT_GOING);
+
+      // Then
+      verify(rsvpRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("should throw NotFoundException when the post does not exist")
+    void shouldThrowNotFoundException_whenPostDoesNotExist() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should throw ValidationException when the post is not an event")
+    void shouldThrowValidationException_whenPostIsNotAnEvent() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleRegularPost()));
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("not an event");
+    }
+  }
+
+  // =====================================================================
+  // getAttendees / getGoingCount
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getAttendees / getGoingCount")
+  class QueryTests {
+
+    @Test
+    @DisplayName("should return every RSVP for the event")
+    void shouldReturnAttendees_whenPostIsAnEvent() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      EventRsvpEntity rsvp =
+          EventRsvpEntity.builder()
+              .postId(POST_ID)
+              .userId(USER_ID)
+              .status(RsvpStatus.GOING)
+              .build();
+      when(rsvpRepository.findByPostId(POST_ID)).thenReturn(List.of(rsvp));
+
+      // When
+      List<EventRsvpEntity> attendees = eventService.getAttendees(POST_ID);
+
+      // Then
+      assertThat(attendees).containsExactly(rsvp);
+    }
+
+    @Test
+    @DisplayName("should throw NotFoundException when the post does not exist")
+    void shouldThrowNotFoundException_whenPostDoesNotExist() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.getAttendees(POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should return the count of GOING RSVPs")
+    void shouldReturnGoingCount() {
+      // Given
+      when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(5);
+
+      // When
+      int count = eventService.getGoingCount(POST_ID);
+
+      // Then
+      assertThat(count).isEqualTo(5);
+    }
+  }
+
+  // =====================================================================
+  // addToGoogleCalendar
+  // =====================================================================
+
+  @Nested
+  @DisplayName("addToGoogleCalendar")
+  class AddToGoogleCalendarTests {
+
+    @Test
+    @DisplayName("should delegate to GoogleCalendarService with the event's details")
+    void shouldDelegateToGoogleCalendarService() {
+      // Given
+      PostEntity post = sampleEventPost(null);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      eventService.addToGoogleCalendar(USER_ID, POST_ID);
+
+      // Then
+      verify(googleCalendarService).addEventToCalendar(USER_ID, post.getEventDetails());
+    }
+
+    @Test
+    @DisplayName("should throw NotFoundException when the post does not exist")
+    void shouldThrowNotFoundException_whenPostDoesNotExist() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.addToGoogleCalendar(USER_ID, POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+  }
+
+  // =====================================================================
+  // generateIcsFile
+  // =====================================================================
+
+  @Nested
+  @DisplayName("generateIcsFile")
+  class GenerateIcsFileTests {
+
+    @Test
+    @DisplayName("should generate a well-formed .ics file with the event's details")
+    void shouldGenerateIcsFile_withEventDetails() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+
+      // When
+      String ics = eventService.generateIcsFile(POST_ID);
+
+      // Then
+      assertThat(ics)
+          .startsWith("BEGIN:VCALENDAR")
+          .contains("DTSTART:20260801T100000Z")
+          .contains("DTEND:20260801T120000Z")
+          .contains("SUMMARY:Tech Meetup")
+          .contains("LOCATION:Hanoi")
+          .endsWith("END:VCALENDAR\r\n");
+    }
+
+    @Test
+    @DisplayName("should escape commas, semicolons, backslashes, and newlines in text fields")
+    void shouldEscapeSpecialCharacters_inTextFields() {
+      // Given
+      PostEntity post = sampleEventPost(null);
+      post.getEventDetails().setEventTitle("A, B; C\\D\nE");
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      String ics = eventService.generateIcsFile(POST_ID);
+
+      // Then
+      assertThat(ics).contains("SUMMARY:A\\, B\\; C\\\\D\\nE");
+    }
+
+    @Test
+    @DisplayName("should render empty description/location when they are null")
+    void shouldRenderEmptyFields_whenDescriptionAndLocationAreNull() {
+      // Given
+      PostEntity post = sampleEventPost(null);
+      post.getEventDetails().setEventDescription(null);
+      post.getEventDetails().setLocation(null);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      String ics = eventService.generateIcsFile(POST_ID);
+
+      // Then
+      assertThat(ics).contains("DESCRIPTION:\r\n").contains("LOCATION:\r\n");
+    }
+
+    @Test
+    @DisplayName("should throw NotFoundException when the post does not exist")
+    void shouldThrowNotFoundException_whenPostDoesNotExist() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.generateIcsFile(POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should throw ValidationException when the post is not an event")
+    void shouldThrowValidationException_whenPostIsNotAnEvent() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleRegularPost()));
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.generateIcsFile(POST_ID))
+          .isInstanceOf(ValidationException.class);
+    }
+  }
+}
