@@ -13,6 +13,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -198,6 +199,26 @@ public class GlobalExceptionHandler {
     writeLog(ex, request);
 
     String message = format("Invalid value '%s' for parameter '%s'", ex.getValue(), ex.getName());
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message(message)
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Covers a required @RequestParam that's omitted entirely (e.g. GET /v1/api/search with no
+  // "q" at all) — distinct from a param that's present but fails a constraint like @NotBlank,
+  // which HandlerMethodValidationException/ConstraintViolationException handle instead.
+  // Previously fell through to the generic Exception handler and was incorrectly reported as 500.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(MissingServletRequestParameterException.class)
+  public ErrorResponseDto handle(
+      MissingServletRequestParameterException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    String message = format("Missing required parameter '%s'", ex.getParameterName());
 
     return ErrorResponseDto.builder()
         .code(BAD_REQUEST.value())
