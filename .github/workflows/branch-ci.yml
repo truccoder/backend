@@ -25,9 +25,14 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-
           echo "Branch: $BRANCH_NAME"
-
+          
+          # Bỏ qua việc kiểm tra nếu đang ở nhánh main
+          if [[ "$BRANCH_NAME" == "main" ]]; then
+            echo "Skipping branch name validation for main branch."
+            exit 0
+          fi
+          
           if [[ ! "$BRANCH_NAME" =~ ^task\/[A-Za-z0-9]+.*$ ]]; then
             echo "❌ Invalid branch name format."
             exit 1
