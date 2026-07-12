@@ -12,6 +12,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.cloud.minio.MinIOConfig;
 import com.socialapp.cloud.minio.MinIOService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
@@ -80,7 +81,7 @@ public class ProfileService {
       minIOService.ensurePublicReadPolicy(PROFILE_PICTURES_BUCKET);
     } catch (Exception e) {
       log.error("Failed to upload profile picture for user {}", userId, e);
-      throw new RuntimeException("Failed to upload profile picture", e);
+      throw new StorageException("Failed to upload profile picture", e);
     }
 
     String publicUrl = minIOConfig.getUrl() + "/" + PROFILE_PICTURES_BUCKET + "/" + objectKey;
