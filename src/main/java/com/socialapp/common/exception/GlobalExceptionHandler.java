@@ -7,6 +7,8 @@ import static org.springframework.http.HttpStatus.*;
 import java.util.Objects;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
@@ -137,6 +140,26 @@ public class GlobalExceptionHandler {
         .message(ex.getMessage())
         .path(request.getRequestURI())
         .build();
+  }
+
+  // No @ResponseStatus here: ResponseStatusException carries its own status/reason dynamically,
+  // so it must be honored via ResponseEntity instead of a fixed annotation value.
+  @ExceptionHandler(ResponseStatusException.class)
+  public ResponseEntity<ErrorResponseDto> handle(
+      ResponseStatusException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+    String message = ex.getReason() != null ? ex.getReason() : status.getReasonPhrase();
+
+    return ResponseEntity.status(status)
+        .body(
+            ErrorResponseDto.builder()
+                .code(status.value())
+                .error(status.getReasonPhrase())
+                .message(message)
+                .path(request.getRequestURI())
+                .build());
   }
 
   @ResponseStatus(UNAUTHORIZED)
