@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.cloud.minio.MinIOService;
+import com.socialapp.common.exception.StorageException;
 
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
@@ -106,8 +107,8 @@ class BookStorageServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap any failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenUploadFails() throws Exception {
+    @DisplayName("should wrap any failure as a StorageException")
+    void shouldThrowStorageException_whenUploadFails() throws Exception {
       // Given
       MultipartFile file = mockBookFile("novel.pdf");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
@@ -115,7 +116,7 @@ class BookStorageServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to upload book file")
           .hasCauseInstanceOf(IOException.class);
     }
@@ -157,8 +158,8 @@ class BookStorageServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap any failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenUploadFails() throws Exception {
+    @DisplayName("should wrap any failure as a StorageException")
+    void shouldThrowStorageException_whenUploadFails() throws Exception {
       // Given
       byte[] bytes = {1, 2, 3};
       when(minIOService.uploadBytes(anyString(), anyString(), any(), anyString()))
@@ -166,7 +167,7 @@ class BookStorageServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadPreview(AUTHOR_ID, bytes, "pdf"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to upload book preview file")
           .hasCauseInstanceOf(IOException.class);
     }
@@ -197,8 +198,8 @@ class BookStorageServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap an upload failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenUploadFails() throws Exception {
+    @DisplayName("should wrap an upload failure as a StorageException")
+    void shouldThrowStorageException_whenUploadFails() throws Exception {
       // Given
       MultipartFile file = mockCoverFile("cover.jpg");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
@@ -206,14 +207,14 @@ class BookStorageServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to upload cover image")
           .hasCauseInstanceOf(IOException.class);
     }
 
     @Test
-    @DisplayName("should wrap a presigned URL generation failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenPresignedUrlGenerationFails() throws Exception {
+    @DisplayName("should wrap a presigned URL generation failure as a StorageException")
+    void shouldThrowStorageException_whenPresignedUrlGenerationFails() throws Exception {
       // Given
       MultipartFile file = mockCoverFile("cover.jpg");
       when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
@@ -221,10 +222,10 @@ class BookStorageServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to upload cover image")
           .cause()
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to generate download URL");
     }
   }
@@ -266,15 +267,15 @@ class BookStorageServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap a presigned URL generation failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenPresignedUrlGenerationFails() throws Exception {
+    @DisplayName("should wrap a presigned URL generation failure as a StorageException")
+    void shouldThrowStorageException_whenPresignedUrlGenerationFails() throws Exception {
       // Given
       when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new IOException("network fail"));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.getDownloadUrl("file-key"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to generate download URL")
           .hasCauseInstanceOf(IOException.class);
     }
