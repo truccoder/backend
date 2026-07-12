@@ -355,6 +355,22 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Downstream storage failure (MinIO timeout, connection refused, server error, etc.) — the
+  // client's request was fine, the storage backend is the one having trouble, so 503 (not 500)
+  // signals this is transient/retryable rather than a bug in our own request handling.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(StorageException.class)
+  public ErrorResponseDto handle(StorageException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(AccessDeniedException.class)
   public ErrorResponseDto handle(AccessDeniedException ex, HttpServletRequest request) {
