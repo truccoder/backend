@@ -27,6 +27,10 @@ public class MinIOService {
   public String uploadFile(String bucketName, String objectName, MultipartFile file)
       throws Exception {
 
+    if (file == null) {
+      throw new IllegalArgumentException("file must not be null");
+    }
+
     ensureBucketExists(bucketName);
 
     try (InputStream inputStream = file.getInputStream()) {
@@ -43,6 +47,10 @@ public class MinIOService {
 
   public String uploadBytes(String bucketName, String objectName, byte[] data, String contentType)
       throws Exception {
+
+    if (data == null) {
+      throw new IllegalArgumentException("data must not be null");
+    }
 
     ensureBucketExists(bucketName);
 
