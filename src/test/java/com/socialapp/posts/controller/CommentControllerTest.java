@@ -1,0 +1,353 @@
+package com.socialapp.posts.controller;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.posts.service.CommentService;
+import com.socialapp.security.config.CustomAccessDeniedHandler;
+import com.socialapp.security.config.CustomAuthenticationEntryPoint;
+import com.socialapp.security.config.JwtAuthenticationFilter;
+import com.socialapp.security.config.JwtProvider;
+import com.socialapp.security.config.SecurityConfig;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.entity.UserRole;
+import com.socialapp.security.repository.UserRepository;
+
+/**
+ * System/API integration tests for {@link CommentController}, per ISTQB CTFL v4.0.1 Section
+ * 2.2.2, using {@code @WebMvcTest} + {@code MockMvc}. {@link CommentService} is mocked.
+ *
+ * <p>Same as {@code PostController}: no {@code @Valid}, and neither {@link
+ * com.socialapp.posts.dto.CreateCommentRequestDto} nor {@link
+ * com.socialapp.posts.dto.UpdateCommentRequestDto} carry any constraint annotations, so there is
+ * no 422 Validation section here — content blankness, ban status, and ownership are all
+ * enforced in {@code CommentService} and surface only via {@link ExceptionMappingTests} against
+ * the mocked service.
+ */
+@WebMvcTest(CommentController.class)
+@Import({
+  SecurityConfig.class,
+  CustomAuthenticationEntryPoint.class,
+  CustomAccessDeniedHandler.class,
+  JwtAuthenticationFilter.class
+})
+class CommentControllerTest {
+
+  @Autowired private MockMvc mockMvc;
+
+  @MockBean private CommentService commentService;
+  @MockBean private JwtProvider jwtProvider;
+  @MockBean private UserRepository userRepository;
+
+  private static final String VALID_TOKEN = "a-valid-jwt-token";
+
+  private UserEntity currentUser;
+
+  @BeforeEach
+  void setUpDefaultUser() {
+    currentUser = new UserEntity();
+    currentUser.setId(1);
+    currentUser.setEmail("commenter@example.com");
+    currentUser.setUsername("commenter");
+    currentUser.setFullName("Commenter One");
+    currentUser.setRole(UserRole.USER);
+    currentUser.setEmailVerified(true);
+
+    when(jwtProvider.isTokenValid(VALID_TOKEN)).thenReturn(true);
+    when(jwtProvider.extractEmail(VALID_TOKEN)).thenReturn(currentUser.getEmail());
+    when(userRepository.findByEmailIgnoreCase(currentUser.getEmail()))
+        .thenReturn(Optional.of(currentUser));
+  }
+
+  private static MockHttpServletRequestBuilder authed(MockHttpServletRequestBuilder builder) {
+    return builder.header("Authorization", "Bearer " + VALID_TOKEN);
+  }
+
+  private static String commentsUrl(Integer postId) {
+    return "/v1/api/posts/" + postId + "/comments";
+  }
+
+  // =====================================================================
+  // POST /v1/api/posts/{postId}/comments
+  // =====================================================================
+
+  @Nested
+  @DisplayName("POST /v1/api/posts/{postId}/comments")
+  class CreateCommentTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenContentIsValid_happyPath")
+    void shouldReturn200_whenContentIsValid_happyPath() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "content": "Nice post!" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(commentsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isOk());
+
+      verify(commentService).createComment(eq(currentUser.getId()), eq(1), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenContentIsBlank")
+    void shouldReturn400_whenContentIsBlank() throws Exception {
+      // Given
+      doThrow(new ValidationException("Comment content must not be blank"))
+          .when(commentService)
+          .createComment(anyInt(), anyInt(), any());
+      String requestJson =
+          """
+          { "content": "" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(commentsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.message").value("Comment content must not be blank"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPostDoesNotExist")
+    void shouldReturn404_whenPostDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Post not found with ID: 999"))
+          .when(commentService)
+          .createComment(anyInt(), eq(999), any());
+      String requestJson =
+          """
+          { "content": "Nice post!" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(commentsUrl(999)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.message").value("Post not found with ID: 999"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenUserIsBannedFromCommenting")
+    void shouldReturn403_whenUserIsBannedFromCommenting() throws Exception {
+      // Given
+      doThrow(new UserBannedException(OffsetDateTime.parse("2026-12-31T00:00:00Z")))
+          .when(commentService)
+          .createComment(anyInt(), anyInt(), any());
+      String requestJson =
+          """
+          { "content": "Nice post!" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(commentsUrl(1)))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.error").value("Account Restricted"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenPostIdPathVariableIsNotANumber")
+    void shouldReturn400_whenPostIdPathVariableIsNotANumber() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "content": "Nice post!" }
+          """;
+
+      // When / Then — EP: postId must be an Integer
+      mockMvc
+          .perform(
+              authed(post("/v1/api/posts/not-a-number/comments"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "content": "Nice post!" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(commentsUrl(1)).contentType(MediaType.APPLICATION_JSON).content(requestJson))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // PUT /v1/api/posts/{postId}/comments/{commentId}
+  // =====================================================================
+
+  @Nested
+  @DisplayName("PUT /v1/api/posts/{postId}/comments/{commentId}")
+  class UpdateCommentTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenCallerIsTheAuthor_happyPath")
+    void shouldReturn200_whenCallerIsTheAuthor_happyPath() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "content": "Edited comment" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(commentsUrl(1) + "/10"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isOk());
+
+      verify(commentService).updateComment(eq(currentUser.getId()), eq(1), eq(10), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotTheAuthor")
+    void shouldReturn403_whenCallerIsNotTheAuthor() throws Exception {
+      // Given
+      doThrow(new ForbiddenException("Only the author can modify this comment"))
+          .when(commentService)
+          .updateComment(anyInt(), anyInt(), anyInt(), any());
+      String requestJson =
+          """
+          { "content": "Trying to edit someone else's comment" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(commentsUrl(1) + "/10"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.message").value("Only the author can modify this comment"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenCommentDoesNotExist")
+    void shouldReturn404_whenCommentDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Comment not found with ID: 999"))
+          .when(commentService)
+          .updateComment(anyInt(), anyInt(), eq(999), any());
+      String requestJson =
+          """
+          { "content": "Edited comment" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(put(commentsUrl(1) + "/999"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // Given
+      String requestJson =
+          """
+          { "content": "Edited comment" }
+          """;
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(commentsUrl(1) + "/10")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(requestJson))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // DELETE /v1/api/posts/{postId}/comments/{commentId}
+  // =====================================================================
+
+  @Nested
+  @DisplayName("DELETE /v1/api/posts/{postId}/comments/{commentId}")
+  class DeleteCommentTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenCallerIsTheAuthor_happyPath")
+    void shouldReturn200_whenCallerIsTheAuthor_happyPath() throws Exception {
+      // When / Then
+      mockMvc.perform(authed(delete(commentsUrl(1) + "/10"))).andExpect(status().isOk());
+
+      verify(commentService).deleteComment(currentUser.getId(), 1, 10);
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotTheAuthor")
+    void shouldReturn403_whenCallerIsNotTheAuthor() throws Exception {
+      // Given
+      doThrow(new ForbiddenException("Only the author can modify this comment"))
+          .when(commentService)
+          .deleteComment(anyInt(), anyInt(), anyInt());
+
+      // When / Then
+      mockMvc.perform(authed(delete(commentsUrl(1) + "/10"))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc.perform(delete(commentsUrl(1) + "/10")).andExpect(status().isUnauthorized());
+    }
+  }
+}
