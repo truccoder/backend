@@ -229,18 +229,19 @@ public class FriendshipService {
     return pool.stream().sorted(comparator).toList();
   }
 
+  // Both helpers below are only ever called from rankByBackground() with an already
+  // null-checked `caller` (see the `callerProfile == null` guard above), so `caller` itself is
+  // never null here.
   private boolean sameRole(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    return caller != null
-        && candidate != null
+    return candidate != null
         && caller.getPrimaryRole() != null
         && caller.getPrimaryRole().equals(candidate.getPrimaryRole());
   }
 
   private int techStackOverlap(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    if (caller == null
-        || candidate == null
+    if (candidate == null
         || caller.getKnownTechStack() == null
         || candidate.getKnownTechStack() == null) {
       return 0;
@@ -329,7 +330,7 @@ public class FriendshipService {
     return userRepository
         .findById(userId)
         .map(UserEntity::getFullName)
-        .filter(name -> name != null && !name.isBlank())
+        .filter(name -> !name.isBlank())
         .orElse("Someone");
   }
 }
