@@ -47,6 +47,11 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers("/v1/api/payments/momo/webhook")
                     .permitAll()
+                    // Google's OAuth consent screen redirects the browser directly to this URL
+                    // with no way to attach this app's own bearer token; the userId travels in
+                    // the "state" param instead (see EventController#handleGoogleCallback).
+                    .requestMatchers("/v1/api/events/google/callback")
+                    .permitAll()
                     .requestMatchers("/v1/api/admin/**")
                     .hasRole("ADMIN")
                     .anyRequest()

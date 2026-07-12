@@ -208,6 +208,24 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Covers manual parsing of a request input that turns out not to be numeric (e.g.
+  // EventController#handleGoogleCallback doing Integer.parseInt(state) itself, outside of
+  // Spring's own @RequestParam/@PathVariable type conversion, which
+  // MethodArgumentTypeMismatchException already covers above). Previously fell through to the
+  // generic Exception handler and was incorrectly reported as 500.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(NumberFormatException.class)
+  public ErrorResponseDto handle(NumberFormatException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message("Invalid numeric value in request")
+        .path(request.getRequestURI())
+        .build();
+  }
+
   // Covers a required @RequestParam that's omitted entirely (e.g. GET /v1/api/search with no
   // "q" at all) — distinct from a param that's present but fails a constraint like @NotBlank,
   // which HandlerMethodValidationException/ConstraintViolationException handle instead.
