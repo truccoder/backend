@@ -15,6 +15,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -260,6 +261,24 @@ public class GlobalExceptionHandler {
     writeLog(ex, request);
 
     String message = format("Missing required parameter '%s'", ex.getParameterName());
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message(message)
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Covers a required @RequestHeader that's omitted entirely (e.g. KnowledgeSyncController's
+  // Authorization header, which every other endpoint gets via JwtAuthenticationFilter instead).
+  // Previously fell through to the generic Exception handler and was incorrectly reported as 500.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(MissingRequestHeaderException.class)
+  public ErrorResponseDto handle(MissingRequestHeaderException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    String message = format("Missing required header '%s'", ex.getHeaderName());
 
     return ErrorResponseDto.builder()
         .code(BAD_REQUEST.value())
