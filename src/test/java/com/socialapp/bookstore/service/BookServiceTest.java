@@ -278,8 +278,8 @@ class BookServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap an IOException as a RuntimeException when counting pages fails")
-    void shouldThrowRuntimeException_whenCountingPagesFails() throws IOException {
+    @DisplayName("should wrap an IOException as a ValidationException when counting pages fails")
+    void shouldThrowValidationException_whenCountingPagesFails() throws IOException {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
       when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
@@ -290,8 +290,8 @@ class BookServiceTest {
               () ->
                   bookService.createBookForPost(
                       AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(RuntimeException.class)
-          .hasMessageContaining("Failed to count book pages")
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("corrupted or not a valid")
           .hasCauseInstanceOf(IOException.class);
       verify(bookRepository, never()).save(any());
     }
@@ -405,8 +405,8 @@ class BookServiceTest {
 
     @Test
     @DisplayName(
-        "should wrap an IOException as a RuntimeException when generating the preview fails")
-    void shouldThrowRuntimeException_whenGeneratingPreviewFails() throws IOException {
+        "should wrap an IOException as a ValidationException when generating the preview fails")
+    void shouldThrowValidationException_whenGeneratingPreviewFails() throws IOException {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
       when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
@@ -417,8 +417,8 @@ class BookServiceTest {
               () ->
                   bookService.createBookForPost(
                       AUTHOR_ID, POST_ID, bookRequest(1000L, 5), bookFile, null))
-          .isInstanceOf(RuntimeException.class)
-          .hasMessageContaining("Failed to generate book preview")
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("corrupted or not a valid")
           .hasCauseInstanceOf(IOException.class);
     }
   }

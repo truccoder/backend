@@ -110,7 +110,7 @@ public class BookService {
           ? bookPreviewGenerator.countEpubChapters(original)
           : bookPreviewGenerator.countPdfPages(original);
     } catch (IOException e) {
-      throw new RuntimeException("Failed to count book pages", e);
+      throw new ValidationException("Book file is corrupted or not a valid " + format, e);
     }
   }
 
@@ -142,7 +142,7 @@ public class BookService {
           bookStorageService.uploadPreview(authorId, result.previewBytes(), extension);
       return new GeneratedPreview(previewFileKey, result.totalUnits());
     } catch (IOException e) {
-      throw new RuntimeException("Failed to generate book preview", e);
+      throw new ValidationException("Book file is corrupted or not a valid " + format, e);
     }
   }
 

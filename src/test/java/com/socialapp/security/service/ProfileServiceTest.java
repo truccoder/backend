@@ -25,6 +25,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.cloud.minio.MinIOConfig;
 import com.socialapp.cloud.minio.MinIOService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
@@ -326,8 +327,8 @@ class ProfileServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap an upload failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenUploadFails() throws Exception {
+    @DisplayName("should wrap an upload failure as a StorageException")
+    void shouldThrowStorageException_whenUploadFails() throws Exception {
       // Given
       MultipartFile file = mockFile("avatar.png", 1024, "image/png");
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
@@ -336,7 +337,7 @@ class ProfileServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(StorageException.class)
           .hasMessageContaining("Failed to upload profile picture");
     }
 
