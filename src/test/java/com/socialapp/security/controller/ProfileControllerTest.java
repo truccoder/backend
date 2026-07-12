@@ -293,10 +293,8 @@ class ProfileControllerTest {
     @DisplayName("shouldReturn401_whenCurrentPasswordIsIncorrect")
     void shouldReturn401_whenCurrentPasswordIsIncorrect() throws Exception {
       // Given — TC_AUTH_24: ProfileService throws BadCredentialsException("Current password is
-      // incorrect"), but GlobalExceptionHandler#handle(AuthenticationException, ...) discards
-      // the actual exception message and always responds with the hardcoded "Invalid
-      // credentials" for every AuthenticationException subtype — confirmed empirically, so this
-      // asserts the real message rather than the service's original one.
+      // incorrect"). GlobalExceptionHandler#handle(AuthenticationException, ...) now forwards
+      // the exception's own message instead of a hardcoded generic one.
       mockAuthenticatedAs(currentUser);
       org.mockito.Mockito.doThrow(new BadCredentialsException("Current password is incorrect"))
           .when(profileService)
@@ -314,7 +312,7 @@ class ProfileControllerTest {
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
           .andExpect(status().isUnauthorized())
-          .andExpect(jsonPath("$.message").value("Invalid credentials"));
+          .andExpect(jsonPath("$.message").value("Current password is incorrect"));
     }
 
     @ParameterizedTest(name = "shouldReturn422_whenPasswordFieldsInvalid: {0}")

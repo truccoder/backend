@@ -229,22 +229,23 @@ class AuthControllerTest {
   class MalformedRequestTests {
 
     @Test
-    @DisplayName("shouldReturn500_whenLoginBodyIsMalformedJson")
-    void shouldReturn500_whenLoginBodyIsMalformedJson() throws Exception {
+    @DisplayName("shouldReturn400_whenLoginBodyIsMalformedJson")
+    void shouldReturn400_whenLoginBodyIsMalformedJson() throws Exception {
       // Given — syntactically invalid JSON (unterminated object)
       String malformedJson = "{ \"email\": \"admin1@socialapp.com\", \"password\": ";
 
-      // When / Then — HttpMessageNotReadableException isn't given its own @ExceptionHandler in
-      // GlobalExceptionHandler, so it falls through to the generic Exception handler (500)
-      // rather than a client-facing 400. Documented here as a real, if debatable, behavior.
+      // When / Then — HttpMessageNotReadableException now has its own @ExceptionHandler in
+      // GlobalExceptionHandler (previously fell through to the generic Exception handler and
+      // was misreported as 500).
       mockMvc
           .perform(post(LOGIN_URL).contentType(MediaType.APPLICATION_JSON).content(malformedJson))
-          .andExpect(status().isInternalServerError());
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.message").value("Malformed request body"));
     }
 
     @Test
-    @DisplayName("shouldReturn500_whenLoginCalledWithoutContentType")
-    void shouldReturn500_whenLoginCalledWithoutContentType() throws Exception {
+    @DisplayName("shouldReturn415_whenLoginCalledWithoutContentType")
+    void shouldReturn415_whenLoginCalledWithoutContentType() throws Exception {
       // Given
       String requestJson =
           """
@@ -252,13 +253,13 @@ class AuthControllerTest {
           """;
 
       // When / Then — with no Content-Type header, Spring cannot select an HttpMessageConverter
-      // for the @RequestBody parameter and normally raises HttpMediaTypeNotSupportedException
-      // (415). Confirmed empirically that this app's GlobalExceptionHandler has no dedicated
-      // handler for it, so — like malformed JSON above — it falls through to the generic
-      // Exception handler and surfaces as 500 instead of the framework's default 415.
+      // for the @RequestBody parameter and raises HttpMediaTypeNotSupportedException, which now
+      // has its own @ExceptionHandler (previously fell through to the generic Exception handler
+      // and was misreported as 500).
       mockMvc
           .perform(post(LOGIN_URL).content(requestJson))
-          .andExpect(status().isInternalServerError());
+          .andExpect(status().isUnsupportedMediaType())
+          .andExpect(jsonPath("$.message").value("Content-Type must be application/json"));
     }
   }
 

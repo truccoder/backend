@@ -7,9 +7,11 @@ import static org.springframework.http.HttpStatus.*;
 import java.util.Objects;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -25,11 +27,21 @@ import com.socialapp.security.exception.AccountBannedException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Centralized exception -&gt; HTTP response mapping for every controller.
+ *
+ * <p><b>400 vs 422 is an intentional split, not an inconsistency:</b> {@code @RequestParam}/{@code
+ * @PathVariable} constraint failures ({@link HandlerMethodValidationException}, {@link
+ * MethodArgumentTypeMismatchException}) return <b>400 Bad Request</b> — the request itself is
+ * malformed (wrong type, out-of-range query param). {@code @RequestBody @Valid} failures ({@link
+ * MethodArgumentNotValidException}) return <b>422 Unprocessable Entity</b> — the request is
+ * syntactically well-formed JSON, but a field's value fails a semantic constraint. Reviewed and
+ * confirmed as the intended behavior; left as-is rather than collapsed to a single status code.
+ */
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
 
-  private static final String INVALID_CREDS_MESSAGE = "Invalid credentials";
   private static final String INVALIDATION_MESSAGE = "Invalid request parameters or payload";
   private static final String FIELD_VALIDATION_MSG_TEMPLATE = "Property %s: %s";
   private static final String PAYLOAD_VALIDATION_MSG_TEMPLATE = "Payload: %s";
@@ -134,7 +146,7 @@ public class GlobalExceptionHandler {
     return ErrorResponseDto.builder()
         .code(UNAUTHORIZED.value())
         .error(UNAUTHORIZED.getReasonPhrase())
-        .message(INVALID_CREDS_MESSAGE)
+        .message(ex.getMessage())
         .path(request.getRequestURI())
         .build();
   }
@@ -191,6 +203,41 @@ public class GlobalExceptionHandler {
         .code(BAD_REQUEST.value())
         .error(BAD_REQUEST.getReasonPhrase())
         .message(message)
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Covers a request body that isn't parseable JSON at all (syntax error, truncated body, wrong
+  // structure) — distinct from MethodArgumentNotValidException, where the JSON parses fine but a
+  // field fails a Bean Validation constraint. Previously fell through to the generic Exception
+  // handler and was incorrectly reported as 500 for what is really a malformed client request.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  public ErrorResponseDto handle(HttpMessageNotReadableException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message("Malformed request body")
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Covers a request body sent with a missing or unsupported Content-Type (e.g. no header at
+  // all, or text/plain instead of application/json), so Spring can't pick an HttpMessageConverter
+  // for the @RequestBody parameter. Previously fell through to the generic Exception handler and
+  // was incorrectly reported as 500.
+  @ResponseStatus(UNSUPPORTED_MEDIA_TYPE)
+  @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+  public ErrorResponseDto handle(
+      HttpMediaTypeNotSupportedException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(UNSUPPORTED_MEDIA_TYPE.value())
+        .error(UNSUPPORTED_MEDIA_TYPE.getReasonPhrase())
+        .message("Content-Type must be application/json")
         .path(request.getRequestURI())
         .build();
   }
