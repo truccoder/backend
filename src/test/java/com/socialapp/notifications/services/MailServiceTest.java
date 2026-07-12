@@ -21,6 +21,7 @@ import com.socialapp.notifications.config.MailProperties;
 import com.socialapp.security.config.AuthProperties;
 
 import jakarta.mail.Session;
+import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 import jakarta.mail.internet.MimeMultipart;
 
@@ -114,7 +115,8 @@ class MailServiceTest {
       // Then
       verify(mailSender).send(message);
       assertThat(message.getSubject()).isEqualTo("New like");
-      assertThat(message.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
+      assertThat(((InternetAddress) message.getAllRecipients()[0]).getAddress())
+          .isEqualTo("user@example.com");
       assertThat(htmlBodyOf(message)).contains("Someone liked your post");
     }
 
