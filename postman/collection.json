@@ -1,0 +1,2367 @@
+{
+  "info": {
+    "_postman_id": "41f8eeb6-6319-4def-aaa4-bedf22fa68be",
+    "name": "Elite Nexus API v3",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "52737404",
+    "_collection_link": "https://go.postman.co/collection/52737404-41f8eeb6-6319-4def-aaa4-bedf22fa68be?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Security Module",
+      "item": [
+        {
+          "name": "[API] Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Registration was successful (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "metadata",
+                  "value": "{\n  \"email\": \"myemail@example.com\",\n  \"password\": \"123456\",\n  \"fullname\": \"MyUserFullname\"\n}",
+                  "type": "text",
+                  "contentType": "application/json"
+                },
+                {
+                  "key": "profilePicture",
+                  "type": "file",
+                  "value": null
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const responseData = pm.response.json();",
+                  "pm.environment.set(\"auth_token\", responseData.accessToken);",
+                  "pm.environment.set(\"refresh_token\", responseData.refreshToken);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"email\": \"admin1@socialapp.com\",\r\n    \"password\": \"12345678a\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const responseData = pm.response.json();\r",
+                  "pm.environment.set(\"auth_token\", responseData.accessToken);\r",
+                  "pm.environment.set(\"refresh_token\", responseData.refreshToken);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"refreshToken\": \"{{refresh_token}}\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Forgot Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"email\": \"myemail@example.com\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/forgot-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"token\": \"_viNzMNXf7_2I52TG9VWETZPD1WklK73gqYED3uvK1o\",\r\n    \"newPassword\": \"123456\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/reset-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"refreshToken\": \"{{refresh_token}}\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Request Magic Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"email\": \"myemail1@example.com\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/magic-link",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "magic-link"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Login with Magic Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"token\": \"PLQzlZL1t3RoQnT2jR5lE18XVM5rSsS1cmje3MDdgO4\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/magic-link/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "magic-link",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Verify Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"token\": \"mcBcjqZXhG_CQPl79Xf4jOywb_C7VqiQoZ5Vq2ttGdE\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/verify-email",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Post Module",
+      "item": [
+        {
+          "name": "Post Reaction",
+          "item": [
+            {
+              "name": "[API] Pop Reaction",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\r\n    \"reactionType\": \"LOVE\"\r\n}\r\n\r\n// (Allowed enum values:  LIKE ,  LOVE ,  HAHA ,  CRY ,  ANGRY )",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/posts/1/reactions",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "posts",
+                    "1",
+                    "reactions"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Remove Reaction",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/posts/1/reactions",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "posts",
+                    "1",
+                    "reactions"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Events Module",
+          "item": [
+            {
+              "name": "[API] RSVP to Event",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"RSVP submitted successfully\", function () {\r",
+                      "    pm.response.to.have.status(200);\r",
+                      "});"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/1/rsvp?status=GOING",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "1",
+                    "rsvp"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "GOING"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Get Event Attendees",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "// {{base_url}}/events/{{post_id}}/attendees"
+                    ],
+                    "type": "text/javascript",
+                    "packages": {},
+                    "requests": {}
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/events/1/attendees",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "1",
+                    "attendees"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Google Auth URL",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/google/auth-url",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "google",
+                    "auth-url"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Google Calendar OAuth Callback",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/events/google/callback?code=AUTH_CODE&state=USER_ID",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "google",
+                    "callback"
+                  ],
+                  "query": [
+                    {
+                      "key": "code",
+                      "value": "AUTH_CODE"
+                    },
+                    {
+                      "key": "state",
+                      "value": "USER_ID"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Get Attendee Count",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/1/attendees/count",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "1",
+                    "attendees",
+                    "count"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Add Event to Google Calendar",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/1/add-to-calendar",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "1",
+                    "add-to-calendar"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Export Event ICS",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/1/export.ics",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "1",
+                    "export.ics"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Google Calendar Status",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/events/google/status",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "events",
+                    "google",
+                    "status"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Comments",
+          "item": [
+            {
+              "name": "[API] Create Comment",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"content\": \"This is a comment\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/posts/1/comments",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "posts",
+                    "1",
+                    "comments"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Update Comment",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"content\": \"Updated comment\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/posts/1/comments/1",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "posts",
+                    "1",
+                    "comments",
+                    "1"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Delete Comment",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/posts/1/comments/1",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "posts",
+                    "1",
+                    "comments",
+                    "1"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "[API] Create post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"content\": \"hello world\",\r\n    \"visibility\": \"PUBLIC\"\r\n}\r\n// {\r\n//     \"visibility\": \"PUBLIC\",\r\n//     \"postType\": \"REGULAR\",\r\n//     \"content\": \"Nếu bạn có một con bug, mang sang đám Frontend, người ta sẽ bảo bạn thử F5 lại, xoá cache, hoặc nhếch mép cười nhạt \\\"lạ nhỉ, máy anh chạy ngon mà\\\". Nếu bạn có một con bug, mang sang đám Backend, người ta sẽ đổ cho mạng, đổ cho server, đổ cho thằng DevOps, rồi đổ cho cái database, và cuối cùng - như mọi khi - đổ cho cái máy của bạn. Nếu bạn có một con bug, mang sang đám AI/ML, người ta sẽ train lại model 8 tiếng đồng hồ, con GPU nóng đỏ như cái lò nướng bánh mì, để rồi quay sang phán một câu xanh rờn: tại data của em bẩn. Nhưng nếu bạn có một con bug, năm 2026, và bạn mang sang con AI agent... Người ta - à không, nó - không fix con bug cho bạn. Không. Nó cho bạn cả một tư tưởng. Nó refactor sạch sẽ toàn bộ codebase, đổi luôn kiến trúc từ MVC sang một thứ nghe rất \\\"scalable\\\" mà bạn đếch hiểu, đẻ thêm 7 cái file test bạn không thèm yêu cầu, viết comment bằng giọng văn của giáo sư Stanford, và xử lý con bug bằng cách... xoá luôn cái feature. Bạn sẽ nhận ra: bạn không cần biết code để hoàn thành cái app. Bạn chỉ cần biết cách cầu nguyện sao cho đúng. Vâng, lập trình thời nay - bug chấm với prompt, bug chấm với vibe coding, bug chấm với một niềm tin tâm linh sâu sắc rằng \\\"lần build sau nó sẽ chạy\\\".\"\r\n// }\r\n// {\r\n//     \"visibility\": \"PUBLIC\",\r\n//     \"postType\": \"REGULAR\",\r\n//     \"content\": \"Người ta hỏi khoảnh khắc tuyệt vọng nhất đời sinh viên là gì. Tôi xin thưa: là 9 giờ tối trước ngày bảo vệ đồ án, tôi mở bản chạy thử lên, và nó đứng hình. Đứng bất động, uy nghi và trang nghiêm như một tượng đài, im lặng đến mức tôi ngỡ nó đang dành một phút mặc niệm cho chính sự nghiệp học hành của tôi. Đồ án của tôi là một phần mềm dùng trí tuệ nhân tạo cho bệnh viện nhi - nó xem ảnh chụp của các bé rồi nhắc bác sĩ để ý những ca bất thường, một ý tưởng cao cả tới mức nếu thành công tôi đã đủ tư cách được tạc tượng. Có điều tối nay, cứ mở tới tấm ảnh quan trọng nhất là nó treo. Treo một cách thanh thản, như thể nó đã biết trước mai tôi sẽ chết đứng giữa hội đồng và muốn tôi tập làm quen dần với cảm giác đó. Nhóm tôi bốn người. Một đứa \\\"đang ốm\\\" - ốm kiểu nhá đúng một cuộc rồi tắt nguồn, biến mất như chưa từng đăng ký môn này. Một đứa để lại độc một dòng \\\"tao tin mày\\\" rồi rời khỏi nhân gian, bỏ tôi đứng bơ vơ như Kinh Kha bên sông Dịch, gió thổi vù vù, biết đi là không có đường về. Đứa thứ tư thì... thôi, nhắc tới lại đau lòng. Thế là tôi đặt Grab, leo lên xe, vừa đi vừa gọi điện cầu cứu trong vô vọng, kể lể với cái điện thoại như Đỗ Phủ ngồi than thân giữa thời loạn. Tôi không để ý anh tài xế nghe hết. Mà cũng chẳng còn tâm trí đâu để ý - trong đầu tôi lúc ấy chỉ có cảnh ngày mai: tôi đứng trên bục, màn hình đứng hình, cả hội đồng nhìn tôi bằng đúng ánh mắt người ta dành cho một thiên tai. Đến ngã tư đèn đỏ, anh tài xế bỗng quay đầu lại: \\\"Cái phần mềm của em, nó treo ngay lúc mở ảnh, hay tính xong rồi mới treo?\\\" Tôi xém rơi điện thoại. Đây không phải câu hỏi của một anh xe ôm. Đây là câu hỏi của một thế lực. \\\"...Lúc mở ảnh ạ. Mà sao anh?\\\" \\\"Tấp vào quán cà phê kia mười lăm phút,\\\" anh nói, giọng bình thản như người đã nhìn thấu kiếp nạn của tôi từ ba đời trước. \\\"Không được thì em đi tiếp, cuốc này anh không lấy tiền.\\\" Lý trí bảo tôi từ chối. Một anh xe ôm đòi sửa đồ án tốt nghiệp ngành công nghệ thông tin - nghe vô lý y như nhờ ông bơm vá đầu ngõ mổ tim. Nhưng ánh mắt anh bình thản đến đáng sợ, kiểu ánh mắt của người chưa từng thua một ván cờ. Tôi gật đầu. Lúc tuyệt vọng, người ta vịn vào bất cứ thứ gì, kể cả một anh Grab. Vào quán, tôi mở laptop, tay run như vừa trượt bằng lái lần thứ tư. Anh kéo ghế ngồi cạnh, xắn nhẹ tay áo - và tôi liếc thấy dưới cổ tay anh một chiếc đồng hồ. Loại đồng hồ tôi từng thấy trong mấy bài báo, cái loại bán đi đủ đóng học phí cho cả lớp tôi tới lúc về hưu. Anh kéo tay áo che lại, tự nhiên như đang giấu một quả trứng luộc. Anh liếc màn hình đúng nửa phút. Rồi chỉ vào một chỗ. \\\"Đây. Em bảo máy đọc ảnh theo một kiểu, mà tấm ảnh kia lại lưu theo kiểu khác. Hai bên không hiểu nhau, giận nhau, thế là nó đơ. Sửa một dòng thôi.\\\" Anh chỉnh vài cái. Tôi bấm chạy. Màn hình sáng lên, tấm ảnh hiện ra, phần mềm khoanh một vòng nhỏ quanh lá phổi em bé kèm dòng chữ nên kiểm tra thêm - và tôi, một đứa con gái tự nhận là cứng cỏi, suýt khóc giữa quán cà phê như vừa được minh oan sau mười năm ngồi tù. Tôi vật lộn ba đêm liền. Anh giải quyết trong ba mươi giây. Cảm giác ấy nói sao nhỉ, như Ngu Công dời núi cả đời rồi có ông tiên đi ngang thổi một cái bay luôn quả núi. \\\"Cảm ơn anh... nhưng mai em vẫn sợ. Hội đồng toàn thầy giỏi.\\\" \\\"Đừng cố làm cho nó nghe thông minh,\\\" anh ngắt lời. \\\"Thầy cô không cần biết máy giỏi cỡ nào. Họ cần biết nó cứu được ai. Em mở đầu thế này: từng có một em bé, ảnh chụp lẫn giữa hàng trăm ca trong một buổi sáng quá tải, và không ai kịp nhìn lại. Phần mềm của em sinh ra để chuyện đó đừng xảy ra nữa. Kể về đứa bé đó. Còn lại để máy lo.\\\" Tôi ngẩng lên nhìn anh. Lúc này mới thật sự nhìn. Dáng ngồi thẳng, giọng nói có lớp lang, kiểu người đã đứng trước những hội đồng mà so với họ, hội đồng của tôi chỉ là một buổi họp tổ dân phố. \\\"Anh... làm nghề gì vậy ạ?\\\" Đúng lúc đó điện thoại anh sáng. Một cuộc gọi video, người gọi hiện lên kèm tên một tập đoàn công nghệ - cái tên mà dân trong ngành nhắc tới còn phải hạ giọng - trụ sở chính ở Singapore. Lạ ở chỗ: một cuộc gọi từ chính nơi ấy, vậy mà anh thản nhiên úp màn hình xuống bàn, để chuông reo tới khi tắt, như đang chặn một cuộc gọi rác. Người dám làm thế với nơi đó, chắc chắn không phải nhân viên quèn. \\\"Mai trả lời cũng được,\\\" anh cười. Tới lượt TÔI đứng hình. Và lần này tôi đứng còn lâu hơn cả cái phần mềm của tôi. Rồi anh kể.. Hóa ra anh là sếp lớn ở bên kia, tiền nhiều tới mức tiêu cả đời không hết, một ngày đẹp trời chợt thấy chán cảnh ngồi phòng máy lạnh, bèn về Việt Nam đăng ký chạy Grab vài tuần - không phải vì tiền, mà vì \\\"muốn trải nghiệm cuộc sống cho biết.\\\" Trời ạ. Người ta chạy xe để kiếm cơm, còn anh chạy xe như đi spa chữa lành. Có những nỗi khổ của người giàu mà dân nghèo chúng tôi nằm mơ cũng không với tới. Rồi không hiểu từ lúc nào, trái tim tôi - vốn đã chai sạn sau bốn năm bị deadline luộc đi luộc lại - bỗng mềm nhũn như cọng bún để qua đêm. Khoan đã. Một anh tài xế. Sửa được đồ án. Lại còn là tỷ phú. Lại tốt bụng. Lại không lấy tiền cuốc xe. Loại nhân vật này mà có thật ngoài đời thì mấy ông biên kịch phim Hàn nên về hưu hết đi cho rồi. Anh đưa tôi về tận cổng trọ. Tôi rút ví định trả tiền, anh xua tay: \\\"Đã bảo cuốc này không tính mà. Coi như anh được nghe một đứa em làm việc tử tế.\\\" Rồi anh đội mũ, nổ máy, mất hút vào dòng người, để lại tôi đứng ngẩn ngơ như vừa xem xong tập cuối một bộ phim mà người ta quên quay đoạn kết. Trong ứng dụng hiện ô đánh giá. Tôi cho năm sao. Gõ một dòng bình luận, xóa, gõ lại, xóa, cuối cùng để trống. Năm cái sao bé tí kia làm sao chứa nổi một con người vừa cứu rỗi nguyên cả tương lai của tôi. Đêm đó tôi không ngủ. Không phải vì lo bảo vệ. Mà vì một thứ cứ chộn rộn trong ngực, vừa ấm vừa phiền phức, cái thứ mà tôi đoán người ta hay gọi là... thôi, không nói. Sáng hôm sau, hội trường bảo vệ. Tôi đứng trên bục, bình tĩnh tới mức chính tôi cũng bất ngờ. Tôi mở đầu đúng như anh dặn - bằng câu chuyện về một em bé suýt bị bỏ sót. Cả hội đồng im phăng phắc. Đến phần giới thiệu khách mời, cô chủ nhiệm nói: \\\"Hôm nay hội đồng có thêm một giám khảo đặc biệt - đại diện cho tập đoàn đã tài trợ chương trình công nghệ cho chính bệnh viện nhi mà dự án này hướng tới. Anh vừa bay từ Singapore về tối qua.\\\" Người đàn ông ngồi cuối bàn đứng dậy, khẽ cúi chào. Sơ mi, blazer phẳng phiu. Và trên cổ tay là chiếc đồng hồ mà tối qua tôi đã thấy bên ly cà phê nguội. Tay tôi cầm con trỏ chuột bắt đầu run. Không phải vì sợ hội đồng. Mà vì anh - đêm qua tôi còn gọi là anh tài xế, giờ thì gọi là gì cũng thấy thiếu - đang nhìn tôi, khóe môi nhếch lên đúng nụ cười bên ly cà phê nguội hôm trước, rồi khẽ gật đầu, như muốn nói: kể tiếp đi, em làm được mà. Tim tôi đập loạn xạ. Trong đầu lúc đó không phải đồ án, không phải tốt nghiệp, mà là chừng một nghìn câu hỏi: Anh tên gì. Anh còn ở Việt Nam mấy hôm. Anh có vợ chưa. Và quan trọng nhất - chấm đồ án xong, anh có cho tôi năm sao lại không. Tôi hít một hơi, quay về phía màn hình, và bắt đầu kể. (Còn bảo vệ xong tôi có xin được số anh không, thì... đó lại là một đồ án khác.)\"\r\n// }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/posts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "posts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Update post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// {{base_url}}/posts/{{post_id}}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"content\": \"Updating my previous post content! Check out this new update @[0]\",\r\n    \"visibility\": \"PUBLIC\",\r\n    \"googlePlaceId\": \"ChIJ02qnq0uqNTER6MI5C7f64eA\",\r\n    \"locationType\": \"OFFICE\",\r\n    \"locationDetails\": {\r\n        \"name\": \"Headquarters\",\r\n        \"address\": \"123 Tech Street, Silicon Valley\",\r\n        \"latitude\": 37.7749,\r\n        \"longitude\": -122.4194\r\n    },\r\n    \"images\": [\r\n        \"https://placehold.co/900x500\",\r\n        \"https://placehold.co/900x500\"\r\n    ],\r\n    \"taggedUserIds\": [\r\n        2\r\n    ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/posts/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "posts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Delete post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// {{base_url}}/posts/{{post_id}}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/posts/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "posts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Create Book Post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "metadata",
+                  "value": "{\n    \"content\": \"I just published a new book on Spring Boot!\",\n    \"postType\": \"BOOK\",\n    \"visibility\": \"PUBLIC\",\n    \"bookDetails\": {\n        \"title\": \"Mastering Spring Boot\",\n        \"description\": \"A comprehensive guide to Spring Boot 3.\",\n        \"price\": 150000,\n        \"previewPages\": 10\n    }\n}",
+                  "type": "text",
+                  "uuid": "1bc566bc-2b81-432b-9ff6-f9bd6e596997",
+                  "contentType": "application/json"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "158c199a-ace3-4da3-9752-9bc2103ecddd",
+                  "src": "/C:/Users/trant/Downloads/small-pdf-example.pdf"
+                },
+                {
+                  "key": "cover",
+                  "type": "file",
+                  "uuid": "1fbb99b9-cac8-4478-aef4-0752148b5423",
+                  "src": "/C:/Users/trant/Downloads/SampleJPGImage_5mb.jpg"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/posts/books",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "posts",
+                "books"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Resolve Locations",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/posts/locations/resolve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "posts",
+                "locations",
+                "resolve"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Friendship Module",
+      "item": [
+        {
+          "name": "[API] Send Friend Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Friend request sent successfully (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/friendships/requests/9027",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships",
+                "requests",
+                "9027"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Cancel Friend Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Friend request cancelled successfully (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/friendships/requests/62",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships",
+                "requests",
+                "62"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Accept Friend Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Friend request accepted successfully (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/friendships/requests/31/accept",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships",
+                "requests",
+                "31",
+                "accept"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Reject Friend Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Friend request rejected successfully (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/friendships/requests/41/reject",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships",
+                "requests",
+                "41",
+                "reject"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Friendships",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/friendships?limit=2&cursor=9999",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "2"
+                },
+                {
+                  "key": "cursor",
+                  "value": "9999"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Friend Suggestions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/friendships/suggestions?limit=",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "friendships",
+                "suggestions"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Newsfeed Module",
+      "item": [
+        {
+          "name": "[API] Get Newsfeed",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Newsfeed retrieved successfully (Status 200)\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/feed?page=1&size=10",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "feed"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Knowledge Module",
+      "item": [
+        {
+          "name": "Personal Access Token Module",
+          "item": [
+            {
+              "name": "[API] Create Personal Access Token",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "const res = pm.response.json();",
+                      "if (res.token) {",
+                      "    pm.environment.set('pat_token', res.token);",
+                      "    console.log('PAT saved to pat_token:', res.token);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"name\": \"My Obsidian Token\",\n    \"expiresInDays\": 30,\n    \"vaultPermission\": \"BIDIRECTIONAL\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/tokens",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "tokens"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] List Personal Access Tokens",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/tokens",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "tokens"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Revoke Personal Access Token",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{auth_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/tokens/1",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "tokens",
+                    "1"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Knowledge Sync Module",
+          "item": [
+            {
+              "name": "[API] Pull Knowledge Sync",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{pat_token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/knowledge/sync/pull",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "knowledge",
+                    "sync",
+                    "pull"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "[API] Push Knowledge Sync",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{pat_token}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"notes\": [\n        {\n            \"filename\": \"test2.md\",\n            \"content\": \"hello world\",\n            \"tags\": [],\n            \"links\": []\n        }\n    ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/knowledge/sync/push",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "knowledge",
+                    "sync",
+                    "push"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "[API] Explain Post with AI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// {{base_url}}/knowledge/posts/{{post_id}}/explain\r",
+                  "\r",
+                  "pm.test(\"AI explanation returned successfully\", function () {\r",
+                  "    pm.response.to.have.status(200);\r",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"feedbackNote\": \"Explain this for a beginner developer\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/knowledge/posts/11/explain",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "knowledge",
+                "posts",
+                "11",
+                "explain"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Save Explanation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"postId\": 11,\r\n    \"originalContent\": \"Original post code content here\",\r\n    \"explanationContent\": \"Generated explanation content here\",\r\n    \"concepts\": [\"Spring Boot\", \"Rest API\"],\r\n    \"prerequisites\": [\"Java basics\"],\r\n    \"complexityScore\": 2\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/knowledge/save",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "knowledge",
+                "save"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Library",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/knowledge/my-library",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "knowledge",
+                "my-library"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Professional Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile/professional",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "professional"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Update Professional Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"primaryRole\": \"OTHER\",\r\n    \"seniorityLevel\": \"MID\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/profile/professional",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "professional"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Bookstore Module",
+      "item": [
+        {
+          "name": "[API] Get Book Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Download Book",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/21/download",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "21",
+                "download"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Buy Book (VNPay Checkout)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/payments/books/21",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "payments",
+                "books",
+                "21"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Books by Author",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/author/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "author",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Preview Book",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/31/preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "31",
+                "preview"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Delete Book",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Create Book Review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"rating\": 5,\n    \"feedback\": \"Great book!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/books/21/reviews",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "21",
+                "reviews"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Book Reviews",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/books/21/reviews",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "books",
+                "21",
+                "reviews"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Search Module",
+      "item": [
+        {
+          "name": "[API] Unified Search",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/search?q=test",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "test"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Trending Module",
+      "item": [
+        {
+          "name": "[API] Get Trending List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/trending",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "trending"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notification Module",
+      "item": [
+        {
+          "name": "[API] Get User Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/notifications",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Unread Count",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/notifications/unread-count",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications",
+                "unread-count"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Mark Notification as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/notifications/1/read",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications",
+                "1",
+                "read"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Mark All Notifications as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/notifications/read-all",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications",
+                "read-all"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Notification Preferences",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/notifications/preferences",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications",
+                "preferences"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Update Notification Preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"emailEnabled\": true,\n    \"pushEnabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/notifications/preferences",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "notifications",
+                "preferences"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Moderation Module",
+      "item": [
+        {
+          "name": "[API] Review Post (Approve/Reject)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"decision\": \"VERY_LIKELY\",\n    \"feedback\": \"Content is acceptable\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/moderation/posts/141/review",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "moderation",
+                "posts",
+                "141",
+                "review"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Banned Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/moderation/banned-users?page=1&size=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "moderation",
+                "banned-users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Moderation Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/moderation/logs?postId=151",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "moderation",
+                "logs"
+              ],
+              "query": [
+                {
+                  "key": "postId",
+                  "value": "151"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Get Moderation Posts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/moderation/posts?status=PENDING_REVIEW&page=1&size=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "moderation",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING_REVIEW",
+                  "type": "text"
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Profile Module",
+      "item": [
+        {
+          "name": "[API] Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"fullName\": \"New Full Name\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Change Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"currentPassword\": \"123456\",\r\n    \"newPassword\": \"123456\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/profile/password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "password"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Change Profile Picture",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "cc3054f2-b33a-4828-930c-14f143b3a3ca",
+                  "src": "/C:/Users/trant/Downloads/pexels-polina-tankilevitch-7394445.jpg"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/profile/picture",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "picture"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payments Module",
+      "item": [
+        {
+          "name": "[API] Momo Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"signature\": \"MOMO1783406037793\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/momo/webhook",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "payments",
+                "momo",
+                "webhook"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[API] Sync Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/payments/MOMO1783401783355/sync",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "payments",
+                "MOMO1783401783355",
+                "sync"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}
