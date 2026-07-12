@@ -34,6 +34,7 @@ import com.socialapp.bookstore.entity.BookPurchaseEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.PaymentException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
@@ -458,8 +459,8 @@ class MomoServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap HMAC generation failure as a RuntimeException")
-    void shouldThrowRuntimeException_whenHmacGenerationFails() {
+    @DisplayName("should wrap HMAC generation failure as a PaymentException")
+    void shouldThrowPaymentException_whenHmacGenerationFails() {
       // Given
       momoProperties.setSecretKey(null);
       when(bookService.findBookOrThrow(BOOK_ID))
@@ -469,7 +470,7 @@ class MomoServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> momoService.createPayment(BUYER_ID, BOOK_ID))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(PaymentException.class)
           .hasMessageContaining("Failed to generate HMAC");
     }
   }

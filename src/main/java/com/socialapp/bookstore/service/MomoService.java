@@ -18,6 +18,7 @@ import com.socialapp.bookstore.entity.BookPurchaseEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.PaymentException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -150,9 +151,18 @@ public class MomoService {
       return false;
     }
 
+    int resultCode;
+    try {
+      resultCode = asInt(payload.get("resultCode"));
+    } catch (NumberFormatException e) {
+      log.warn(
+          "[orderId={}] MoMo IPN payload has a malformed resultCode, ignoring payload", orderId);
+      return false;
+    }
+
     return applyResult(
         orderId,
-        asInt(payload.get("resultCode")),
+        resultCode,
         String.valueOf(payload.getOrDefault("transId", "")),
         (String) payload.get("payType"));
   }
@@ -357,14 +367,19 @@ public class MomoService {
 
   @SuppressWarnings("unchecked")
   private Map<String, Object> postForMap(String uri, Map<String, Object> requestBody) {
-    Map<String, Object> response =
-        momoWebClient
-            .post()
-            .uri(uri)
-            .bodyValue(requestBody)
-            .retrieve()
-            .bodyToMono(Map.class)
-            .block();
+    Map<String, Object> response;
+    try {
+      response =
+          momoWebClient
+              .post()
+              .uri(uri)
+              .bodyValue(requestBody)
+              .retrieve()
+              .bodyToMono(Map.class)
+              .block();
+    } catch (Exception e) {
+      throw new PaymentException("Failed to reach MoMo for " + uri, e);
+    }
 
     if (Objects.isNull(response)) {
       throw new ValidationException("MoMo returned no response for " + uri);
@@ -385,7 +400,7 @@ public class MomoService {
       }
       return sb.toString();
     } catch (Exception e) {
-      throw new RuntimeException("Failed to generate HMAC", e);
+      throw new PaymentException("Failed to generate HMAC", e);
     }
   }
 

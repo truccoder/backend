@@ -371,6 +371,21 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Same rationale as StorageException, for the payment gateway (MoMo) instead of MinIO — a
+  // downstream/transient failure, not a bug in our own request handling, hence 503.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(PaymentException.class)
+  public ErrorResponseDto handle(PaymentException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(AccessDeniedException.class)
   public ErrorResponseDto handle(AccessDeniedException ex, HttpServletRequest request) {
