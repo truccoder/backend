@@ -1,0 +1,97 @@
+name: E2E Tests (Postman/Newman)
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  e2e-newman:
+    if: "!startsWith(github.event.head_commit.message, 'Merge')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Start infrastructure (Postgres, Neo4j, Redis, MinIO)
+        run: docker compose up -d
+
+      - name: Wait for Postgres to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres... ($i/30)"
+            sleep 2
+          done
+          echo "Postgres never became ready"
+          exit 1
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build application jar
+        run: ./gradlew bootJar -x test
+
+      - name: Start application in background
+        run: |
+          JAR=$(find build/libs -maxdepth 1 -name '*.jar' ! -name '*plain*' | head -n 1)
+          echo "Starting $JAR"
+          nohup java -jar "$JAR" > app.log 2>&1 &
+          echo $! > app.pid
+
+      - name: Wait for application to accept requests
+        run: |
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/v1/api/auth/login 2>/dev/null)
+            if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+              echo "Application is responding (HTTP $CODE)"
+              exit 0
+            fi
+            echo "Waiting for application... ($i/60)"
+            sleep 2
+          done
+          echo "Application never became ready"
+          cat app.log
+          exit 1
+
+      - name: Install Newman
+        run: npm install newman --no-save
+
+      - name: Run Postman collection (Security Module)
+        # Runs a curated subset of the Security Module folder — see the script for why 3 of the
+        # 9 requests (which carry hardcoded tokens from real emails) are excluded from CI.
+        run: node .github/scripts/run-e2e-security.js
+
+      - name: Show application log on failure
+        if: failure()
+        run: cat app.log || true
+
+      - name: Stop application
+        if: always()
+        run: |
+          if [ -f app.pid ]; then
+            kill "$(cat app.pid)" || true
+          fi
+
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose down -v
+
+      - name: Upload Newman report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-report
+          path: newman-report.xml
