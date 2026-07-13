@@ -18,10 +18,12 @@ spring:
       max-request-size: 25MB
 
   mail:
-    host: smtp.gmail.com
-    port: 587
-    username: thanhtre3651@gmail.com
-    password: ${GOOGLE_APP_PASSWORD:}
+    # MAIL_* are what the prod deploy (DATN-infra docker-compose.prod.yml) injects;
+    # GOOGLE_APP_PASSWORD is kept as the local-dev fallback.
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:thanhtre3651@gmail.com}
+    password: ${MAIL_PASSWORD:${GOOGLE_APP_PASSWORD:}}
     properties:
       mail:
         smtp:
