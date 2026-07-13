@@ -32,6 +32,8 @@ import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QuizDetails;
+import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
@@ -117,6 +119,9 @@ public class PostService {
     if (PostType.EVENT.equals(request.getPostType())) {
       validateEventDetails(request);
     }
+    if (request.getQuizDetails() != null) {
+      validateQuizDetails(request.getQuizDetails());
+    }
 
     PostEntity post = new PostEntity();
     BeanUtils.copyProperties(request, post);
@@ -161,6 +166,10 @@ public class PostService {
     verifyAuthor(actorId, post);
     findUserOrThrow(actorId);
     validateTags(request.getVisibility(), request.getTaggedUserIds(), request.getContent());
+
+    if (request.getQuizDetails() != null) {
+      validateQuizDetails(request.getQuizDetails());
+    }
 
     if (moderationProperties.isEnabled()) {
       ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, request.getContent());
@@ -306,6 +315,29 @@ public class PostService {
     }
     if (bookDetails.getTitle() == null || bookDetails.getTitle().isBlank()) {
       throw new ValidationException("Book title is required");
+    }
+  }
+
+  private void validateQuizDetails(QuizDetails quizDetails) {
+    if (!Strings.hasText(quizDetails.getTitle())) {
+      throw new ValidationException("Quiz title is required");
+    }
+    if (CollectionUtils.isEmpty(quizDetails.getQuestions())) {
+      throw new ValidationException("Quiz must have at least one question");
+    }
+    for (int i = 0; i < quizDetails.getQuestions().size(); i++) {
+      QuizQuestion q = quizDetails.getQuestions().get(i);
+      if (!Strings.hasText(q.getQuestion())) {
+        throw new ValidationException("Question text is required at index " + i);
+      }
+      if (CollectionUtils.isEmpty(q.getOptions()) || q.getOptions().size() < 2) {
+        throw new ValidationException("Question must have at least 2 options at index " + i);
+      }
+      if (q.getCorrectOptionIndex() == null
+          || q.getCorrectOptionIndex() < 0
+          || q.getCorrectOptionIndex() >= q.getOptions().size()) {
+        throw new ValidationException("Invalid correctOptionIndex at index " + i);
+      }
     }
   }
 }

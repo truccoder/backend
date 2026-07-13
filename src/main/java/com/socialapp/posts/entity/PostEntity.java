@@ -60,6 +60,10 @@ public class PostEntity {
   @Column(name = "event_details", columnDefinition = "jsonb")
   private EventDetails eventDetails;
 
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "quiz_details", columnDefinition = "jsonb")
+  private QuizDetails quizDetails;
+
   @Enumerated(EnumType.STRING)
   private ModerationStatus moderationStatus;
 
