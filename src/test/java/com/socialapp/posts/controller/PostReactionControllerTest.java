@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -28,6 +29,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.posts.dto.MyReactionResponseDto;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.service.PostReactionService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -91,6 +94,65 @@ class PostReactionControllerTest {
 
   private static String reactionsUrl(Integer postId) {
     return "/v1/api/posts/" + postId + "/reactions";
+  }
+
+  // =====================================================================
+  // GET /v1/api/posts/{postId}/reactions/me
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}/reactions/me")
+  class GetMyReactionTests {
+
+    @Test
+    @DisplayName("shouldReturn200WithReactionType_whenUserHasReacted_happyPath")
+    void shouldReturn200WithReactionType_whenUserHasReacted_happyPath() throws Exception {
+      // Given
+      when(postReactionService.getMyReaction(currentUser.getId(), 1))
+          .thenReturn(new MyReactionResponseDto(ReactionType.LOVE));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(1) + "/me")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.reactionType").value("LOVE"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200WithNullReactionType_whenUserHasNotReacted")
+    void shouldReturn200WithNullReactionType_whenUserHasNotReacted() throws Exception {
+      // Given
+      when(postReactionService.getMyReaction(currentUser.getId(), 1))
+          .thenReturn(new MyReactionResponseDto(null));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(1) + "/me")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.reactionType").value((String) null));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPostDoesNotExist")
+    void shouldReturn404_whenPostDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Post not found with ID: 999"))
+          .when(postReactionService)
+          .getMyReaction(anyInt(), eq(999));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(999) + "/me")))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.message").value("Post not found with ID: 999"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc.perform(get(reactionsUrl(1) + "/me")).andExpect(status().isUnauthorized());
+    }
   }
 
   // =====================================================================

@@ -2,6 +2,7 @@ package com.socialapp.posts.controller;
 
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.posts.dto.MyReactionResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.service.PostReactionService;
 import com.socialapp.security.util.SecurityUtils;
@@ -14,6 +15,11 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class PostReactionController {
   private final PostReactionService postReactionService;
+
+  @GetMapping("/me")
+  public MyReactionResponseDto getMyReaction(@PathVariable Integer postId) {
+    return postReactionService.getMyReaction(SecurityUtils.getCurrentUserId(), postId);
+  }
 
   @PutMapping
   public void upsertReaction(

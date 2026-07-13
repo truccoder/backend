@@ -9,6 +9,7 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.MyReactionResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostReactionEntity;
@@ -28,6 +29,17 @@ public class PostReactionService {
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
+
+  @Transactional(readOnly = true)
+  public MyReactionResponseDto getMyReaction(Integer userId, Integer postId) {
+    verifyPostExists(postId);
+    // A missing reaction is a normal state (not an error), so it maps to a null
+    // reactionType instead of a 404 — the frontend polls this on every post card.
+    return postReactionRepository
+        .findById(new PostReactionId(userId, postId))
+        .map(reaction -> new MyReactionResponseDto(reaction.getReactionType()))
+        .orElseGet(() -> new MyReactionResponseDto(null));
+  }
 
   @Transactional
   public void upsertReaction(Integer userId, Integer postId, UpsertPostReactionRequestDto request) {
