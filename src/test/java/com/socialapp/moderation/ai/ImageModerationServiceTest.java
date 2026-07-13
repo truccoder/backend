@@ -61,7 +61,16 @@ class ImageModerationServiceTest {
     WebClient.ResponseSpec responseSpec = mock(WebClient.ResponseSpec.class);
 
     when(webClient.post()).thenReturn(uriSpec);
-    when(uriSpec.uri(any(java.util.function.Function.class))).thenReturn(bodySpec);
+    when(uriSpec.uri(any(java.util.function.Function.class)))
+        .thenAnswer(
+            invocation -> {
+              java.util.function.Function<org.springframework.web.util.UriBuilder, java.net.URI>
+                  uriFunction = invocation.getArgument(0);
+              uriFunction.apply(
+                  org.springframework.web.util.UriComponentsBuilder.fromUriString(
+                      "http://cloud-vision.test"));
+              return bodySpec;
+            });
     when(bodySpec.bodyValue(any())).thenReturn(headersSpec);
     when(headersSpec.retrieve()).thenReturn(responseSpec);
     when(responseSpec.bodyToMono(Map.class)).thenReturn(responseMono);
@@ -206,6 +215,37 @@ class ImageModerationServiceTest {
       ImageSafeSearchResult result =
           imageModerationService.analyzeImage(1, 1, "http://img.test/1.jpg");
 
+      assertThat(result.getWorstLikelihood()).isEqualTo(Likelihood.UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("shouldReturnPending_whenResponsesListIsEmpty")
+    void shouldReturnPending_whenResponsesListIsEmpty() {
+      // Given — "responses" key is present but holds an empty list, the other branch of
+      // Objects.isNull(responses) || responses.isEmpty() from the missing-key case above
+      stubCloudVisionResponse(Mono.just(Map.of("responses", List.of())));
+
+      // When
+      ImageSafeSearchResult result =
+          imageModerationService.analyzeImage(1, 1, "http://img.test/1.jpg");
+
+      // Then
+      assertThat(result.getWorstLikelihood()).isEqualTo(Likelihood.UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("shouldReturnPending_whenSafeSearchAnnotationHasTheWrongShape")
+    void shouldReturnPending_whenSafeSearchAnnotationHasTheWrongShape() {
+      // Given — safeSearchAnnotation is not a Map as expected, so the cast in parseResponse
+      // throws a ClassCastException and must be caught rather than propagated
+      stubCloudVisionResponse(
+          Mono.just(Map.of("responses", List.of(Map.of("safeSearchAnnotation", "not-a-map")))));
+
+      // When
+      ImageSafeSearchResult result =
+          imageModerationService.analyzeImage(1, 1, "http://img.test/1.jpg");
+
+      // Then
       assertThat(result.getWorstLikelihood()).isEqualTo(Likelihood.UNKNOWN);
     }
   }
