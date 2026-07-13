@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,7 +32,10 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.dto.FriendListResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
+import com.socialapp.friendships.dto.PendingFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestDto;
 import com.socialapp.friendships.dto.UserProfileDto;
+import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -219,6 +223,103 @@ class FriendshipControllerTest {
     void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
       // When / Then
       mockMvc.perform(get(SUGGESTIONS_URL)).andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/friendships/requests/pending
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/friendships/requests/pending")
+  class GetPendingRequestsTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndIncomingRequests_whenCalledByAnAuthenticatedUser_happyPath")
+    void shouldReturn200AndIncomingRequests_whenCalledByAnAuthenticatedUser_happyPath()
+        throws Exception {
+      // Given
+      PendingFriendRequestDto request =
+          new PendingFriendRequestDto(
+              5,
+              2,
+              "Friend Two",
+              "http://cdn.example.com/avatar2.png",
+              FriendRequestStatus.PENDING,
+              OffsetDateTime.parse("2026-01-01T00:00:00Z"));
+      when(friendshipService.getPendingRequests(currentUser.getId())).thenReturn(List.of(request));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(FRIENDSHIPS_URL + "/requests/pending")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].id").value(5))
+          .andExpect(jsonPath("$[0].requesterId").value(2))
+          .andExpect(jsonPath("$[0].requesterFullName").value("Friend Two"))
+          .andExpect(jsonPath("$[0].status").value("PENDING"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndEmptyList_whenUserHasNoIncomingRequests")
+    void shouldReturn200AndEmptyList_whenUserHasNoIncomingRequests() throws Exception {
+      // Given
+      when(friendshipService.getPendingRequests(currentUser.getId())).thenReturn(List.of());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(FRIENDSHIPS_URL + "/requests/pending")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(get(FRIENDSHIPS_URL + "/requests/pending"))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/friendships/requests/sent
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/friendships/requests/sent")
+  class GetSentRequestsTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndOutgoingRequests_whenCalledByAnAuthenticatedUser_happyPath")
+    void shouldReturn200AndOutgoingRequests_whenCalledByAnAuthenticatedUser_happyPath()
+        throws Exception {
+      // Given
+      SentFriendRequestDto request =
+          new SentFriendRequestDto(
+              7,
+              3,
+              "Friend Three",
+              null,
+              FriendRequestStatus.PENDING,
+              OffsetDateTime.parse("2026-01-02T00:00:00Z"));
+      when(friendshipService.getSentRequests(currentUser.getId())).thenReturn(List.of(request));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(FRIENDSHIPS_URL + "/requests/sent")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].id").value(7))
+          .andExpect(jsonPath("$[0].addresseeId").value(3))
+          .andExpect(jsonPath("$[0].addresseeFullName").value("Friend Three"))
+          .andExpect(jsonPath("$[0].status").value("PENDING"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc.perform(get(FRIENDSHIPS_URL + "/requests/sent")).andExpect(status().isUnauthorized());
     }
   }
 

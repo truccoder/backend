@@ -6,6 +6,8 @@ import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.friendships.dto.FriendListResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
+import com.socialapp.friendships.dto.PendingFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestDto;
 import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.security.util.SecurityUtils;
 
@@ -29,6 +31,16 @@ public class FriendshipController {
   public List<FriendSuggestionDto> getSuggestions(
       @RequestParam(defaultValue = "10") @Positive int limit) {
     return friendshipService.getSuggestions(SecurityUtils.getCurrentUserId(), limit);
+  }
+
+  @GetMapping("/requests/pending")
+  public List<PendingFriendRequestDto> getPendingRequests() {
+    return friendshipService.getPendingRequests(SecurityUtils.getCurrentUserId());
+  }
+
+  @GetMapping("/requests/sent")
+  public List<SentFriendRequestDto> getSentRequests() {
+    return friendshipService.getSentRequests(SecurityUtils.getCurrentUserId());
   }
 
   @PostMapping("/requests/{addresseeId}")

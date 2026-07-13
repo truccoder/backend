@@ -1,5 +1,11 @@
 package com.socialapp.posts.service;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -12,6 +18,7 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -31,6 +38,36 @@ public class CommentService {
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
+
+  @Transactional(readOnly = true)
+  public List<CommentResponseDto> getComments(Integer postId) {
+    verifyPostExists(postId);
+
+    List<CommentEntity> comments = commentRepository.findByPostIdOrderByCreatedAtAsc(postId);
+    Set<Integer> authorIds =
+        comments.stream().map(CommentEntity::getAuthorId).collect(Collectors.toSet());
+    Map<Integer, UserEntity> authorsById =
+        userRepository.findAllById(authorIds).stream()
+            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+
+    return comments.stream().map(comment -> toResponseDto(comment, authorsById)).toList();
+  }
+
+  private CommentResponseDto toResponseDto(
+      CommentEntity comment, Map<Integer, UserEntity> authorsById) {
+    UserEntity author = authorsById.get(comment.getAuthorId());
+    return CommentResponseDto.builder()
+        .id(comment.getId())
+        .postId(comment.getPostId())
+        .authorId(comment.getAuthorId())
+        .authorFullName(author != null ? author.getFullName() : null)
+        .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
+        .content(comment.getContent())
+        .parentId(comment.getParentId())
+        .createdAt(comment.getCreatedAt())
+        .updatedAt(comment.getUpdatedAt())
+        .build();
+  }
 
   @Transactional
   public void createComment(Integer authorId, Integer postId, CreateCommentRequestDto request) {

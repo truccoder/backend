@@ -24,7 +24,7 @@ public class SpamDetector {
   private static final int MAX_POSTS_PER_MINUTE = 5;
 
   public boolean isDuplicateContent(Integer authorId, String content) {
-    if (Strings.hasText(content)) {
+    if (!Strings.hasText(content)) {
       return false;
     }
 

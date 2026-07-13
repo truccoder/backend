@@ -1,5 +1,6 @@
 package com.socialapp.friendships.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,6 +11,12 @@ import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 
 public interface FriendRequestRepository extends JpaRepository<FriendRequestEntity, Integer> {
+  List<FriendRequestEntity> findByAddresseeIdAndStatusOrderByCreatedAtDesc(
+      Integer addresseeId, FriendRequestStatus status);
+
+  List<FriendRequestEntity> findByRequesterIdAndStatusOrderByCreatedAtDesc(
+      Integer requesterId, FriendRequestStatus status);
+
   @Query(
       """
       SELECT f FROM FriendRequestEntity f

@@ -22,6 +22,8 @@ import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.friendships.dto.FriendListResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.dto.MutualFriendCountDto;
+import com.socialapp.friendships.dto.PendingFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
@@ -166,6 +168,54 @@ public class FriendshipService {
 
     return new FriendListResponseDto(
         friends, nextCursor, hasMore, friendshipRepository.countFriends(userId));
+  }
+
+  public List<PendingFriendRequestDto> getPendingRequests(Integer userId) {
+    List<FriendRequestEntity> requests =
+        friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(
+            userId, FriendRequestStatus.PENDING);
+
+    Map<Integer, UserProfileDto> profilesById =
+        loadProfiles(
+            requests.stream().map(FriendRequestEntity::getRequesterId).collect(Collectors.toSet()));
+
+    return requests.stream()
+        .map(
+            request -> {
+              UserProfileDto profile = profilesById.get(request.getRequesterId());
+              return new PendingFriendRequestDto(
+                  request.getId(),
+                  request.getRequesterId(),
+                  profile != null ? profile.fullName() : null,
+                  profile != null ? profile.profilePictureUrl() : null,
+                  request.getStatus(),
+                  request.getCreatedAt());
+            })
+        .toList();
+  }
+
+  public List<SentFriendRequestDto> getSentRequests(Integer userId) {
+    List<FriendRequestEntity> requests =
+        friendRequestRepository.findByRequesterIdAndStatusOrderByCreatedAtDesc(
+            userId, FriendRequestStatus.PENDING);
+
+    Map<Integer, UserProfileDto> profilesById =
+        loadProfiles(
+            requests.stream().map(FriendRequestEntity::getAddresseeId).collect(Collectors.toSet()));
+
+    return requests.stream()
+        .map(
+            request -> {
+              UserProfileDto profile = profilesById.get(request.getAddresseeId());
+              return new SentFriendRequestDto(
+                  request.getId(),
+                  request.getAddresseeId(),
+                  profile != null ? profile.fullName() : null,
+                  profile != null ? profile.profilePictureUrl() : null,
+                  request.getStatus(),
+                  request.getCreatedAt());
+            })
+        .toList();
   }
 
   public List<FriendSuggestionDto> getSuggestions(Integer userId, int limit) {
