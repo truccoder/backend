@@ -1,7 +1,10 @@
 package com.socialapp.posts.controller;
 
+import java.util.List;
+
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.service.CommentService;
@@ -14,6 +17,11 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class CommentController {
   private final CommentService commentService;
+
+  @GetMapping
+  public List<CommentResponseDto> getComments(@PathVariable Integer postId) {
+    return commentService.getComments(postId);
+  }
 
   @PostMapping
   public void createComment(

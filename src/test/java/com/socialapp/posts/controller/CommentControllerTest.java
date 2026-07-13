@@ -7,12 +7,14 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +33,7 @@ import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.service.CommentService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -93,6 +96,65 @@ class CommentControllerTest {
 
   private static String commentsUrl(Integer postId) {
     return "/v1/api/posts/" + postId + "/comments";
+  }
+
+  // =====================================================================
+  // GET /v1/api/posts/{postId}/comments
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}/comments")
+  class GetCommentsTests {
+
+    @Test
+    @DisplayName("shouldReturn200WithComments_whenPostExists_happyPath")
+    void shouldReturn200WithComments_whenPostExists_happyPath() throws Exception {
+      // Given
+      CommentResponseDto comment =
+          CommentResponseDto.builder()
+              .id(10)
+              .postId(1)
+              .authorId(2)
+              .authorFullName("Author Two")
+              .authorProfilePictureUrl("http://cdn.example.com/avatar2.png")
+              .content("First!")
+              .parentId(null)
+              .createdAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"))
+              .updatedAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"))
+              .build();
+      when(commentService.getComments(1)).thenReturn(List.of(comment));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(commentsUrl(1))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].id").value(10))
+          .andExpect(jsonPath("$[0].authorId").value(2))
+          .andExpect(jsonPath("$[0].authorFullName").value("Author Two"))
+          .andExpect(jsonPath("$[0].content").value("First!"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPostDoesNotExist")
+    void shouldReturn404_whenPostDoesNotExist() throws Exception {
+      // Given
+      doThrow(new NotFoundException("Post not found with ID: 999"))
+          .when(commentService)
+          .getComments(999);
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(commentsUrl(999))))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.message").value("Post not found with ID: 999"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc.perform(get(commentsUrl(1))).andExpect(status().isUnauthorized());
+    }
   }
 
   // =====================================================================

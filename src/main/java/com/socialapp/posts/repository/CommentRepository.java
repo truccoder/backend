@@ -9,6 +9,8 @@ import com.socialapp.posts.entity.CommentEntity;
 
 @Repository
 public interface CommentRepository extends JpaRepository<CommentEntity, Integer> {
+  List<CommentEntity> findByPostIdOrderByCreatedAtAsc(Integer postId);
+
   List<CommentEntity> findByPostIdAndParentIdIsNullOrderByCreatedAtAsc(Integer postId);
 
   List<CommentEntity> findByParentIdOrderByCreatedAtAsc(Integer parentId);
