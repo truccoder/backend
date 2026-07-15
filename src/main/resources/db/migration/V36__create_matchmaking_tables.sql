@@ -1,0 +1,33 @@
+CREATE TABLE t_projects (
+    id SERIAL PRIMARY KEY,
+    author_id INTEGER NOT NULL REFERENCES t_users(id),
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    banner_url VARCHAR(500),
+    status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE t_project_positions (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES t_projects(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    required_skills JSONB,
+    quantity INTEGER DEFAULT 1,
+    status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE t_project_applications (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES t_projects(id) ON DELETE CASCADE,
+    position_id INTEGER NOT NULL REFERENCES t_project_positions(id) ON DELETE CASCADE,
+    applicant_id INTEGER NOT NULL REFERENCES t_users(id),
+    message TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
