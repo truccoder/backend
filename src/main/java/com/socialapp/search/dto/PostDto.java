@@ -2,6 +2,13 @@ package com.socialapp.search.dto;
 
 import java.time.LocalDateTime;
 
+import com.socialapp.posts.entity.ArticleDetails;
+import com.socialapp.posts.entity.CodeSnippetDetails;
+import com.socialapp.posts.entity.LinkDetails;
+import com.socialapp.posts.entity.PollDetails;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,4 +33,11 @@ public class PostDto {
    * title/description matched the search query.
    */
   private BookDto book;
+
+  private QuizDetails quizDetails;
+  private CodeSnippetDetails codeSnippetDetails;
+  private ArticleDetails articleDetails;
+  private QnaDetails qnaDetails;
+  private PollDetails pollDetails;
+  private LinkDetails linkDetails;
 }

@@ -64,6 +64,26 @@ public class PostEntity {
   @Column(name = "quiz_details", columnDefinition = "jsonb")
   private QuizDetails quizDetails;
 
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "code_snippet_details", columnDefinition = "jsonb")
+  private CodeSnippetDetails codeSnippetDetails;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "article_details", columnDefinition = "jsonb")
+  private ArticleDetails articleDetails;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "qna_details", columnDefinition = "jsonb")
+  private QnaDetails qnaDetails;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "poll_details", columnDefinition = "jsonb")
+  private PollDetails pollDetails;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "link_details", columnDefinition = "jsonb")
+  private LinkDetails linkDetails;
+
   @Enumerated(EnumType.STRING)
   private ModerationStatus moderationStatus;
 
