@@ -128,3 +128,9 @@ momo:
   api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
+
+github:
+  oauth:
+    client-id: "Iv23liGlYEjYvQYayYQC"
+    client-secret: "75f0511e0e9a27cea8d23a63e0b441d0afa25258"
+    redirect-uri: "http://localhost:3000/oauth/github/callback"
