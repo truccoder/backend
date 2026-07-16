@@ -101,6 +101,11 @@ gemini:
   max-output-tokens: 8192
   temperature: 0.7
 
+stream:
+  chat:
+    api-key: ${STREAM_API_KEY:}
+    api-secret: ${STREAM_API_SECRET:}
+
 trending:
   crawl-interval-ms: 3600000
 
