@@ -28,6 +28,10 @@ public class TokenService {
   private final UserProfessionalProfileRepository professionalProfileRepository;
 
   public AuthResponseDto issueTokens(UserEntity user) {
+    return issueTokens(user, false, false);
+  }
+
+  public AuthResponseDto issueTokens(UserEntity user, boolean isAutoLinked, boolean isNewUser) {
     String jobTitle =
         professionalProfileRepository
             .findById(user.getId())
@@ -39,7 +43,9 @@ public class TokenService {
         accessToken,
         refreshToken.getToken(),
         TOKEN_TYPE,
-        jwtProperties.getAccessTokenExpirationMs() / 1000);
+        jwtProperties.getAccessTokenExpirationMs() / 1000,
+        isAutoLinked,
+        isNewUser);
   }
 
   public boolean isRefreshTokenExpired(RefreshToken refreshToken) {

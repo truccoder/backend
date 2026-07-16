@@ -91,7 +91,8 @@ class AuthControllerTest {
   private static final String LOGOUT_URL = "/v1/api/auth/logout";
 
   private static AuthResponseDto sampleAuthResponse() {
-    return new AuthResponseDto("access-token-abc", "refresh-token-xyz", "Bearer", 3600L);
+    return new AuthResponseDto(
+        "access-token-abc", "refresh-token-xyz", "Bearer", 3600L, false, false);
   }
 
   // =====================================================================

@@ -79,4 +79,14 @@ public class AuthController {
   public AuthResponseDto loginWithGoogle(@Valid @RequestBody GoogleLoginRequestDto request) {
     return authService.loginWithGoogle(request.getCode());
   }
+
+  @GetMapping("/github/url")
+  public OAuthUrlResponseDto getGithubOAuthUrl() {
+    return authService.getGithubOAuthUrl();
+  }
+
+  @PostMapping("/github/callback")
+  public AuthResponseDto loginWithGithub(@Valid @RequestBody GithubLoginRequestDto request) {
+    return authService.loginWithGithub(request.getCode());
+  }
 }

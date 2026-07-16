@@ -273,7 +273,8 @@ class AuthServiceTest {
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       when(userRepository.findByEmailIgnoreCase(EMAIL)).thenReturn(Optional.of(user));
       when(passwordEncoder.matches(RAW_PASSWORD, ENCODED_PASSWORD)).thenReturn(true);
-      AuthResponseDto expected = new AuthResponseDto("access", "refresh", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access", "refresh", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
       LoginRequestDto request = new LoginRequestDto(" User@Example.com ", RAW_PASSWORD);
 
@@ -358,7 +359,8 @@ class AuthServiceTest {
       when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(false);
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
-      AuthResponseDto expected = new AuthResponseDto("access2", "refresh2", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access2", "refresh2", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
 
       // When
@@ -732,7 +734,8 @@ class AuthServiceTest {
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
-      AuthResponseDto expected = new AuthResponseDto("access", "refresh", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access", "refresh", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
 
       // When

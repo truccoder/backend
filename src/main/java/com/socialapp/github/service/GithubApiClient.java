@@ -38,7 +38,7 @@ public class GithubApiClient {
 
   public String getOAuthUrl() {
     return String.format(
-        "https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=read:user",
+        "https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=read:user%%20user:email",
         clientId, redirectUri);
   }
 
@@ -70,6 +70,17 @@ public class GithubApiClient {
     return webClient
         .get()
         .uri("https://api.github.com/user")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .retrieve()
+        .bodyToMono(JsonNode.class)
+        .block();
+  }
+
+  public JsonNode getUserEmails(String accessToken) {
+    return webClient
+        .get()
+        .uri("https://api.github.com/user/emails")
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
         .header("X-GitHub-Api-Version", "2022-11-28")
         .retrieve()

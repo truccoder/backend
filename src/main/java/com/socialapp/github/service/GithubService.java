@@ -32,7 +32,12 @@ public class GithubService {
   public void linkAccountWithCode(UserEntity user, String code) {
     String accessToken = githubApiClient.exchangeCodeForToken(code);
     JsonNode githubUser = githubApiClient.getAuthenticatedUser(accessToken);
+    linkAccountWithTokenAndProfile(user, accessToken, githubUser);
+  }
 
+  @Transactional
+  public void linkAccountWithTokenAndProfile(
+      UserEntity user, String accessToken, JsonNode githubUser) {
     if (!githubUser.has("login")) {
       throw new RuntimeException("Invalid GitHub user response");
     }
