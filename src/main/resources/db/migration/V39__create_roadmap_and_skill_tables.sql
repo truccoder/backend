@@ -1,0 +1,45 @@
+-- V39__create_roadmap_and_skill_tables.sql
+
+CREATE TABLE t_roadmaps (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE t_roadmap_nodes (
+    id SERIAL PRIMARY KEY,
+    roadmap_id INTEGER NOT NULL REFERENCES t_roadmaps(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    parent_node_id INTEGER REFERENCES t_roadmap_nodes(id) ON DELETE SET NULL,
+    order_index INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE t_user_roadmap_progress (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES t_users(id) ON DELETE CASCADE,
+    node_id INTEGER NOT NULL REFERENCES t_roadmap_nodes(id) ON DELETE CASCADE,
+    
+    -- TIER 1: SELF_VERIFIED
+    -- TIER 2: MOD_VERIFIED, QUIZ_VERIFIED
+    -- TIER 3: AUTO_CERTIFIED
+    tier VARCHAR(50) NOT NULL,
+    
+    -- PENDING_APPROVAL, VERIFIED, REJECTED
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING_APPROVAL',
+    
+    proof_url TEXT,
+    proof_image_key TEXT,
+    
+    verifier_id INTEGER REFERENCES t_users(id) ON DELETE SET NULL,
+    verified_at TIMESTAMP WITH TIME ZONE,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_user_node UNIQUE (user_id, node_id)
+);
