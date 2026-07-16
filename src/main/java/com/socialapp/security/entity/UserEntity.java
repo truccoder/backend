@@ -38,6 +38,11 @@ public class UserEntity {
   @Enumerated(EnumType.STRING)
   private UserRole role = UserRole.USER;
 
+  @Enumerated(EnumType.STRING)
+  private AuthProvider authProvider = AuthProvider.LOCAL;
+
+  private String providerId;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;

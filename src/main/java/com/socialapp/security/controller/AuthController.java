@@ -1,6 +1,7 @@
 package com.socialapp.security.controller;
 
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -67,5 +68,15 @@ public class AuthController {
   @PostMapping("/logout")
   public void logout(@Valid @RequestBody RefreshTokenRequestDto request) {
     authService.logout(request);
+  }
+
+  @GetMapping("/google/url")
+  public OAuthUrlResponseDto getGoogleOAuthUrl() {
+    return authService.getGoogleOAuthUrl();
+  }
+
+  @PostMapping("/google/callback")
+  public AuthResponseDto loginWithGoogle(@Valid @RequestBody GoogleLoginRequestDto request) {
+    return authService.loginWithGoogle(request.getCode());
   }
 }

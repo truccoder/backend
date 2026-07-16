@@ -118,6 +118,17 @@ google:
     client-secret: ${GOOGLE_CALENDAR_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_CALENDAR_REDIRECT_URI:http://localhost:8080/v1/api/events/google/callback}
 
+  oauth:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
+    client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${GOOGLE_OAUTH_REDIRECT_URI:http://localhost:3000/oauth/google/callback}
+
+github:
+  oauth:
+    client-id: ${GITHUB_OAUTH_CLIENT_ID:}
+    client-secret: ${GITHUB_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${GITHUB_OAUTH_REDIRECT_URI:http://localhost:3000/oauth/github/callback}
+
 # MoMo AIO v2 sandbox. partner-code/access-key/secret-key default to MoMo's own publicly
 # published test credentials (github.com/momo-wallet/payment) so this works out of the box
 # against test-payment.momo.vn; override once you have your own sandbox merchant.
@@ -128,9 +139,3 @@ momo:
   api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
-
-github:
-  oauth:
-    client-id: "Iv23liGlYEjYvQYayYQC"
-    client-secret: "75f0511e0e9a27cea8d23a63e0b441d0afa25258"
-    redirect-uri: "http://localhost:3000/oauth/github/callback"
