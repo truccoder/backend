@@ -23,9 +23,6 @@ public class ProjectController {
   @PostMapping
   public ResponseEntity<?> createProject(@RequestBody ProjectRequestDTO request) {
     Integer authorId = SecurityUtils.getCurrentUserId();
-    if (authorId == null) {
-      authorId = 1; // Fallback for dev if needed
-    }
     projectService.createProject(authorId, request);
     return ResponseEntity.ok(Map.of("message", "Project created successfully"));
   }
@@ -34,9 +31,6 @@ public class ProjectController {
   public ResponseEntity<?> applyToPosition(
       @PathVariable Integer positionId, @RequestBody ApplicationRequestDTO request) {
     Integer applicantId = SecurityUtils.getCurrentUserId();
-    if (applicantId == null) {
-      applicantId = 2; // Fallback for dev if needed
-    }
     projectService.applyToPosition(applicantId, positionId, request.getMessage());
     return ResponseEntity.ok(Map.of("message", "Applied successfully"));
   }
@@ -44,11 +38,15 @@ public class ProjectController {
   @PutMapping("/applications/{applicationId}/accept")
   public ResponseEntity<?> acceptApplication(@PathVariable Integer applicationId) {
     Integer ownerId = SecurityUtils.getCurrentUserId();
-    if (ownerId == null) {
-      ownerId = 1; // Fallback for dev if needed
-    }
     projectService.acceptApplication(ownerId, applicationId);
     return ResponseEntity.ok(Map.of("message", "Application accepted"));
+  }
+
+  @PutMapping("/applications/{applicationId}/reject")
+  public ResponseEntity<?> rejectApplication(@PathVariable Integer applicationId) {
+    Integer ownerId = SecurityUtils.getCurrentUserId();
+    projectService.rejectApplication(ownerId, applicationId);
+    return ResponseEntity.ok(Map.of("message", "Application rejected"));
   }
 
   @GetMapping("/positions/{positionId}/suggested-candidates")

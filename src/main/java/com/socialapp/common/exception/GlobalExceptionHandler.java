@@ -386,6 +386,23 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // A required server-side secret/key is unset (e.g. Stream Chat's api-secret) — never the
+  // caller's fault, and must not be silently masked by a fallback value. 503 signals the feature
+  // itself is unavailable until an operator fixes the deployment config, same rationale as
+  // StorageException/PaymentException above.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(MissingConfigurationException.class)
+  public ErrorResponseDto handle(MissingConfigurationException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(AccessDeniedException.class)
   public ErrorResponseDto handle(AccessDeniedException ex, HttpServletRequest request) {

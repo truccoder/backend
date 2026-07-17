@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
 import com.socialapp.github.dto.GithubStatsResponse;
 import com.socialapp.github.entity.GithubStatsEntity;
@@ -120,12 +121,12 @@ public class GithubService {
     GithubStatsEntity entity =
         githubStatsRepository
             .findByUserId(userId)
-            .orElseThrow(() -> new RuntimeException("GitHub account not linked"));
+            .orElseThrow(() -> new NotFoundException("GitHub account not linked"));
 
     // Basic rate limiting for manual sync: e.g. 1 hour
     if (entity.getLastSyncedAt() != null
         && entity.getLastSyncedAt().plusHours(1).isAfter(OffsetDateTime.now())) {
-      throw new RuntimeException("Please wait at least 1 hour before syncing again");
+      throw new IllegalStateException("Please wait at least 1 hour before syncing again");
     }
 
     syncGithubData(entity);

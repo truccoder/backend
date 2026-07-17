@@ -5,6 +5,8 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectApplicationEntity;
 import com.socialapp.matchmaking.entity.ProjectEntity;
@@ -30,7 +32,9 @@ public class ProjectService {
   @Transactional
   public ProjectEntity createProject(Integer authorId, ProjectRequestDTO request) {
     UserEntity author =
-        userRepository.findById(authorId).orElseThrow(() -> new RuntimeException("User not found"));
+        userRepository
+            .findById(authorId)
+            .orElseThrow(() -> new NotFoundException("User not found"));
 
     ProjectEntity project = new ProjectEntity();
     project.setAuthor(author);
@@ -63,14 +67,14 @@ public class ProjectService {
     UserEntity applicant =
         userRepository
             .findById(applicantId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
+            .orElseThrow(() -> new NotFoundException("User not found"));
     ProjectPositionEntity position =
         positionRepository
             .findById(positionId)
-            .orElseThrow(() -> new RuntimeException("Position not found"));
+            .orElseThrow(() -> new NotFoundException("Position not found"));
 
     if (position.getStatus() != PositionStatus.OPEN) {
-      throw new RuntimeException("Position is not open for applications");
+      throw new IllegalStateException("Position is not open for applications");
     }
 
     ProjectApplicationEntity application = new ProjectApplicationEntity();
@@ -84,20 +88,18 @@ public class ProjectService {
 
   @Transactional
   public ProjectApplicationEntity acceptApplication(Integer ownerId, Integer applicationId) {
-    ProjectApplicationEntity application =
-        applicationRepository
-            .findById(applicationId)
-            .orElseThrow(() -> new RuntimeException("Application not found"));
+    ProjectApplicationEntity application = requireOwnedPendingApplication(ownerId, applicationId);
 
-    if (!application.getProject().getAuthor().getId().equals(ownerId)) {
-      throw new RuntimeException("Not authorized to accept this application");
+    ProjectPositionEntity position = application.getPosition();
+    if (position.getStatus() != PositionStatus.OPEN) {
+      throw new IllegalStateException(
+          "Cannot accept an application for a position that is already " + position.getStatus());
     }
 
     application.setStatus(ApplicationStatus.ACCEPTED);
     ProjectApplicationEntity savedApp = applicationRepository.save(application);
 
     // Check if position is filled
-    ProjectPositionEntity position = application.getPosition();
     long acceptedCount =
         position.getProject().getApplications().stream()
             .filter(
@@ -112,5 +114,37 @@ public class ProjectService {
     }
 
     return savedApp;
+  }
+
+  @Transactional
+  public ProjectApplicationEntity rejectApplication(Integer ownerId, Integer applicationId) {
+    ProjectApplicationEntity application = requireOwnedPendingApplication(ownerId, applicationId);
+
+    application.setStatus(ApplicationStatus.REJECTED);
+    return applicationRepository.save(application);
+  }
+
+  /**
+   * Shared guard for {@link #acceptApplication} and {@link #rejectApplication}: the application
+   * must exist, belong to a project owned by {@code ownerId}, and still be {@code PENDING} — an
+   * already-decided application (ACCEPTED or REJECTED) cannot be re-decided.
+   */
+  private ProjectApplicationEntity requireOwnedPendingApplication(
+      Integer ownerId, Integer applicationId) {
+    ProjectApplicationEntity application =
+        applicationRepository
+            .findById(applicationId)
+            .orElseThrow(() -> new NotFoundException("Application not found"));
+
+    if (!application.getProject().getAuthor().getId().equals(ownerId)) {
+      throw new ForbiddenException("Not authorized to decide on this application");
+    }
+
+    if (application.getStatus() != ApplicationStatus.PENDING) {
+      throw new IllegalStateException(
+          "Cannot decide on an application that is already " + application.getStatus());
+    }
+
+    return application;
   }
 }

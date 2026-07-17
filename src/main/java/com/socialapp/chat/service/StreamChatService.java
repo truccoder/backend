@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.socialapp.common.exception.MissingConfigurationException;
+
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import javax.crypto.SecretKey;
@@ -19,8 +21,9 @@ public class StreamChatService {
 
   public String generateUserToken(Integer userId) {
     if (apiSecret == null || apiSecret.isBlank()) {
-      log.warn("Stream API secret is not configured. Returning dummy token.");
-      return "dummy-token-because-secret-is-missing";
+      throw new MissingConfigurationException(
+          "Stream Chat is not configured (missing stream.chat.api-secret); cannot issue a chat"
+              + " token");
     }
 
     try {

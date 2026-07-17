@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
@@ -14,7 +15,6 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class MatchmakingService {
-
   private final UserProfessionalProfileRepository profileRepository;
   private final ProjectPositionRepository positionRepository;
 
@@ -22,7 +22,7 @@ public class MatchmakingService {
     ProjectPositionEntity position =
         positionRepository
             .findById(positionId)
-            .orElseThrow(() -> new RuntimeException("Position not found"));
+            .orElseThrow(() -> new NotFoundException("Position not found"));
 
     List<String> skills = position.getRequiredSkills();
     if (skills == null || skills.isEmpty()) {

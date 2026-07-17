@@ -6,6 +6,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.roadmap.dto.RoadmapDto;
 import com.socialapp.roadmap.dto.RoadmapNodeDto;
 import com.socialapp.roadmap.entity.RoadmapEntity;
@@ -49,14 +50,14 @@ public class RoadmapService {
     RoadmapEntity roadmap =
         roadmapRepository
             .findById(roadmapId)
-            .orElseThrow(() -> new RuntimeException("Roadmap not found"));
+            .orElseThrow(() -> new NotFoundException("Roadmap not found"));
 
     RoadmapNodeEntity parentNode = null;
     if (dto.getParentNodeId() != null) {
       parentNode =
           roadmapNodeRepository
               .findById(dto.getParentNodeId())
-              .orElseThrow(() -> new RuntimeException("Parent node not found"));
+              .orElseThrow(() -> new NotFoundException("Parent node not found"));
     }
 
     RoadmapNodeEntity node =

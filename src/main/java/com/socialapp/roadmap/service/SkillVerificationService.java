@@ -7,6 +7,8 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -26,15 +28,16 @@ public class SkillVerificationService {
   private final UserRoadmapProgressRepository progressRepository;
   private final RoadmapNodeRepository nodeRepository;
   private final UserRepository userRepository;
+  private final GithubStatsRepository githubStatsRepository;
 
   @Transactional
   public void submitVerificationRequest(Integer userId, SkillVerificationRequestDto dto) {
     UserEntity user =
-        userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+        userRepository.findById(userId).orElseThrow(() -> new NotFoundException("User not found"));
     RoadmapNodeEntity node =
         nodeRepository
             .findById(dto.getNodeId())
-            .orElseThrow(() -> new RuntimeException("Node not found"));
+            .orElseThrow(() -> new NotFoundException("Node not found"));
 
     Optional<UserRoadmapProgressEntity> existingProgress =
         progressRepository.findByUserIdAndNodeId(userId, dto.getNodeId());
@@ -54,8 +57,6 @@ public class SkillVerificationService {
         || dto.getTier() == VerificationTier.QUIZ_VERIFIED) {
       progress.setStatus(VerificationStatus.PENDING_APPROVAL);
     } else if (dto.getTier() == VerificationTier.AUTO_CERTIFIED) {
-      // TODO: Implement external API call (GitHub/Credly) using the user's OAuth token
-      // For now, assume it's pending a background job or synchronously verified
       boolean isValid = verifyViaExternalApi(user, dto.getProofUrl());
       if (isValid) {
         progress.setStatus(VerificationStatus.VERIFIED);
@@ -68,10 +69,21 @@ public class SkillVerificationService {
     progressRepository.save(progress);
   }
 
+  /**
+   * AUTO_CERTIFIED proof is accepted only when it points at a repository under the user's own
+   * linked GitHub account — reusing the account already synced via the {@code github} module
+   * rather than issuing a fresh GitHub API call per verification request. No linked account, no
+   * proof URL, or a URL under someone else's username are all rejected.
+   */
   private boolean verifyViaExternalApi(UserEntity user, String proofUrl) {
-    // Logic to use GitHub OAuth token or Credly API
-    // E.g., fetch repositories and check if proofUrl is among them
-    return true; // Mock true for now
+    if (proofUrl == null || proofUrl.isBlank()) {
+      return false;
+    }
+
+    return githubStatsRepository
+        .findByUserId(user.getId())
+        .map(stats -> proofUrl.startsWith("https://github.com/" + stats.getGithubUsername() + "/"))
+        .orElse(false);
   }
 
   @Transactional
@@ -79,11 +91,17 @@ public class SkillVerificationService {
     UserRoadmapProgressEntity progress =
         progressRepository
             .findById(progressId)
-            .orElseThrow(() -> new RuntimeException("Progress not found"));
+            .orElseThrow(() -> new NotFoundException("Progress not found"));
+
+    if (progress.getStatus() != VerificationStatus.PENDING_APPROVAL) {
+      throw new IllegalStateException(
+          "Cannot approve a verification request that is already " + progress.getStatus());
+    }
+
     UserEntity moderator =
         userRepository
             .findById(moderatorId)
-            .orElseThrow(() -> new RuntimeException("Moderator not found"));
+            .orElseThrow(() -> new NotFoundException("Moderator not found"));
 
     progress.setStatus(VerificationStatus.VERIFIED);
     progress.setVerifier(moderator);
@@ -96,11 +114,17 @@ public class SkillVerificationService {
     UserRoadmapProgressEntity progress =
         progressRepository
             .findById(progressId)
-            .orElseThrow(() -> new RuntimeException("Progress not found"));
+            .orElseThrow(() -> new NotFoundException("Progress not found"));
+
+    if (progress.getStatus() != VerificationStatus.PENDING_APPROVAL) {
+      throw new IllegalStateException(
+          "Cannot reject a verification request that is already " + progress.getStatus());
+    }
+
     UserEntity moderator =
         userRepository
             .findById(moderatorId)
-            .orElseThrow(() -> new RuntimeException("Moderator not found"));
+            .orElseThrow(() -> new NotFoundException("Moderator not found"));
 
     progress.setStatus(VerificationStatus.REJECTED);
     progress.setVerifier(moderator);
