@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'jacoco'
+    id 'pmd'
     id 'org.springframework.boot' version '3.2.5'
     id 'io.spring.dependency-management' version '1.1.4'
     id "com.diffplug.spotless" version '6.25.0'
@@ -127,6 +128,19 @@ jacocoTestCoverageVerification {
 
 tasks.named('check') {
     dependsOn jacocoTestCoverageVerification
+}
+
+pmd {
+    // Production code only — test classes legitimately rack up rule-count/method-count that
+    // isn't a real design smell (many @Test methods per class, one per behavior).
+    sourceSets = [sourceSets.main]
+    ruleSetFiles = files('config/pmd/ruleset.xml')
+    ruleSets = []
+    // Report-only for now: surfaces every SOLID/OOP design violation on each build without
+    // breaking a build that's currently green. Flip to false once the existing backlog (see
+    // build/reports/pmd/main.html) has been triaged and is intentionally kept at zero.
+    ignoreFailures = true
+    consoleOutput = true
 }
 
 spotless {

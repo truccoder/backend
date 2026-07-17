@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="DATN-backend OOP/SOLID design rules"
+    xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+  <description>
+    Flags OOP/SOLID design smells (god classes, excessive coupling, high complexity,
+    broken single-responsibility) on every build. Scoped to PMD's "design" category
+    rather than the full default rule set, since the goal is catching SOLID/OOP
+    violations specifically, not general style nits (spotless/google-java-format
+    already own formatting).
+  </description>
+
+  <rule ref="category/java/design.xml/GodClass" />
+  <rule ref="category/java/design.xml/TooManyFields" />
+  <rule ref="category/java/design.xml/TooManyMethods" />
+  <rule ref="category/java/design.xml/ExcessiveParameterList" />
+  <rule ref="category/java/design.xml/ExcessivePublicCount" />
+  <rule ref="category/java/design.xml/CouplingBetweenObjects" />
+  <rule ref="category/java/design.xml/CyclomaticComplexity" />
+  <rule ref="category/java/design.xml/NPathComplexity" />
+  <rule ref="category/java/design.xml/CognitiveComplexity" />
+  <rule ref="category/java/design.xml/SimplifyBooleanReturns" />
+  <rule ref="category/java/design.xml/AvoidDeeplyNestedIfStmts" />
+  <rule ref="category/java/design.xml/UseUtilityClass" />
+</ruleset>
