@@ -98,6 +98,10 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Activates src/test/resources/application-test.yml (test-only JWT secret, disabled
+    // scheduling/moderation, etc.) for every test context, including @WebMvcTest slices that
+    // don't declare @ActiveProfiles("test") themselves.
+    systemProperty 'spring.profiles.active', 'test'
     finalizedBy jacocoTestReport
 }
 

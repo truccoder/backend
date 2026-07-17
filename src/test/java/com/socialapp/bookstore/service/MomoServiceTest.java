@@ -3,16 +3,14 @@ package com.socialapp.bookstore.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -25,35 +23,29 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.web.reactive.function.client.WebClient;
 
-import com.socialapp.bookstore.config.MomoProperties;
 import com.socialapp.bookstore.dto.PaymentResponseDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.BookPurchaseEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.exception.PaymentException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import reactor.core.publisher.Mono;
-
 /**
  * Component (unit) tests for {@link MomoService}, per ISTQB CTFL v4.0.1 (Section 2.2.1 component
  * testing, Section 5.1.6 test pyramid, Section 4.3.2 branch testing, Section 2.1.3 BDD
  * Given/When/Then) — see {@code PostServiceTest} for the full rationale.
  *
- * <p>{@link WebClient}'s fluent chain ({@code post().uri().bodyValue().retrieve().bodyToMono()})
- * is mocked stage-by-stage via {@link #stubMomoResponse(Mono)} so no real HTTP call to MoMo is
- * ever made. {@link MomoProperties} is a plain settings holder, not a collaborator with behavior,
- * so a real instance is used instead of a mock.
+ * <p>{@link MomoApiClient} (the MoMo protocol mechanics — signing, request shaping, the raw HTTP
+ * call) is mocked here; its own behavior (link rejection, malformed responses, HMAC failures,
+ * gateway outages, order-info truncation) is covered by {@link MomoApiClientTest} instead. This
+ * class only tests {@code MomoService}'s own business logic: idempotency, the pending-payment
+ * staleness window, and purchase state transitions.
  */
 @ExtendWith(MockitoExtension.class)
 class MomoServiceTest {
@@ -62,37 +54,23 @@ class MomoServiceTest {
   private static final Integer AUTHOR_ID = 1;
   private static final Integer BUYER_ID = 2;
 
+  @Mock private MomoApiClient momoApiClient;
   @Mock private BookPurchaseRepository purchaseRepository;
   @Mock private BookService bookService;
-  @Mock private WebClient momoWebClient;
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
 
   @Captor private ArgumentCaptor<BookPurchaseEntity> purchaseCaptor;
   @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
-  @Captor private ArgumentCaptor<Map> requestBodyCaptor;
 
-  private MomoProperties momoProperties;
   private MomoService momoService;
 
   @BeforeEach
   void setUp() {
-    momoProperties = new MomoProperties();
-    momoProperties.setRedirectUrl("http://localhost:3000/payment/success");
-    momoProperties.setIpnUrl("http://localhost:8080/webhook");
     momoService =
         new MomoService(
-            momoProperties,
-            purchaseRepository,
-            bookService,
-            momoWebClient,
-            userRepository,
-            notificationService);
+            momoApiClient, purchaseRepository, bookService, userRepository, notificationService);
   }
-
-  // ---------------------------------------------------------------------
-  // Test data builders
-  // ---------------------------------------------------------------------
 
   private static BookEntity paidBook(Integer id, Integer authorId, long price, String title) {
     return BookEntity.builder()
@@ -116,20 +94,6 @@ class MomoServiceTest {
         .build();
   }
 
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  private void stubMomoResponse(Mono responseMono) {
-    WebClient.RequestBodyUriSpec uriSpec = mock(WebClient.RequestBodyUriSpec.class);
-    WebClient.RequestBodySpec bodySpec = mock(WebClient.RequestBodySpec.class);
-    WebClient.RequestHeadersSpec headersSpec = mock(WebClient.RequestHeadersSpec.class);
-    WebClient.ResponseSpec responseSpec = mock(WebClient.ResponseSpec.class);
-
-    when(momoWebClient.post()).thenReturn(uriSpec);
-    when(uriSpec.uri(anyString())).thenReturn(bodySpec);
-    when(bodySpec.bodyValue(requestBodyCaptor.capture())).thenReturn(headersSpec);
-    when(headersSpec.retrieve()).thenReturn(responseSpec);
-    when(responseSpec.bodyToMono(Map.class)).thenReturn(responseMono);
-  }
-
   private static Map<String, Object> successResponse() {
     Map<String, Object> response = new HashMap<>();
     response.put("resultCode", 0);
@@ -139,68 +103,25 @@ class MomoServiceTest {
     return response;
   }
 
-  /** Replicates {@code MomoService#buildIpnSignature} so tests can craft a validly-signed IPN payload. */
-  private Map<String, Object> validIpnPayload(
+  private void stubSuccessfulLinkCreation() {
+    when(momoApiClient.createOrderId()).thenReturn("NEW-ORDER-ID");
+    when(momoApiClient.requestPaymentLink(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(successResponse());
+  }
+
+  private static Map<String, Object> ipnPayload(
       String orderId, int resultCode, String transId, String payType) {
-    Map<String, Object> payload = new LinkedHashMap<>();
+    Map<String, Object> payload = new HashMap<>();
     payload.put("orderId", orderId);
     payload.put("resultCode", resultCode);
-    payload.put("transId", transId);
+    if (transId != null) {
+      payload.put("transId", transId);
+    }
     if (payType != null) {
       payload.put("payType", payType);
     }
-    payload.put("signature", computeIpnSignature(payload));
     return payload;
-  }
-
-  private String computeIpnSignature(Map<String, Object> payload) {
-    String rawSignature =
-        "accessKey="
-            + momoProperties.getAccessKey()
-            + "&amount="
-            + stringify(payload.get("amount"))
-            + "&extraData="
-            + stringify(payload.get("extraData"))
-            + "&message="
-            + stringify(payload.get("message"))
-            + "&orderId="
-            + stringify(payload.get("orderId"))
-            + "&orderInfo="
-            + stringify(payload.get("orderInfo"))
-            + "&orderType="
-            + stringify(payload.get("orderType"))
-            + "&partnerCode="
-            + stringify(payload.get("partnerCode"))
-            + "&payType="
-            + stringify(payload.get("payType"))
-            + "&requestId="
-            + stringify(payload.get("requestId"))
-            + "&responseTime="
-            + stringify(payload.get("responseTime"))
-            + "&resultCode="
-            + stringify(payload.get("resultCode"))
-            + "&transId="
-            + stringify(payload.get("transId"));
-    return hmacSHA256(momoProperties.getSecretKey(), rawSignature);
-  }
-
-  private static String stringify(Object value) {
-    return value == null ? "" : String.valueOf(value);
-  }
-
-  private static String hmacSHA256(String key, String data) {
-    try {
-      Mac hmac = Mac.getInstance("HmacSHA256");
-      hmac.init(new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-      byte[] hash = hmac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-      StringBuilder sb = new StringBuilder();
-      for (byte b : hash) {
-        sb.append(String.format("%02x", b));
-      }
-      return sb.toString();
-    } catch (Exception e) {
-      throw new RuntimeException(e);
-    }
   }
 
   // =====================================================================
@@ -282,7 +203,7 @@ class MomoServiceTest {
           existingPurchase(PaymentStatus.PENDING, "OLD-REF", OffsetDateTime.now().minusMinutes(30));
       when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
           .thenReturn(Optional.of(stale));
-      stubMomoResponse(Mono.just(successResponse()));
+      stubSuccessfulLinkCreation();
 
       // When
       PaymentResponseDto dto = momoService.createPayment(BUYER_ID, BOOK_ID);
@@ -306,7 +227,7 @@ class MomoServiceTest {
           existingPurchase(PaymentStatus.PENDING, null, OffsetDateTime.now());
       when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
           .thenReturn(Optional.of(noRef));
-      stubMomoResponse(Mono.just(successResponse()));
+      stubSuccessfulLinkCreation();
 
       // When / Then
       assertThat(momoService.createPayment(BUYER_ID, BOOK_ID)).isNotNull();
@@ -322,7 +243,7 @@ class MomoServiceTest {
       BookPurchaseEntity noUpdatedAt = existingPurchase(PaymentStatus.PENDING, "REF1", null);
       when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
           .thenReturn(Optional.of(noUpdatedAt));
-      stubMomoResponse(Mono.just(successResponse()));
+      stubSuccessfulLinkCreation();
 
       // When / Then
       assertThat(momoService.createPayment(BUYER_ID, BOOK_ID)).isNotNull();
@@ -338,7 +259,7 @@ class MomoServiceTest {
           existingPurchase(PaymentStatus.FAILED, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
           .thenReturn(Optional.of(failed));
-      stubMomoResponse(Mono.just(successResponse()));
+      stubSuccessfulLinkCreation();
 
       // When / Then
       assertThat(momoService.createPayment(BUYER_ID, BOOK_ID)).isNotNull();
@@ -352,7 +273,7 @@ class MomoServiceTest {
           .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 5000L, "Book"));
       when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
           .thenReturn(Optional.empty());
-      stubMomoResponse(Mono.just(successResponse()));
+      stubSuccessfulLinkCreation();
 
       // When
       PaymentResponseDto dto = momoService.createPayment(BUYER_ID, BOOK_ID);
@@ -368,111 +289,6 @@ class MomoServiceTest {
       assertThat(saved.getGatewayTransactionNo()).isNull();
       assertThat(saved.getPaidAt()).isNull();
     }
-
-    @Test
-    @DisplayName("should reject when MoMo rejects the payment link creation")
-    void shouldThrowValidationException_whenMomoRejectsLinkCreation() {
-      // Given
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-      Map<String, Object> rejected = new HashMap<>();
-      rejected.put("resultCode", 99);
-      stubMomoResponse(Mono.just(rejected));
-
-      // When / Then
-      assertThatThrownBy(() -> momoService.createPayment(BUYER_ID, BOOK_ID))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Failed to create MoMo payment link");
-    }
-
-    @Test
-    @DisplayName("should reject when MoMo returns no response body")
-    void shouldThrowValidationException_whenMomoReturnsNoResponse() {
-      // Given
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-      stubMomoResponse(Mono.empty());
-
-      // When / Then
-      assertThatThrownBy(() -> momoService.createPayment(BUYER_ID, BOOK_ID))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("MoMo returned no response");
-    }
-
-    @Test
-    @DisplayName("should accept a String-typed resultCode from MoMo's response")
-    void shouldHandleStringResultCode_fromMomoResponse() {
-      // Given
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-      Map<String, Object> response = new HashMap<>();
-      response.put("resultCode", "0");
-      response.put("payUrl", "https://test-payment.momo.vn/pay/xyz");
-      stubMomoResponse(Mono.just(response));
-
-      // When / Then
-      assertThat(momoService.createPayment(BUYER_ID, BOOK_ID).getPaymentUrl())
-          .isEqualTo("https://test-payment.momo.vn/pay/xyz");
-    }
-
-    @Test
-    @DisplayName("should truncate a long book title in the MoMo order info")
-    void shouldTruncateLongBookTitleInOrderInfo() {
-      // Given
-      String longTitle = "A".repeat(150);
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, longTitle));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-      stubMomoResponse(Mono.just(successResponse()));
-
-      // When
-      momoService.createPayment(BUYER_ID, BOOK_ID);
-
-      // Then
-      String orderInfo = (String) requestBodyCaptor.getValue().get("orderInfo");
-      assertThat(orderInfo).hasSize(100);
-    }
-
-    @Test
-    @DisplayName("should not truncate a short book title in the MoMo order info")
-    void shouldNotTruncateShortBookTitleInOrderInfo() {
-      // Given
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Short Title"));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-      stubMomoResponse(Mono.just(successResponse()));
-
-      // When
-      momoService.createPayment(BUYER_ID, BOOK_ID);
-
-      // Then
-      String orderInfo = (String) requestBodyCaptor.getValue().get("orderInfo");
-      assertThat(orderInfo).isEqualTo("Mua sach: Short Title");
-    }
-
-    @Test
-    @DisplayName("should wrap HMAC generation failure as a PaymentException")
-    void shouldThrowPaymentException_whenHmacGenerationFails() {
-      // Given
-      momoProperties.setSecretKey(null);
-      when(bookService.findBookOrThrow(BOOK_ID))
-          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
-      when(purchaseRepository.findByBookIdAndBuyerId(BOOK_ID, BUYER_ID))
-          .thenReturn(Optional.empty());
-
-      // When / Then
-      assertThatThrownBy(() -> momoService.createPayment(BUYER_ID, BOOK_ID))
-          .isInstanceOf(PaymentException.class)
-          .hasMessageContaining("Failed to generate HMAC");
-    }
   }
 
   // =====================================================================
@@ -487,10 +303,8 @@ class MomoServiceTest {
     @DisplayName("should return false and skip processing when the signature does not match")
     void shouldReturnFalseAndNotApply_whenSignatureMismatch() {
       // Given
-      Map<String, Object> payload = new HashMap<>();
-      payload.put("orderId", "REF1");
-      payload.put("resultCode", 0);
-      payload.put("signature", "not-the-real-signature");
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(false);
+      Map<String, Object> payload = ipnPayload("REF1", 0, null, null);
 
       // When
       boolean result = momoService.handleWebhook(payload);
@@ -504,6 +318,7 @@ class MomoServiceTest {
     @DisplayName("should mark the purchase COMPLETED and notify the author on a successful result")
     void shouldApplySuccessResult_whenSignatureValid() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
@@ -511,7 +326,7 @@ class MomoServiceTest {
           .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
       when(userRepository.findById(BUYER_ID))
           .thenReturn(Optional.of(userWithName(BUYER_ID, "Bob")));
-      Map<String, Object> payload = validIpnPayload("REF1", 0, "TX123", "qr");
+      Map<String, Object> payload = ipnPayload("REF1", 0, "TX123", "qr");
 
       // When
       boolean result = momoService.handleWebhook(payload);
@@ -531,10 +346,11 @@ class MomoServiceTest {
     @DisplayName("should mark the purchase FAILED and skip notification on a failed result")
     void shouldApplyFailedResult_whenSignatureValidButResultCodeNonZero() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
-      Map<String, Object> payload = validIpnPayload("REF1", 99, "", null);
+      Map<String, Object> payload = ipnPayload("REF1", 99, "", null);
 
       // When
       boolean result = momoService.handleWebhook(payload);
@@ -550,13 +366,14 @@ class MomoServiceTest {
     @DisplayName("should default the payment method to ATM when payType is absent")
     void shouldUseDefaultPaymentMethod_whenPayTypeIsNull() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
       when(bookService.findBookOrThrow(BOOK_ID))
           .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
       when(userRepository.findById(BUYER_ID)).thenReturn(Optional.empty());
-      Map<String, Object> payload = validIpnPayload("REF1", 0, "TX1", null);
+      Map<String, Object> payload = ipnPayload("REF1", 0, "TX1", null);
 
       // When
       momoService.handleWebhook(payload);
@@ -569,12 +386,13 @@ class MomoServiceTest {
     @DisplayName("should skip notifying when the buyer is the book's own author")
     void shouldSkipNotification_whenBuyerIsBookAuthor() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
       when(bookService.findBookOrThrow(BOOK_ID))
           .thenReturn(paidBook(BOOK_ID, BUYER_ID, 1000L, "Book"));
-      Map<String, Object> payload = validIpnPayload("REF1", 0, "TX1", "ATM");
+      Map<String, Object> payload = ipnPayload("REF1", 0, "TX1", "ATM");
 
       // When
       momoService.handleWebhook(payload);
@@ -589,10 +407,11 @@ class MomoServiceTest {
     @DisplayName("should short-circuit as already-applied without re-saving or re-notifying")
     void shouldReturnTrueWithoutReapplying_whenPurchaseAlreadyCompleted() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.COMPLETED, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
-      Map<String, Object> payload = validIpnPayload("REF1", 0, "TX1", "ATM");
+      Map<String, Object> payload = ipnPayload("REF1", 0, "TX1", "ATM");
 
       // When
       boolean result = momoService.handleWebhook(payload);
@@ -608,6 +427,7 @@ class MomoServiceTest {
     @DisplayName("should fall back to \"Someone\" as the buyer name when it is blank")
     void shouldFallBackToSomeone_whenBuyerFullNameIsBlank() {
       // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
       BookPurchaseEntity purchase =
           existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
       when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
@@ -615,7 +435,7 @@ class MomoServiceTest {
           .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
       when(userRepository.findById(BUYER_ID))
           .thenReturn(Optional.of(userWithName(BUYER_ID, "   ")));
-      Map<String, Object> payload = validIpnPayload("REF1", 0, "TX1", "ATM");
+      Map<String, Object> payload = ipnPayload("REF1", 0, "TX1", "ATM");
 
       // When
       momoService.handleWebhook(payload);
@@ -623,6 +443,35 @@ class MomoServiceTest {
       // Then
       verify(notificationService).send(notificationCaptor.capture());
       assertThat(notificationCaptor.getValue().getBody()).startsWith("Someone purchased");
+    }
+
+    @Test
+    @DisplayName("should return false without throwing when resultCode is missing")
+    void shouldReturnFalse_whenResultCodeIsMissing() {
+      // Given — MoMo's IPN payload omits resultCode entirely (a genuinely malformed callback)
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
+      Map<String, Object> payload = new HashMap<>();
+      payload.put("orderId", "REF1");
+
+      // When / Then — must never crash the webhook endpoint with a raw NumberFormatException
+      boolean result = momoService.handleWebhook(payload);
+      assertThat(result).isFalse();
+      verify(purchaseRepository, never()).findByTransactionRef(any());
+    }
+
+    @Test
+    @DisplayName("should return false without throwing when resultCode is non-numeric text")
+    void shouldReturnFalse_whenResultCodeIsNonNumericText() {
+      // Given
+      when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
+      Map<String, Object> payload = new HashMap<>();
+      payload.put("orderId", "REF1");
+      payload.put("resultCode", "not-a-number");
+
+      // When / Then
+      boolean result = momoService.handleWebhook(payload);
+      assertThat(result).isFalse();
+      verify(purchaseRepository, never()).findByTransactionRef(any());
     }
   }
 
@@ -660,7 +509,7 @@ class MomoServiceTest {
       Map<String, Object> response = new HashMap<>();
       response.put("resultCode", 0);
       response.put("transId", "TX999");
-      stubMomoResponse(Mono.just(response));
+      when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
 
       // When
       boolean result = momoService.syncPaymentStatus("REF1");
@@ -668,22 +517,6 @@ class MomoServiceTest {
       // Then
       assertThat(result).isTrue();
       assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.COMPLETED);
-      assertThat(requestBodyCaptor.getValue().get("orderId")).isEqualTo("REF1");
-    }
-
-    @Test
-    @DisplayName("should reject when MoMo returns no response while polling")
-    void shouldThrowValidationException_whenMomoReturnsNoResponse() {
-      // Given
-      BookPurchaseEntity purchase =
-          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
-      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
-      stubMomoResponse(Mono.empty());
-
-      // When / Then
-      assertThatThrownBy(() -> momoService.syncPaymentStatus("REF1"))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("MoMo returned no response");
     }
   }
 

@@ -15,17 +15,15 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class GitHubTrendingCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class GitHubTrendingCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://api.github.com";
 
   public GitHubTrendingCrawler() {
-    this.webClient =
+    super(
         WebClient.builder()
             .baseUrl(BASE_URL)
             .defaultHeader("Accept", "application/vnd.github.v3+json")
-            .build();
+            .build());
   }
 
   @Override
@@ -35,46 +33,40 @@ public class GitHubTrendingCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
-    try {
-      String created = OffsetDateTime.now().minusDays(7).toLocalDate().toString();
+  protected List<CrawledItem> fetchItems() {
+    String created = OffsetDateTime.now().minusDays(7).toLocalDate().toString();
 
-      Map<String, Object> response =
-          webClient
-              .get()
-              .uri(
-                  uriBuilder ->
-                      uriBuilder
-                          .path("/search/repositories")
-                          .queryParam("q", "created:>" + created)
-                          .queryParam("sort", "stars")
-                          .queryParam("order", "desc")
-                          .queryParam("per_page", 30)
-                          .build())
-              .retrieve()
-              .bodyToMono(Map.class)
-              .block();
+    Map<String, Object> response =
+        webClient
+            .get()
+            .uri(
+                uriBuilder ->
+                    uriBuilder
+                        .path("/search/repositories")
+                        .queryParam("q", "created:>" + created)
+                        .queryParam("sort", "stars")
+                        .queryParam("order", "desc")
+                        .queryParam("per_page", 30)
+                        .build())
+            .retrieve()
+            .bodyToMono(Map.class)
+            .block();
 
-      if (Objects.isNull(response)) {
-        return List.of();
-      }
-
-      List<Map<String, Object>> repos = (List<Map<String, Object>>) response.get("items");
-      if (Objects.isNull(repos) || repos.isEmpty()) {
-        return List.of();
-      }
-
-      List<CrawledItem> items = new ArrayList<>();
-      for (Map<String, Object> repo : repos) {
-        items.add(mapToItem(repo));
-      }
-
-      log.info("Crawled {} items from GitHub Trending", items.size());
-      return items;
-    } catch (Exception e) {
-      log.error("Failed to crawl GitHub Trending: {}", e.getMessage());
+    if (Objects.isNull(response)) {
       return List.of();
     }
+
+    List<Map<String, Object>> repos = (List<Map<String, Object>>) response.get("items");
+    if (Objects.isNull(repos) || repos.isEmpty()) {
+      return List.of();
+    }
+
+    List<CrawledItem> items = new ArrayList<>();
+    for (Map<String, Object> repo : repos) {
+      items.add(mapToItem(repo));
+    }
+
+    return items;
   }
 
   @SuppressWarnings("unchecked")

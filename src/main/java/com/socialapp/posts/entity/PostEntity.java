@@ -17,7 +17,9 @@ import com.socialapp.posts.entity.enums.PostVisibility;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Entity
 @Table(name = "t_posts")
@@ -42,6 +44,8 @@ public class PostEntity {
   @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
   @JoinColumn(name = "post_id")
   @OrderBy("id.position ASC")
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private List<PostTagEntity> tags = new ArrayList<>();
 
   private String googlePlaceId;

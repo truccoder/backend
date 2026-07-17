@@ -1,6 +1,7 @@
 package com.socialapp.trending.entity;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
@@ -11,17 +12,17 @@ import com.socialapp.trending.entity.enums.TrendingCategory;
 import com.socialapp.trending.entity.enums.TrendingSource;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
+import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 @Entity
 @Table(name = "t_trending_items")
 @Data
-@Builder
 @NoArgsConstructor
-@AllArgsConstructor
 public class TrendingItemEntity {
   @Id
   @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "trending_items_seq_gen")
@@ -50,6 +51,8 @@ public class TrendingItemEntity {
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(columnDefinition = "jsonb")
+  @Getter(AccessLevel.NONE)
+  @Setter(AccessLevel.NONE)
   private List<String> tags;
 
   private Integer score;
@@ -59,4 +62,42 @@ public class TrendingItemEntity {
   private OffsetDateTime publishedAt;
 
   @CreationTimestamp private OffsetDateTime crawledAt;
+
+  @Builder
+  public TrendingItemEntity(
+      Integer id,
+      String title,
+      String summary,
+      String url,
+      String imageUrl,
+      TrendingSource source,
+      String sourceId,
+      TrendingCategory category,
+      List<String> tags,
+      Integer score,
+      String author,
+      OffsetDateTime publishedAt,
+      OffsetDateTime crawledAt) {
+    this.id = id;
+    this.title = title;
+    this.summary = summary;
+    this.url = url;
+    this.imageUrl = imageUrl;
+    this.source = source;
+    this.sourceId = sourceId;
+    this.category = category;
+    this.tags = tags == null ? null : new ArrayList<>(tags);
+    this.score = score;
+    this.author = author;
+    this.publishedAt = publishedAt;
+    this.crawledAt = crawledAt;
+  }
+
+  public List<String> getTags() {
+    return tags == null ? List.of() : List.copyOf(tags);
+  }
+
+  public void setTags(List<String> tags) {
+    this.tags = tags == null ? null : new ArrayList<>(tags);
+  }
 }

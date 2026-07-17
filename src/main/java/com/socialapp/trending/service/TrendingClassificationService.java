@@ -145,7 +145,9 @@ public class TrendingClassificationService {
           if (index >= 0 && index < expectedSize) {
             try {
               results.set(index, TrendingCategory.valueOf(category));
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException e) {
+              log.warn(
+                  "Unknown trending category '{}' at index {}, keeping OTHER", category, index);
             }
           }
         }

@@ -15,19 +15,17 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class MediumCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class MediumCrawler extends AbstractTrendingCrawler {
   private static final List<String> TAGS =
       List.of(
           "programming", "software-engineering", "technology", "devops", "artificial-intelligence");
 
   public MediumCrawler() {
-    this.webClient =
+    super(
         WebClient.builder()
             .baseUrl("https://medium.com")
             .defaultHeader("Accept", "application/json")
-            .build();
+            .build());
   }
 
   @Override
@@ -37,7 +35,7 @@ public class MediumCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
+  protected List<CrawledItem> fetchItems() {
     List<CrawledItem> allItems = new ArrayList<>();
 
     for (String tag : TAGS) {
@@ -64,7 +62,6 @@ public class MediumCrawler implements TrendingCrawler {
       allItems = crawlTopFeeds();
     }
 
-    log.info("Crawled {} items from Medium", allItems.size());
     return allItems;
   }
 

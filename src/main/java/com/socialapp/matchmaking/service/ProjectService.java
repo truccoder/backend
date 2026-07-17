@@ -90,7 +90,13 @@ public class ProjectService {
   public ProjectApplicationEntity acceptApplication(Integer ownerId, Integer applicationId) {
     ProjectApplicationEntity application = requireOwnedPendingApplication(ownerId, applicationId);
 
-    ProjectPositionEntity position = application.getPosition();
+    // Locks the position row so concurrent accepts against the same position serialize; without
+    // this, each transaction only sees its own not-yet-committed accept and the quantity cap can
+    // be exceeded when several applications are accepted at the same time.
+    ProjectPositionEntity position =
+        positionRepository
+            .findByIdForUpdate(application.getPosition().getId())
+            .orElseThrow(() -> new NotFoundException("Position not found"));
     if (position.getStatus() != PositionStatus.OPEN) {
       throw new IllegalStateException(
           "Cannot accept an application for a position that is already " + position.getStatus());
@@ -101,12 +107,8 @@ public class ProjectService {
 
     // Check if position is filled
     long acceptedCount =
-        position.getProject().getApplications().stream()
-            .filter(
-                a ->
-                    a.getPosition().getId().equals(position.getId())
-                        && a.getStatus() == ApplicationStatus.ACCEPTED)
-            .count();
+        applicationRepository.countByPositionIdAndStatus(
+            position.getId(), ApplicationStatus.ACCEPTED);
 
     if (acceptedCount >= position.getQuantity()) {
       position.setStatus(PositionStatus.FILLED);

@@ -17,14 +17,12 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class HackerNewsCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class HackerNewsCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://hacker-news.firebaseio.com/v0";
   private static final int MAX_ITEMS = 30;
 
   public HackerNewsCrawler() {
-    this.webClient = WebClient.builder().baseUrl(BASE_URL).build();
+    super(WebClient.builder().baseUrl(BASE_URL).build());
   }
 
   @Override
@@ -34,40 +32,34 @@ public class HackerNewsCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
-    try {
-      List<Integer> topStoryIds =
-          webClient.get().uri("/topstories.json").retrieve().bodyToMono(List.class).block();
+  protected List<CrawledItem> fetchItems() {
+    List<Integer> topStoryIds =
+        webClient.get().uri("/topstories.json").retrieve().bodyToMono(List.class).block();
 
-      if (Objects.isNull(topStoryIds) || topStoryIds.isEmpty()) {
-        return List.of();
-      }
-
-      List<CrawledItem> items = new ArrayList<>();
-      for (int i = 0; i < Math.min(MAX_ITEMS, topStoryIds.size()); i++) {
-        try {
-          Map<String, Object> story =
-              webClient
-                  .get()
-                  .uri("/item/{id}.json", topStoryIds.get(i))
-                  .retrieve()
-                  .bodyToMono(Map.class)
-                  .block();
-
-          if (Objects.nonNull(story) && "story".equals(story.get("type"))) {
-            items.add(mapToItem(story));
-          }
-        } catch (Exception e) {
-          log.debug("Failed to fetch HN story {}: {}", topStoryIds.get(i), e.getMessage());
-        }
-      }
-
-      log.info("Crawled {} items from Hacker News", items.size());
-      return items;
-    } catch (Exception e) {
-      log.error("Failed to crawl Hacker News: {}", e.getMessage());
+    if (Objects.isNull(topStoryIds) || topStoryIds.isEmpty()) {
       return List.of();
     }
+
+    List<CrawledItem> items = new ArrayList<>();
+    for (int i = 0; i < Math.min(MAX_ITEMS, topStoryIds.size()); i++) {
+      try {
+        Map<String, Object> story =
+            webClient
+                .get()
+                .uri("/item/{id}.json", topStoryIds.get(i))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+
+        if (Objects.nonNull(story) && "story".equals(story.get("type"))) {
+          items.add(mapToItem(story));
+        }
+      } catch (Exception e) {
+        log.debug("Failed to fetch HN story {}: {}", topStoryIds.get(i), e.getMessage());
+      }
+    }
+
+    return items;
   }
 
   private CrawledItem mapToItem(Map<String, Object> story) {

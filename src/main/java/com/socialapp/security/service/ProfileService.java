@@ -14,6 +14,7 @@ import com.socialapp.cloud.minio.MinIOService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.common.utils.FileExtensions;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
 import com.socialapp.security.dto.UpdateProfileRequest;
@@ -74,13 +75,18 @@ public class ProfileService {
     validateProfilePicture(file);
     UserEntity user = requireUser(userId);
 
-    String objectKey = "avatars/" + userId + "/" + UUID.randomUUID() + "." + getExtension(file);
+    String objectKey =
+        "avatars/"
+            + userId
+            + "/"
+            + UUID.randomUUID()
+            + "."
+            + FileExtensions.getExtension(file.getOriginalFilename(), "jpg");
 
     try {
       minIOService.uploadFile(PROFILE_PICTURES_BUCKET, objectKey, file);
       minIOService.ensurePublicReadPolicy(PROFILE_PICTURES_BUCKET);
     } catch (Exception e) {
-      log.error("Failed to upload profile picture for user {}", userId, e);
       throw new StorageException("Failed to upload profile picture", e);
     }
 
@@ -121,13 +127,5 @@ public class ProfileService {
     if (contentType == null || !ALLOWED_PROFILE_PICTURE_TYPES.contains(contentType.toLowerCase())) {
       throw new ValidationException("Only JPEG, PNG, or WEBP images are allowed");
     }
-  }
-
-  private String getExtension(MultipartFile file) {
-    String filename = file.getOriginalFilename();
-    if (filename == null || !filename.contains(".")) {
-      return "jpg";
-    }
-    return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
   }
 }

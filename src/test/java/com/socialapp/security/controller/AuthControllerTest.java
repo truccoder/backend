@@ -41,6 +41,7 @@ import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.exception.AccountBannedException;
 import com.socialapp.security.repository.UserRepository;
 import com.socialapp.security.service.AuthService;
+import com.socialapp.security.service.OAuthAuthService;
 
 /**
  * System/API integration tests for {@link AuthController}, per ISTQB CTFL v4.0.1 Section 2.2.2
@@ -74,6 +75,7 @@ class AuthControllerTest {
   @Autowired private ObjectMapper objectMapper;
 
   @MockBean private AuthService authService;
+  @MockBean private OAuthAuthService oAuthAuthService;
 
   // JwtAuthenticationFilter's own dependencies — mocked so the real filter chain in
   // SecurityConfig can be wired up without needing a live JWT signing key or database.

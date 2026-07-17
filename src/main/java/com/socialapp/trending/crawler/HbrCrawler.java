@@ -15,9 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class HbrCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class HbrCrawler extends AbstractTrendingCrawler {
   private static final List<String> HBR_FEEDS =
       List.of(
           "https://hbr.org/feed/topic/technology",
@@ -25,7 +23,7 @@ public class HbrCrawler implements TrendingCrawler {
           "https://hbr.org/feed/topic/leadership");
 
   public HbrCrawler() {
-    this.webClient = WebClient.builder().baseUrl("https://api.rss2json.com/v1").build();
+    super(WebClient.builder().baseUrl("https://api.rss2json.com/v1").build());
   }
 
   @Override
@@ -35,7 +33,7 @@ public class HbrCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
+  protected List<CrawledItem> fetchItems() {
     List<CrawledItem> allItems = new ArrayList<>();
 
     for (String feedUrl : HBR_FEEDS) {
@@ -67,7 +65,6 @@ public class HbrCrawler implements TrendingCrawler {
       }
     }
 
-    log.info("Crawled {} items from HBR", allItems.size());
     return allItems;
   }
 
@@ -77,7 +74,8 @@ public class HbrCrawler implements TrendingCrawler {
     if (Objects.nonNull(pubDate) && !pubDate.isBlank()) {
       try {
         publishedAt = OffsetDateTime.parse(pubDate);
-      } catch (Exception ignored) {
+      } catch (Exception e) {
+        log.debug("Failed to parse HBR item pubDate '{}': {}", pubDate, e.getMessage());
       }
     }
 

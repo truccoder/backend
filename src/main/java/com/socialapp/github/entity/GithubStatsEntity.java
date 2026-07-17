@@ -14,7 +14,9 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Entity
 @Table(name = "t_user_github_stats")
@@ -34,6 +36,8 @@ public class GithubStatsEntity {
 
   @OneToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "user_id", referencedColumnName = "id", nullable = false, unique = true)
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private UserEntity user;
 
   @Column(name = "github_username", nullable = false)

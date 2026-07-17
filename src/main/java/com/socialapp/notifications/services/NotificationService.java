@@ -157,7 +157,7 @@ public class NotificationService {
   }
 
   private boolean isTypeMuted(NotificationPreferenceEntity prefs, String type) {
-    return Objects.nonNull(prefs.getMutedTypes()) && prefs.getMutedTypes().contains(type);
+    return prefs.getMutedTypes().contains(type);
   }
 
   private NotificationResponseDto toDto(NotificationEntity entity) {

@@ -13,7 +13,9 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Entity
 @Table(
@@ -30,10 +32,14 @@ public class UserRoadmapProgressEntity {
 
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "user_id", nullable = false)
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private UserEntity user;
 
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "node_id", nullable = false)
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private RoadmapNodeEntity node;
 
   @Enumerated(EnumType.STRING)
@@ -53,6 +59,8 @@ public class UserRoadmapProgressEntity {
 
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "verifier_id")
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private UserEntity verifier;
 
   @Column(name = "verified_at")

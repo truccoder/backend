@@ -299,6 +299,7 @@ class ProjectServiceTest {
       ProjectApplicationEntity application =
           application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
       when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
 
       // When / Then
       assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
@@ -307,26 +308,40 @@ class ProjectServiceTest {
     }
 
     @Test
-    @DisplayName("should stay open when accepted count is still below the position's quantity")
-    void shouldStayOpen_whenAcceptedCountBelowQuantity() {
-      // Given: quantity 2, only this application accepted so far. Two distractors must not be
-      // counted: one ACCEPTED for a *different* position, and one for the *same* position that
-      // was REJECTED rather than accepted.
+    @DisplayName("should reject when the position row backing the application is gone")
+    void shouldThrowNotFoundException_whenPositionDoesNotExist() {
+      // Given: the application still references a position id that no longer resolves under
+      // the pessimistic-write lock lookup (e.g. deleted between the application read and now).
       ProjectEntity project = project(OWNER_ID);
-      ProjectPositionEntity position = position(project, 2, PositionStatus.OPEN);
-      ProjectPositionEntity otherPosition = position(project, 1, PositionStatus.OPEN);
-      otherPosition.setId(POSITION_ID + 1);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
       ProjectApplicationEntity application =
           application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
-      ProjectApplicationEntity acceptedElsewhere =
-          application(999, project, otherPosition, 3, ApplicationStatus.ACCEPTED);
-      ProjectApplicationEntity rejectedHere =
-          application(998, project, position, 4, ApplicationStatus.REJECTED);
-      project.getApplications().add(application);
-      project.getApplications().add(acceptedElsewhere);
-      project.getApplications().add(rejectedHere);
       when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
+          .isInstanceOf(NotFoundException.class);
+      verify(applicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should stay open when accepted count is still below the position's quantity")
+    void shouldStayOpen_whenAcceptedCountBelowQuantity() {
+      // Given: quantity 2, only this application accepted so far (count query reflects that
+      // after this application's own save, exactly 1 ACCEPTED application exists for the
+      // position — distractors for other positions/statuses are the repository query's concern,
+      // not this unit test's, since countByPositionIdAndStatus is a derived query method).
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 2, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
       when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(1L);
 
       // When
       projectService.acceptApplication(OWNER_ID, APPLICATION_ID);
@@ -345,9 +360,12 @@ class ProjectServiceTest {
       ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
       ProjectApplicationEntity application =
           application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
-      project.getApplications().add(application);
       when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
       when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(1L);
 
       // When
       projectService.acceptApplication(OWNER_ID, APPLICATION_ID);
@@ -365,12 +383,12 @@ class ProjectServiceTest {
       ProjectPositionEntity position = position(project, 2, PositionStatus.OPEN);
       ProjectApplicationEntity application =
           application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
-      ProjectApplicationEntity priorAccepted =
-          application(50, project, position, 3, ApplicationStatus.ACCEPTED);
-      project.getApplications().add(application);
-      project.getApplications().add(priorAccepted);
       when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
       when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(2L);
 
       // When
       projectService.acceptApplication(OWNER_ID, APPLICATION_ID);

@@ -9,7 +9,9 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Entity
 @Table(name = "t_roadmap_nodes")
@@ -24,6 +26,8 @@ public class RoadmapNodeEntity {
 
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "roadmap_id", nullable = false)
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private RoadmapEntity roadmap;
 
   @Column(nullable = false)
@@ -34,6 +38,8 @@ public class RoadmapNodeEntity {
 
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "parent_node_id")
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
   private RoadmapNodeEntity parentNode;
 
   @Column(name = "order_index")

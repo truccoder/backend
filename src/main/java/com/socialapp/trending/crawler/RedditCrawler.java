@@ -17,19 +17,17 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class RedditCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class RedditCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://www.reddit.com";
   private static final List<String> SUBREDDITS =
       List.of("programming", "technology", "opensource", "ExperiencedDevs");
 
   public RedditCrawler() {
-    this.webClient =
+    super(
         WebClient.builder()
             .baseUrl(BASE_URL)
             .defaultHeader("User-Agent", "SocialApp/1.0 (Tech Trending Crawler)")
-            .build();
+            .build());
   }
 
   @Override
@@ -39,7 +37,7 @@ public class RedditCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
+  protected List<CrawledItem> fetchItems() {
     List<CrawledItem> allItems = new ArrayList<>();
 
     for (String subreddit : SUBREDDITS) {
@@ -71,7 +69,6 @@ public class RedditCrawler implements TrendingCrawler {
       }
     }
 
-    log.info("Crawled {} items from Reddit", allItems.size());
     return allItems;
   }
 

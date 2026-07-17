@@ -10,9 +10,11 @@ import org.hibernate.type.SqlTypes;
 import com.socialapp.notifications.entity.enums.EmailFrequency;
 
 import jakarta.persistence.*;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
@@ -36,7 +38,12 @@ public class NotificationPreferenceEntity {
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(columnDefinition = "jsonb")
+  @Getter(AccessLevel.NONE)
   private List<String> mutedTypes;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;
+
+  public List<String> getMutedTypes() {
+    return mutedTypes == null ? List.of() : List.copyOf(mutedTypes);
+  }
 }

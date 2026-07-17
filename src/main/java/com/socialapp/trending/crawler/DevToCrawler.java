@@ -15,13 +15,11 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
-public class DevToCrawler implements TrendingCrawler {
-  private final WebClient webClient;
-
+public class DevToCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://dev.to/api";
 
   public DevToCrawler() {
-    this.webClient = WebClient.builder().baseUrl(BASE_URL).build();
+    super(WebClient.builder().baseUrl(BASE_URL).build());
   }
 
   @Override
@@ -31,37 +29,31 @@ public class DevToCrawler implements TrendingCrawler {
 
   @Override
   @SuppressWarnings("unchecked")
-  public List<CrawledItem> crawl() {
-    try {
-      List<Map<String, Object>> articles =
-          webClient
-              .get()
-              .uri(
-                  uriBuilder ->
-                      uriBuilder
-                          .path("/articles")
-                          .queryParam("per_page", 30)
-                          .queryParam("top", 7)
-                          .build())
-              .retrieve()
-              .bodyToMono(List.class)
-              .block();
+  protected List<CrawledItem> fetchItems() {
+    List<Map<String, Object>> articles =
+        webClient
+            .get()
+            .uri(
+                uriBuilder ->
+                    uriBuilder
+                        .path("/articles")
+                        .queryParam("per_page", 30)
+                        .queryParam("top", 7)
+                        .build())
+            .retrieve()
+            .bodyToMono(List.class)
+            .block();
 
-      if (Objects.isNull(articles) || articles.isEmpty()) {
-        return List.of();
-      }
-
-      List<CrawledItem> items = new ArrayList<>();
-      for (Map<String, Object> article : articles) {
-        items.add(mapToItem(article));
-      }
-
-      log.info("Crawled {} items from Dev.to", items.size());
-      return items;
-    } catch (Exception e) {
-      log.error("Failed to crawl Dev.to: {}", e.getMessage());
+    if (Objects.isNull(articles) || articles.isEmpty()) {
       return List.of();
     }
+
+    List<CrawledItem> items = new ArrayList<>();
+    for (Map<String, Object> article : articles) {
+      items.add(mapToItem(article));
+    }
+
+    return items;
   }
 
   private CrawledItem mapToItem(Map<String, Object> article) {

@@ -46,6 +46,8 @@ public class ProjectPositionEntity {
   @Enumerated(EnumType.STRING)
   private PositionStatus status = PositionStatus.OPEN;
 
+  @Version @EqualsAndHashCode.Exclude private Long version;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;

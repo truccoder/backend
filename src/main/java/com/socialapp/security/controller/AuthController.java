@@ -11,6 +11,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.security.dto.*;
 import com.socialapp.security.service.AuthService;
+import com.socialapp.security.service.OAuthAuthService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class AuthController {
   private final AuthService authService;
+  private final OAuthAuthService oAuthAuthService;
 
   @PostMapping(value = "/register", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public void register(
@@ -72,21 +74,21 @@ public class AuthController {
 
   @GetMapping("/google/url")
   public OAuthUrlResponseDto getGoogleOAuthUrl() {
-    return authService.getGoogleOAuthUrl();
+    return oAuthAuthService.getGoogleOAuthUrl();
   }
 
   @PostMapping("/google/callback")
   public AuthResponseDto loginWithGoogle(@Valid @RequestBody GoogleLoginRequestDto request) {
-    return authService.loginWithGoogle(request.getCode());
+    return oAuthAuthService.loginWithGoogle(request.getCode());
   }
 
   @GetMapping("/github/url")
   public OAuthUrlResponseDto getGithubOAuthUrl() {
-    return authService.getGithubOAuthUrl();
+    return oAuthAuthService.getGithubOAuthUrl();
   }
 
   @PostMapping("/github/callback")
   public AuthResponseDto loginWithGithub(@Valid @RequestBody GithubLoginRequestDto request) {
-    return authService.loginWithGithub(request.getCode());
+    return oAuthAuthService.loginWithGithub(request.getCode());
   }
 }

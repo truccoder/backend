@@ -17,7 +17,7 @@ public class JwtProperties {
 
   @NotBlank
   @Size(min = 32)
-  private String secret = "defaultSecretKeyThatShouldBeChangedInProduction12345";
+  private String secret;
 
   @Min(1)
   private long accessTokenExpirationMs = 900_000;

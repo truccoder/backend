@@ -17,6 +17,7 @@ import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.common.utils.FileExtensions;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -202,20 +203,15 @@ public class BookService {
     if (file == null || file.isEmpty()) {
       throw new ValidationException("Book file is required");
     }
-    String ext = getExtension(file.getOriginalFilename());
+    String ext = FileExtensions.getExtension(file.getOriginalFilename(), "");
     if (!ALLOWED_FORMATS.contains(ext)) {
       throw new ValidationException("Only PDF and EPUB formats are supported");
     }
   }
 
   private FileFormat resolveFormat(String filename) {
-    String ext = getExtension(filename);
+    String ext = FileExtensions.getExtension(filename, "");
     return "epub".equals(ext) ? FileFormat.EPUB : FileFormat.PDF;
-  }
-
-  private String getExtension(String filename) {
-    if (filename == null || !filename.contains(".")) return "";
-    return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
   }
 
   private BookResponseDto toResponseDto(BookEntity book, Integer requesterId) {

@@ -6,7 +6,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.knowledge.dto.CreateTokenRequestDto;
 import com.socialapp.knowledge.dto.CreateTokenResponseDto;
-import com.socialapp.knowledge.entity.PersonalAccessTokenEntity;
+import com.socialapp.knowledge.dto.PersonalAccessTokenResponseDto;
 import com.socialapp.knowledge.service.PersonalAccessTokenService;
 import com.socialapp.security.util.SecurityUtils;
 
@@ -25,7 +25,7 @@ public class PersonalAccessTokenController {
   }
 
   @GetMapping
-  public List<PersonalAccessTokenEntity> listTokens() {
+  public List<PersonalAccessTokenResponseDto> listTokens() {
     return tokenService.listTokens(SecurityUtils.getCurrentUserId());
   }
 

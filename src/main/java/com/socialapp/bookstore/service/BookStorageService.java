@@ -9,6 +9,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.common.utils.FileExtensions;
 
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
@@ -29,7 +30,7 @@ public class BookStorageService {
 
   public String uploadBook(Integer authorId, MultipartFile file) {
     requireFile(file);
-    String extension = getExtension(file.getOriginalFilename());
+    String extension = FileExtensions.getExtension(file.getOriginalFilename(), "pdf");
     String objectKey = "books/" + authorId + "/" + UUID.randomUUID() + "." + extension;
 
     try (InputStream inputStream = file.getInputStream()) {
@@ -56,7 +57,7 @@ public class BookStorageService {
 
   public String uploadCover(Integer authorId, MultipartFile file) {
     requireFile(file);
-    String extension = getExtension(file.getOriginalFilename());
+    String extension = FileExtensions.getExtension(file.getOriginalFilename(), "pdf");
     String objectKey = "covers/" + authorId + "/" + UUID.randomUUID() + "." + extension;
 
     try {
@@ -86,7 +87,6 @@ public class BookStorageService {
               .expiry(URL_EXPIRY_HOURS, TimeUnit.HOURS)
               .build());
     } catch (Exception e) {
-      log.error("Failed to generate presigned URL for {}/{}", bucket, objectKey, e);
       throw new StorageException("Failed to generate download URL", e);
     }
   }
@@ -95,10 +95,5 @@ public class BookStorageService {
     if (file == null) {
       throw new ValidationException("File must not be null");
     }
-  }
-
-  private String getExtension(String filename) {
-    if (filename == null || !filename.contains(".")) return "pdf";
-    return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
   }
 }

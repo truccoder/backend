@@ -10,6 +10,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -351,6 +352,23 @@ public class GlobalExceptionHandler {
         .code(CONFLICT.value())
         .error(CONFLICT.getReasonPhrase())
         .message("This action conflicts with existing data")
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Thrown by @Version-guarded entities (e.g. ProjectPositionEntity) when two concurrent
+  // requests race to update the same row — the second one to commit loses instead of silently
+  // overwriting the first, so surface it as a retryable conflict rather than a 500.
+  @ResponseStatus(CONFLICT)
+  @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+  public ErrorResponseDto handle(
+      ObjectOptimisticLockingFailureException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(CONFLICT.value())
+        .error(CONFLICT.getReasonPhrase())
+        .message("This was just updated by someone else, please retry")
         .path(request.getRequestURI())
         .build();
   }
