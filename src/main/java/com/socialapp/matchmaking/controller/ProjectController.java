@@ -11,17 +11,18 @@ import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/v1/projects")
+@RequestMapping("/v1/api/projects")
 @RequiredArgsConstructor
 public class ProjectController {
   private final ProjectService projectService;
   private final MatchmakingService matchmakingService;
 
   @PostMapping
-  public ResponseEntity<?> createProject(@RequestBody ProjectRequestDTO request) {
+  public ResponseEntity<?> createProject(@Valid @RequestBody ProjectRequestDTO request) {
     Integer authorId = SecurityUtils.getCurrentUserId();
     projectService.createProject(authorId, request);
     return ResponseEntity.ok(Map.of("message", "Project created successfully"));
@@ -29,7 +30,7 @@ public class ProjectController {
 
   @PostMapping("/positions/{positionId}/apply")
   public ResponseEntity<?> applyToPosition(
-      @PathVariable Integer positionId, @RequestBody ApplicationRequestDTO request) {
+      @PathVariable Integer positionId, @Valid @RequestBody ApplicationRequestDTO request) {
     Integer applicantId = SecurityUtils.getCurrentUserId();
     projectService.applyToPosition(applicantId, positionId, request.getMessage());
     return ResponseEntity.ok(Map.of("message", "Applied successfully"));

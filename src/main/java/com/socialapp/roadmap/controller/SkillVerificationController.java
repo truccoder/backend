@@ -11,10 +11,11 @@ import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
 import com.socialapp.roadmap.service.SkillVerificationService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/v1/skills")
+@RequestMapping("/v1/api/skills")
 @RequiredArgsConstructor
 public class SkillVerificationController {
 
@@ -22,7 +23,7 @@ public class SkillVerificationController {
 
   @PostMapping("/verify")
   public ResponseEntity<String> submitVerification(
-      @RequestBody SkillVerificationRequestDto request) {
+      @Valid @RequestBody SkillVerificationRequestDto request) {
     Integer userId = SecurityUtils.getCurrentUserId();
     skillVerificationService.submitVerificationRequest(userId, request);
     return ResponseEntity.ok("Verification request submitted successfully.");

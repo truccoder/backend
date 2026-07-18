@@ -14,7 +14,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/v1/github")
+@RequestMapping("/v1/api/github")
 @RequiredArgsConstructor
 public class GithubController {
 

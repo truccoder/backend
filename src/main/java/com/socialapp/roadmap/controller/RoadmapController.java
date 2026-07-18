@@ -10,10 +10,11 @@ import com.socialapp.roadmap.dto.RoadmapDto;
 import com.socialapp.roadmap.dto.RoadmapNodeDto;
 import com.socialapp.roadmap.service.RoadmapService;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/v1/roadmaps")
+@RequestMapping("/v1/api/roadmaps")
 @RequiredArgsConstructor
 public class RoadmapController {
 
@@ -21,7 +22,7 @@ public class RoadmapController {
 
   @PostMapping
   @PreAuthorize("hasRole('ADMIN')")
-  public ResponseEntity<RoadmapDto> createRoadmap(@RequestBody RoadmapDto request) {
+  public ResponseEntity<RoadmapDto> createRoadmap(@Valid @RequestBody RoadmapDto request) {
     return ResponseEntity.ok(roadmapService.createRoadmap(request));
   }
 
@@ -33,7 +34,7 @@ public class RoadmapController {
   @PostMapping("/{id}/nodes")
   @PreAuthorize("hasRole('ADMIN')")
   public ResponseEntity<RoadmapNodeDto> addNode(
-      @PathVariable Integer id, @RequestBody RoadmapNodeDto request) {
+      @PathVariable Integer id, @Valid @RequestBody RoadmapNodeDto request) {
     return ResponseEntity.ok(roadmapService.addNodeToRoadmap(id, request));
   }
 
