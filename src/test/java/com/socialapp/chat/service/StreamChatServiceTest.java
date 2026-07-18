@@ -57,7 +57,7 @@ class StreamChatServiceTest {
     }
 
     @Test
-    @DisplayName("should wrap a signing failure as a RuntimeException")
+    @DisplayName("should wrap a signing failure as a MissingConfigurationException")
     void shouldWrapSigningFailure_whenSecretIsTooWeakForHmacSha256() {
       // Given: HS256 requires a key of at least 256 bits; a short secret makes
       // Keys.hmacShaKeyFor(...) throw, exercising the try/catch branch for real rather than
@@ -66,7 +66,7 @@ class StreamChatServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> service.generateUserToken(USER_ID))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(MissingConfigurationException.class)
           .hasMessageContaining("Could not generate chat token");
     }
 

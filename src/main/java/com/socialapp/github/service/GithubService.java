@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
 import com.socialapp.github.dto.GithubStatsResponse;
@@ -40,7 +41,7 @@ public class GithubService {
   public void linkAccountWithTokenAndProfile(
       UserEntity user, String accessToken, JsonNode githubUser) {
     if (!githubUser.has("login")) {
-      throw new RuntimeException("Invalid GitHub user response");
+      throw new ExternalApiException("Invalid GitHub user response");
     }
 
     String githubUsername = githubUser.get("login").asText();

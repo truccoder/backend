@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ExternalApiException;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -63,7 +64,7 @@ public class GithubApiClient {
     if (response != null && response.has("access_token")) {
       return response.get("access_token").asText();
     }
-    throw new RuntimeException("Failed to get GitHub access token");
+    throw new ExternalApiException("Failed to get GitHub access token");
   }
 
   public JsonNode getAuthenticatedUser(String accessToken) {

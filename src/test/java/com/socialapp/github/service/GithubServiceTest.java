@@ -21,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
 import com.socialapp.github.dto.GithubStatsResponse;
@@ -146,7 +147,7 @@ class GithubServiceTest {
               () ->
                   githubService.linkAccountWithTokenAndProfile(
                       user(USER_ID), ACCESS_TOKEN, githubUser))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Invalid GitHub user response");
     }
 

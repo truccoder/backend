@@ -32,7 +32,9 @@ public class StreamChatService {
       return Jwts.builder().claim("user_id", String.valueOf(userId)).signWith(key).compact();
     } catch (Exception e) {
       log.error("Failed to generate Stream chat token", e);
-      throw new RuntimeException("Could not generate chat token", e);
+      // Same root cause as the check above: an operator-configured secret that's unusable (e.g.
+      // too short for HMAC signing) rather than merely unset — still a config problem, not a bug.
+      throw new MissingConfigurationException("Could not generate chat token", e);
     }
   }
 }

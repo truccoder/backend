@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.posts.config.GoogleCalendarProperties;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.GoogleCalendarTokenEntity;
@@ -58,7 +60,7 @@ public class GoogleCalendarService {
             .block();
 
     if (Objects.isNull(tokenResponse)) {
-      throw new RuntimeException("Failed to exchange OAuth code for tokens");
+      throw new ExternalApiException("Failed to exchange OAuth code for tokens");
     }
 
     String accessToken = (String) tokenResponse.get("access_token");
@@ -86,7 +88,8 @@ public class GoogleCalendarService {
             .findByUserId(userId)
             .orElseThrow(
                 () ->
-                    new RuntimeException("Google Calendar not connected. Please authorize first."));
+                    new NotFoundException(
+                        "Google Calendar not connected. Please authorize first."));
 
     String accessToken = getValidAccessToken(token);
 
@@ -151,7 +154,7 @@ public class GoogleCalendarService {
             .block();
 
     if (Objects.isNull(response)) {
-      throw new RuntimeException("Failed to refresh Google Calendar token");
+      throw new ExternalApiException("Failed to refresh Google Calendar token");
     }
 
     String newAccessToken = (String) response.get("access_token");

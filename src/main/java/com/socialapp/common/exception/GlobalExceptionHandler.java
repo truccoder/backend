@@ -404,6 +404,22 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Same rationale as StorageException/PaymentException, for third-party APIs (GitHub, Google,
+  // Gemini) instead of MinIO/MoMo — the call failed or returned something we can't use, not a bug
+  // in our own request handling, hence 503.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(ExternalApiException.class)
+  public ErrorResponseDto handle(ExternalApiException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
   // A required server-side secret/key is unset (e.g. Stream Chat's api-secret) — never the
   // caller's fault, and must not be silently masked by a fallback value. 503 signals the feature
   // itself is unavailable until an operator fixes the deployment config, same rationale as

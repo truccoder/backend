@@ -9,6 +9,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.exception.ExternalApiException;
 
 @Component
 public class GoogleApiClient {
@@ -56,7 +57,7 @@ public class GoogleApiClient {
     if (response != null && response.has("access_token")) {
       return response.get("access_token").asText();
     }
-    throw new RuntimeException("Failed to get Google access token");
+    throw new ExternalApiException("Failed to get Google access token");
   }
 
   public JsonNode getUserInfo(String accessToken) {

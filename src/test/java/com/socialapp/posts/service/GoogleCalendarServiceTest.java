@@ -24,6 +24,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.posts.config.GoogleCalendarProperties;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.GoogleCalendarTokenEntity;
@@ -189,14 +191,14 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when Google's token endpoint returns nothing")
+    @DisplayName("should throw ExternalApiException when Google's token endpoint returns nothing")
     void shouldThrowRuntimeException_whenTokenResponseIsNull() {
       // Given
       stubPost(properties.getTokenUrl(), false, Mono.empty());
 
       // When / Then
       assertThatThrownBy(() -> googleCalendarService.handleOAuthCallback(USER_ID, "auth-code"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to exchange OAuth code for tokens");
     }
   }
@@ -293,7 +295,7 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when the token refresh call returns nothing")
+    @DisplayName("should throw ExternalApiException when the token refresh call returns nothing")
     void shouldThrowRuntimeException_whenRefreshResponseIsNull() {
       // Given
       GoogleCalendarTokenEntity token =
@@ -309,12 +311,12 @@ class GoogleCalendarServiceTest {
       // When / Then
       assertThatThrownBy(
               () -> googleCalendarService.addEventToCalendar(USER_ID, sampleEvent("Asia/Bangkok")))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to refresh Google Calendar token");
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when the user has not connected Google Calendar")
+    @DisplayName("should throw NotFoundException when the user has not connected Google Calendar")
     void shouldThrowRuntimeException_whenNotConnected() {
       // Given
       when(tokenRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
@@ -322,7 +324,7 @@ class GoogleCalendarServiceTest {
       // When / Then
       assertThatThrownBy(
               () -> googleCalendarService.addEventToCalendar(USER_ID, sampleEvent("Asia/Bangkok")))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Google Calendar not connected");
     }
   }

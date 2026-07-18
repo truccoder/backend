@@ -16,6 +16,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ExternalApiException;
 
 import reactor.core.publisher.Mono;
 
@@ -146,7 +147,7 @@ class GithubApiClientTest {
 
       // When / Then
       assertThatThrownBy(() -> githubApiClient.exchangeCodeForToken("some-code"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to get GitHub access token");
     }
 
@@ -158,7 +159,7 @@ class GithubApiClientTest {
 
       // When / Then
       assertThatThrownBy(() -> githubApiClient.exchangeCodeForToken("some-code"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to get GitHub access token");
     }
   }

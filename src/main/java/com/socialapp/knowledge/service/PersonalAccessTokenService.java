@@ -2,6 +2,7 @@ package com.socialapp.knowledge.service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Base64;
@@ -125,7 +126,10 @@ public class PersonalAccessTokenService {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
       return HexFormat.of().formatHex(hash);
-    } catch (Exception e) {
+    } catch (NoSuchAlgorithmException e) {
+      // SHA-256 is a JDK-guaranteed algorithm (every conformant JVM ships it), so this can't
+      // happen in practice — an unchecked wrapper is the correct, standard way to surface a
+      // checked exception the caller has no meaningful way to recover from.
       throw new RuntimeException("Failed to hash token", e);
     }
   }
