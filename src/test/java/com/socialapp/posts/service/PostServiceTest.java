@@ -15,8 +15,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -48,11 +50,13 @@ import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.EventDetails;
+import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -88,6 +92,7 @@ class PostServiceTest {
   @Mock private ModerationProperties moderationProperties;
   @Mock private UserBanService userBanService;
   @Mock private BookService bookService;
+  @Mock private HashtagRepository hashtagRepository;
 
   @InjectMocks private PostService postService;
 
@@ -855,6 +860,144 @@ class PostServiceTest {
       // When / Then
       assertThatCode(() -> postService.deletePost(AUTHOR_ID, POST_ID)).doesNotThrowAnyException();
       verify(postRepository).delete(post);
+    }
+  }
+
+  // =====================================================================
+
+  @Nested
+  @DisplayName("Hashtag Extraction (processHashtags)")
+  class HashtagExtractionTests {
+
+    @Test
+    @DisplayName("should not interact with hashtag repository when content has no hashtags")
+    void shouldNotInteract_whenNoHashtags() {
+      // Given
+      CreatePostRequestDto request = createRequest("Hello world", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verifyNoInteractions(hashtagRepository);
+    }
+
+    @Test
+    @DisplayName("should extract, save and link new hashtags case-insensitively")
+    void shouldExtractAndSaveNewHashtags() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest(
+              "Learning #Java and #Spring today! Also #JAVA", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
+
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verify(postRepository, times(2)).save(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      Set<HashtagEntity> hashtags = savedPost.getHashtags();
+      assertThat(hashtags).hasSize(2); // java and spring
+      assertThat(hashtags)
+          .extracting(HashtagEntity::getName)
+          .containsExactlyInAnyOrder("java", "spring");
+
+      assertThat(hashtags).extracting(HashtagEntity::getUsageCount).containsOnly(1);
+    }
+
+    @Test
+    @DisplayName("should increment usage count of existing hashtags")
+    void shouldIncrementExistingHashtags() {
+      // Given
+      CreatePostRequestDto request = createRequest("I love #java", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      HashtagEntity existingTag = new HashtagEntity();
+      existingTag.setName("java");
+      existingTag.setUsageCount(5);
+
+      when(hashtagRepository.findByNameIn(any()))
+          .thenReturn(new java.util.ArrayList<>(List.of(existingTag)));
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verify(postRepository, times(2)).save(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      assertThat(savedPost.getHashtags()).hasSize(1);
+      HashtagEntity tag = savedPost.getHashtags().iterator().next();
+      assertThat(tag.getName()).isEqualTo("java");
+      assertThat(tag.getUsageCount()).isEqualTo(6); // 5 + 1
+    }
+
+    @Test
+    @DisplayName("should decrement old tags and increment new tags when updating a post")
+    void shouldDecrementOldAndIncrementNewTags_whenUpdatingPost() {
+      // Given
+      UpdatePostRequestDto request =
+          updateRequest("Now I learn #react", PostVisibility.PUBLIC, null);
+
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      HashtagEntity oldTag = new HashtagEntity();
+      oldTag.setName("java");
+      oldTag.setUsageCount(2);
+      post.setHashtags(new HashSet<>(List.of(oldTag)));
+
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      // verify old tag was decremented
+      assertThat(oldTag.getUsageCount()).isEqualTo(1);
+
+      verify(postRepository).save(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      assertThat(savedPost.getHashtags()).hasSize(1);
+      HashtagEntity newTag = savedPost.getHashtags().iterator().next();
+      assertThat(newTag.getName()).isEqualTo("react");
+      assertThat(newTag.getUsageCount()).isEqualTo(1);
     }
   }
 }

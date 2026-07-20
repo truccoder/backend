@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,7 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
@@ -36,6 +38,7 @@ import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -56,9 +59,11 @@ public class PostService {
   private final ModerationProperties moderationProperties;
   private final UserBanService userBanService;
   private final BookService bookService;
+  private final HashtagRepository hashtagRepository;
 
   private static final int MAX_TAGS = 20;
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
+  private static final Pattern HASHTAG_PATTERN = Pattern.compile("#(\\w+)");
 
   @Transactional
   public void createPost(Integer authorId, CreatePostRequestDto request) {
@@ -138,6 +143,7 @@ public class PostService {
     // Tags reference post.getId() via their composite key, so they can only be built once the
     // post has been saved and assigned an id.
     setTags(post, request.getTaggedUserIds());
+    processHashtags(post);
     postRepository.save(post);
 
     if (moderationEnabled) {
@@ -182,6 +188,7 @@ public class PostService {
     post.getTags().clear();
     postRepository.flush();
     setTags(post, request.getTaggedUserIds());
+    processHashtags(post);
 
     if (moderationProperties.isEnabled()) {
       post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
@@ -339,5 +346,58 @@ public class PostService {
         throw new ValidationException("Invalid correctOptionIndex at index " + i);
       }
     }
+  }
+
+  private void processHashtags(PostEntity post) {
+    if (post.getHashtags() == null) {
+      post.setHashtags(new HashSet<>());
+    }
+
+    // Decrease usage count for old hashtags if updating
+    if (!post.getHashtags().isEmpty()) {
+      post.getHashtags()
+          .forEach(
+              h -> {
+                if (h.getUsageCount() != null && h.getUsageCount() > 0) {
+                  h.setUsageCount(h.getUsageCount() - 1);
+                }
+              });
+      hashtagRepository.saveAll(post.getHashtags());
+    }
+
+    Set<HashtagEntity> newHashtags = new HashSet<>();
+    if (Strings.hasText(post.getContent())) {
+      Matcher matcher = HASHTAG_PATTERN.matcher(post.getContent());
+      Set<String> tagNames = new HashSet<>();
+      while (matcher.find()) {
+        tagNames.add(matcher.group(1).toLowerCase());
+      }
+
+      if (!tagNames.isEmpty()) {
+        List<HashtagEntity> existingTags = hashtagRepository.findByNameIn(tagNames);
+        Set<String> existingNames =
+            existingTags.stream().map(HashtagEntity::getName).collect(Collectors.toSet());
+
+        for (String name : tagNames) {
+          if (!existingNames.contains(name)) {
+            HashtagEntity newTag = new HashtagEntity();
+            newTag.setName(name);
+            newTag.setUsageCount(0);
+            existingTags.add(newTag);
+          }
+        }
+
+        // Increase usage count for tags that will be linked
+        for (HashtagEntity tag : existingTags) {
+          tag.setUsageCount((tag.getUsageCount() == null ? 0 : tag.getUsageCount()) + 1);
+        }
+
+        List<HashtagEntity> savedTags = hashtagRepository.saveAll(existingTags);
+        newHashtags.addAll(savedTags);
+      }
+    }
+
+    post.getHashtags().clear();
+    post.getHashtags().addAll(newHashtags);
   }
 }

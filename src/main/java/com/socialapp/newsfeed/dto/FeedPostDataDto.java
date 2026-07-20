@@ -1,6 +1,7 @@
 package com.socialapp.newsfeed.dto;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
@@ -44,6 +45,7 @@ public class FeedPostDataDto {
   private PollDetails pollDetails;
   private LinkDetails linkDetails;
   private OffsetDateTime createdAt;
+  private List<String> hashtags;
   private int likeCount;
   private int commentCount;
   private int shareCount;

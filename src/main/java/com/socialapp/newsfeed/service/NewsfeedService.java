@@ -26,6 +26,7 @@ import com.socialapp.newsfeed.repository.UserInteractionRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.enums.PostType;
@@ -91,6 +92,10 @@ public class NewsfeedService {
             .postType(post.getPostType())
             .eventDetails(post.getEventDetails())
             .book(loadBookSummary(post))
+            .hashtags(
+                post.getHashtags() != null
+                    ? post.getHashtags().stream().map(HashtagEntity::getName).toList()
+                    : null)
             .createdAt(post.getCreatedAt())
             .build();
 

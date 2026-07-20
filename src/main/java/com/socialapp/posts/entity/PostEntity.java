@@ -2,7 +2,9 @@ package com.socialapp.posts.entity;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -92,6 +94,15 @@ public class PostEntity {
   private ModerationStatus moderationStatus;
 
   private Integer authorId;
+
+  @ManyToMany
+  @JoinTable(
+      name = "t_post_hashtags",
+      joinColumns = @JoinColumn(name = "post_id"),
+      inverseJoinColumns = @JoinColumn(name = "hashtag_id"))
+  @ToString.Exclude
+  @EqualsAndHashCode.Exclude
+  private Set<HashtagEntity> hashtags = new HashSet<>();
 
   @CreationTimestamp private OffsetDateTime createdAt;
 
