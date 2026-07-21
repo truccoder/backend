@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -13,6 +14,14 @@ import com.socialapp.security.entity.UserEntity;
 
 public interface UserRepository extends JpaRepository<UserEntity, Integer> {
   boolean existsByEmailIgnoreCase(String email);
+
+  @Modifying
+  @Query("UPDATE UserEntity u SET u.eliteScore = u.eliteScore + :delta WHERE u.id = :userId")
+  void adjustEliteScore(@Param("userId") Integer userId, @Param("delta") int delta);
+
+  @Modifying
+  @Query("UPDATE UserEntity u SET u.eliteScore = :score WHERE u.id = :userId")
+  void setEliteScore(@Param("userId") Integer userId, @Param("score") int score);
 
   Optional<UserEntity> findByEmail(String email);
 

@@ -31,6 +31,8 @@ import com.socialapp.matchmaking.entity.enums.PositionStatus;
 import com.socialapp.matchmaking.repository.ProjectApplicationRepository;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 import com.socialapp.matchmaking.repository.ProjectRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -53,6 +55,7 @@ class ProjectServiceTest {
   @Mock private ProjectPositionRepository positionRepository;
   @Mock private ProjectApplicationRepository applicationRepository;
   @Mock private UserRepository userRepository;
+  @Mock private ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private ProjectService projectService;
 
@@ -350,6 +353,9 @@ class ProjectServiceTest {
       assertThat(application.getStatus()).isEqualTo(ApplicationStatus.ACCEPTED);
       assertThat(position.getStatus()).isEqualTo(PositionStatus.OPEN);
       verify(positionRepository, never()).save(any());
+      verify(reputationEventPublisher)
+          .award(
+              APPLICANT_ID, RepSourceType.PROJECT_APPLICATION_ACCEPTED, APPLICATION_ID.toString());
     }
 
     @Test

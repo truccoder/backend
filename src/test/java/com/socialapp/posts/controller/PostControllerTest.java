@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -298,6 +299,65 @@ class PostControllerTest {
     void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
       // When / Then
       mockMvc.perform(delete(POSTS_URL + "/1")).andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // PATCH /v1/api/posts/{postId}/qna/accept-answer/{commentId}
+  // =====================================================================
+
+  @Nested
+  @DisplayName("PATCH /v1/api/posts/{postId}/qna/accept-answer/{commentId}")
+  class AcceptAnswerTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenCallerIsTheAuthor_happyPath")
+    void shouldReturn200_whenCallerIsTheAuthor_happyPath() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .andExpect(status().isOk());
+
+      verify(postService).acceptAnswer(eq(currentUser.getId()), eq(1), eq(5));
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotTheAuthor")
+    void shouldReturn403_whenCallerIsNotTheAuthor() throws Exception {
+      // Given
+      doThrow(new ForbiddenException("Only the author can modify this post"))
+          .when(postService)
+          .acceptAnswer(anyInt(), anyInt(), anyInt());
+
+      // When / Then
+      mockMvc
+          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.message").value("Only the author can modify this post"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenPostIsNotQna")
+    void shouldReturn400_whenPostIsNotQna() throws Exception {
+      // Given
+      doThrow(new ValidationException("Only QNA posts can have an accepted answer"))
+          .when(postService)
+          .acceptAnswer(anyInt(), anyInt(), anyInt());
+
+      // When / Then
+      mockMvc
+          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.message").value("Only QNA posts can have an accepted answer"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(patch(POSTS_URL + "/1/qna/accept-answer/5"))
+          .andExpect(status().isUnauthorized());
     }
   }
 

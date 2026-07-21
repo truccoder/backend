@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.repository.GithubStatsRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -29,6 +31,7 @@ public class SkillVerificationService {
   private final RoadmapNodeRepository nodeRepository;
   private final UserRepository userRepository;
   private final GithubStatsRepository githubStatsRepository;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   @Transactional
   public void submitVerificationRequest(Integer userId, SkillVerificationRequestDto dto) {
@@ -50,9 +53,12 @@ public class SkillVerificationService {
     progress.setProofUrl(dto.getProofUrl());
     progress.setProofImageKey(dto.getProofImageKey());
 
+    RepSourceType awardType = null;
+
     if (dto.getTier() == VerificationTier.SELF_VERIFIED) {
       progress.setStatus(VerificationStatus.VERIFIED);
       progress.setVerifiedAt(OffsetDateTime.now());
+      awardType = RepSourceType.ROADMAP_SELF_VERIFIED;
     } else if (dto.getTier() == VerificationTier.MOD_VERIFIED
         || dto.getTier() == VerificationTier.QUIZ_VERIFIED) {
       progress.setStatus(VerificationStatus.PENDING_APPROVAL);
@@ -61,12 +67,26 @@ public class SkillVerificationService {
       if (isValid) {
         progress.setStatus(VerificationStatus.VERIFIED);
         progress.setVerifiedAt(OffsetDateTime.now());
+        awardType = RepSourceType.ROADMAP_NODE_VERIFIED;
       } else {
         progress.setStatus(VerificationStatus.REJECTED);
       }
     }
 
     progressRepository.save(progress);
+
+    if (awardType != null) {
+      reputationEventPublisher.award(userId, awardType, progressSourceId(userId, dto.getNodeId()));
+    }
+  }
+
+  /**
+   * (userId, nodeId) rather than the progress row's generated id — stable regardless of whether
+   * the id has been assigned by the DB yet, and already the natural unique key for this row
+   * ({@code uq_user_node}).
+   */
+  private String progressSourceId(Integer userId, Integer nodeId) {
+    return userId + ":" + nodeId;
   }
 
   /**
@@ -107,6 +127,11 @@ public class SkillVerificationService {
     progress.setVerifier(moderator);
     progress.setVerifiedAt(OffsetDateTime.now());
     progressRepository.save(progress);
+
+    reputationEventPublisher.award(
+        progress.getUser().getId(),
+        RepSourceType.ROADMAP_NODE_VERIFIED,
+        progressSourceId(progress.getUser().getId(), progress.getNode().getId()));
   }
 
   @Transactional

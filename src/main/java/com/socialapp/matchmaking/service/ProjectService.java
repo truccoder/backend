@@ -16,6 +16,8 @@ import com.socialapp.matchmaking.entity.enums.PositionStatus;
 import com.socialapp.matchmaking.repository.ProjectApplicationRepository;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 import com.socialapp.matchmaking.repository.ProjectRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -28,6 +30,7 @@ public class ProjectService {
   private final ProjectPositionRepository positionRepository;
   private final ProjectApplicationRepository applicationRepository;
   private final UserRepository userRepository;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   @Transactional
   public ProjectEntity createProject(Integer authorId, ProjectRequestDTO request) {
@@ -114,6 +117,11 @@ public class ProjectService {
       position.setStatus(PositionStatus.FILLED);
       positionRepository.save(position);
     }
+
+    reputationEventPublisher.award(
+        application.getApplicant().getId(),
+        RepSourceType.PROJECT_APPLICATION_ACCEPTED,
+        applicationId.toString());
 
     return savedApp;
   }

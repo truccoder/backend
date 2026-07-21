@@ -30,16 +30,21 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -60,6 +65,8 @@ public class PostService {
   private final UserBanService userBanService;
   private final BookService bookService;
   private final HashtagRepository hashtagRepository;
+  private final CommentRepository commentRepository;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   private static final int MAX_TAGS = 20;
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
@@ -198,6 +205,41 @@ public class PostService {
     } else {
       postRepository.save(post);
       newsfeedService.fanOutPost(post.getId());
+    }
+  }
+
+  /**
+   * Marks a comment as the accepted answer on a QNA post — author-only, one accept per post.
+   * Awards reputation to the answer's author (skipped if the post author answered their own
+   * question, to avoid self-crediting).
+   */
+  @Transactional
+  public void acceptAnswer(Integer actorId, Integer postId, Integer commentId) {
+    PostEntity post = findPostOrThrow(postId);
+    verifyAuthor(actorId, post);
+
+    if (post.getPostType() != PostType.QNA || post.getQnaDetails() == null) {
+      throw new ValidationException("Only QNA posts can have an accepted answer");
+    }
+    QnaDetails qnaDetails = post.getQnaDetails();
+    if (qnaDetails.getAcceptedAnswerId() != null) {
+      throw new ValidationException("An answer has already been accepted for this post");
+    }
+
+    CommentEntity comment =
+        commentRepository
+            .findById(commentId)
+            .orElseThrow(() -> new NotFoundException("Comment not found with ID: " + commentId));
+    if (!comment.getPostId().equals(postId)) {
+      throw new ValidationException("Comment does not belong to this post");
+    }
+
+    qnaDetails.setAcceptedAnswerId(commentId);
+    postRepository.save(post);
+
+    if (!comment.getAuthorId().equals(actorId)) {
+      reputationEventPublisher.award(
+          comment.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, commentId.toString());
     }
   }
 

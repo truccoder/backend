@@ -43,6 +43,10 @@ public class UserEntity {
 
   private String providerId;
 
+  /** Denormalized running total of {@code t_reputation_events.points}; never summed on read. */
+  @Column(name = "elite_score", nullable = false)
+  private Integer eliteScore = 0;
+
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;

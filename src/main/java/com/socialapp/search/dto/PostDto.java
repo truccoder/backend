@@ -25,6 +25,7 @@ public class PostDto {
   private Integer authorId;
   private String authorFullName;
   private String authorProfilePictureUrl;
+  private Integer authorEliteScore;
   private String visibility;
   private LocalDateTime createdAt;
 

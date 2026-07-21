@@ -78,6 +78,7 @@ public class NewsfeedService {
             .authorId(post.getAuthorId())
             .authorFullName(author.getFullName())
             .authorProfilePictureUrl(author.getProfilePictureUrl())
+            .authorEliteScore(author.getEliteScore())
             .content(post.getContent())
             .visibility(post.getVisibility())
             .googlePlaceId(post.getGooglePlaceId())

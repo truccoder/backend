@@ -17,4 +17,6 @@ public interface UserRoadmapProgressRepository
   List<UserRoadmapProgressEntity> findByStatus(VerificationStatus status);
 
   Optional<UserRoadmapProgressEntity> findByUserIdAndNodeId(Integer userId, Integer nodeId);
+
+  boolean existsByUserIdAndStatus(Integer userId, VerificationStatus status);
 }

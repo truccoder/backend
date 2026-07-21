@@ -33,6 +33,8 @@ import com.socialapp.posts.entity.PostReactionId;
 import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -52,6 +54,7 @@ class PostReactionServiceTest {
   @Mock private UserBanService userBanService;
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
+  @Mock private ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private PostReactionService postReactionService;
 
@@ -100,6 +103,9 @@ class PostReactionServiceTest {
       verify(notificationService).send(notificationCaptor.capture());
       assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(2);
       assertThat(notificationCaptor.getValue().getBody()).contains("Alice");
+
+      verify(reputationEventPublisher)
+          .award(2, RepSourceType.REACTION_RECEIVED, POST_ID + ":" + USER_ID);
     }
 
     @Test
@@ -120,6 +126,7 @@ class PostReactionServiceTest {
       verify(postReactionRepository).save(reactionCaptor.capture());
       assertThat(reactionCaptor.getValue().getReactionType()).isEqualTo(ReactionType.LOVE);
       verifyNoInteractions(notificationService);
+      verifyNoInteractions(reputationEventPublisher);
     }
 
     @Test
@@ -138,6 +145,7 @@ class PostReactionServiceTest {
       // Then
       verify(postReactionRepository).save(any());
       verifyNoInteractions(notificationService);
+      verifyNoInteractions(reputationEventPublisher);
     }
 
     @Test
@@ -154,7 +162,7 @@ class PostReactionServiceTest {
                       USER_ID, POST_ID, sampleRequest(ReactionType.LIKE)))
           .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Post not found");
-      verifyNoInteractions(postReactionRepository);
+      verifyNoInteractions(postReactionRepository, reputationEventPublisher);
     }
 
     @Test
@@ -171,7 +179,8 @@ class PostReactionServiceTest {
                   postReactionService.upsertReaction(
                       USER_ID, POST_ID, sampleRequest(ReactionType.LIKE)))
           .isInstanceOf(UserBannedException.class);
-      verifyNoInteractions(postRepository, postReactionRepository, notificationService);
+      verifyNoInteractions(
+          postRepository, postReactionRepository, notificationService, reputationEventPublisher);
     }
 
     @Test
@@ -222,11 +231,11 @@ class PostReactionServiceTest {
   class RemoveReactionTests {
 
     @Test
-    @DisplayName("should delete the reaction when it exists")
-    void shouldDeleteReaction_whenItExists() {
+    @DisplayName("should delete the reaction and revoke reputation when it exists")
+    void shouldDeleteReactionAndRevokeRep_whenItExists() {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
       when(postReactionRepository.existsById(id)).thenReturn(true);
 
       // When
@@ -234,6 +243,25 @@ class PostReactionServiceTest {
 
       // Then
       verify(postReactionRepository).deleteById(id);
+      verify(reputationEventPublisher)
+          .revoke(2, RepSourceType.REACTION_RECEIVED, POST_ID + ":" + USER_ID);
+    }
+
+    @Test
+    @DisplayName(
+        "should not revoke reputation when the author removes a reaction on their own post")
+    void shouldNotRevokeRep_whenAuthorRemovesReactionOnOwnPost() {
+      // Given
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(USER_ID)));
+      when(postReactionRepository.existsById(id)).thenReturn(true);
+
+      // When
+      postReactionService.removeReaction(USER_ID, POST_ID);
+
+      // Then
+      verify(postReactionRepository).deleteById(id);
+      verifyNoInteractions(reputationEventPublisher);
     }
 
     @Test
@@ -241,7 +269,7 @@ class PostReactionServiceTest {
     void shouldThrowNotFoundException_whenReactionDoesNotExist() {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
       when(postReactionRepository.existsById(id)).thenReturn(false);
 
       // When / Then
@@ -249,19 +277,20 @@ class PostReactionServiceTest {
           .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Reaction not found");
       verify(postReactionRepository, never()).deleteById(any());
+      verifyNoInteractions(reputationEventPublisher);
     }
 
     @Test
     @DisplayName("should throw NotFoundException when the post does not exist")
     void shouldThrowNotFoundException_whenPostDoesNotExist() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(() -> postReactionService.removeReaction(USER_ID, POST_ID))
           .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Post not found");
-      verifyNoInteractions(postReactionRepository);
+      verifyNoInteractions(postReactionRepository, reputationEventPublisher);
     }
   }
 

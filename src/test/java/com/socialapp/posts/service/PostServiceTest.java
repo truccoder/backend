@@ -49,15 +49,20 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -93,6 +98,8 @@ class PostServiceTest {
   @Mock private UserBanService userBanService;
   @Mock private BookService bookService;
   @Mock private HashtagRepository hashtagRepository;
+  @Mock private CommentRepository commentRepository;
+  @Mock private ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private PostService postService;
 
@@ -860,6 +867,143 @@ class PostServiceTest {
       // When / Then
       assertThatCode(() -> postService.deletePost(AUTHOR_ID, POST_ID)).doesNotThrowAnyException();
       verify(postRepository).delete(post);
+    }
+  }
+
+  // =====================================================================
+  // acceptAnswer
+  // =====================================================================
+
+  @Nested
+  @DisplayName("acceptAnswer")
+  class AcceptAnswerTests {
+
+    private static final Integer COMMENT_ID = 500;
+    private static final Integer COMMENTER_ID = 2;
+
+    private PostEntity qnaPost() {
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.QNA);
+      post.setQnaDetails(new QnaDetails(false, null, null));
+      return post;
+    }
+
+    private CommentEntity comment(Integer authorId) {
+      CommentEntity comment = new CommentEntity();
+      comment.setId(COMMENT_ID);
+      comment.setPostId(POST_ID);
+      comment.setAuthorId(authorId);
+      comment.setContent("The answer");
+      return comment;
+    }
+
+    @Test
+    @DisplayName("should accept the answer and award reputation to a different comment author")
+    void shouldAcceptAnswerAndAwardRep_whenCommenterIsNotTheAuthor() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(COMMENTER_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isEqualTo(COMMENT_ID);
+      verify(postRepository).save(post);
+      verify(reputationEventPublisher)
+          .award(COMMENTER_ID, RepSourceType.ACCEPTED_ANSWER, COMMENT_ID.toString());
+    }
+
+    @Test
+    @DisplayName("should not award reputation when the author accepts their own answer")
+    void shouldNotAwardRep_whenAuthorAcceptsOwnAnswer() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(AUTHOR_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isEqualTo(COMMENT_ID);
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the actor is not the post author")
+    void shouldThrowForbiddenException_whenActorIsNotAuthor() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(999, POST_ID, COMMENT_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the post is not a QNA post")
+    void shouldThrowValidationException_whenPostIsNotQna() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.REGULAR);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Only QNA posts");
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when an answer has already been accepted")
+    void shouldThrowValidationException_whenAnswerAlreadyAccepted() {
+      // Given
+      PostEntity post = qnaPost();
+      post.getQnaDetails().setAcceptedAnswerId(COMMENT_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("already been accepted");
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the comment does not exist")
+    void shouldThrowNotFoundException_whenCommentDoesNotExist() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("Comment not found");
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the comment belongs to a different post")
+    void shouldThrowValidationException_whenCommentBelongsToDifferentPost() {
+      // Given
+      PostEntity post = qnaPost();
+      CommentEntity foreignComment = comment(COMMENTER_ID);
+      foreignComment.setPostId(POST_ID + 1);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(foreignComment));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("does not belong to this post");
+      verifyNoInteractions(reputationEventPublisher);
     }
   }
 

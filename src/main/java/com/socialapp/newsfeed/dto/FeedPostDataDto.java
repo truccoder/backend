@@ -29,6 +29,7 @@ public class FeedPostDataDto {
   private Integer authorId;
   private String authorFullName;
   private String authorProfilePictureUrl;
+  private Integer authorEliteScore;
   private String content;
   private PostVisibility visibility;
   private String googlePlaceId;

@@ -39,4 +39,9 @@ public class PostController {
   public void deletePost(@PathVariable Integer postId) {
     postService.deletePost(SecurityUtils.getCurrentUserId(), postId);
   }
+
+  @PatchMapping("/{postId}/qna/accept-answer/{commentId}")
+  public void acceptAnswer(@PathVariable Integer postId, @PathVariable Integer commentId) {
+    postService.acceptAnswer(SecurityUtils.getCurrentUserId(), postId, commentId);
+  }
 }

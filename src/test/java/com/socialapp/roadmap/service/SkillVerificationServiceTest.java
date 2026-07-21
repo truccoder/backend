@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -22,6 +23,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.entity.GithubStatsEntity;
 import com.socialapp.github.repository.GithubStatsRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -51,6 +54,7 @@ class SkillVerificationServiceTest {
   @Mock private RoadmapNodeRepository nodeRepository;
   @Mock private UserRepository userRepository;
   @Mock private GithubStatsRepository githubStatsRepository;
+  @Mock private ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private SkillVerificationService skillVerificationService;
 
@@ -135,6 +139,8 @@ class SkillVerificationServiceTest {
       UserRoadmapProgressEntity saved = captureSaved();
       assertThat(saved.getStatus()).isEqualTo(VerificationStatus.VERIFIED);
       assertThat(saved.getVerifiedAt()).isNotNull();
+      verify(reputationEventPublisher)
+          .award(USER_ID, RepSourceType.ROADMAP_SELF_VERIFIED, USER_ID + ":" + NODE_ID);
     }
 
     @Test
@@ -153,6 +159,7 @@ class SkillVerificationServiceTest {
       UserRoadmapProgressEntity saved = captureSaved();
       assertThat(saved.getStatus()).isEqualTo(VerificationStatus.PENDING_APPROVAL);
       assertThat(saved.getVerifiedAt()).isNull();
+      verifyNoInteractions(reputationEventPublisher);
     }
 
     @Test
@@ -267,6 +274,8 @@ class SkillVerificationServiceTest {
       UserRoadmapProgressEntity saved = captureSaved();
       assertThat(saved.getStatus()).isEqualTo(VerificationStatus.VERIFIED);
       assertThat(saved.getVerifiedAt()).isNotNull();
+      verify(reputationEventPublisher)
+          .award(USER_ID, RepSourceType.ROADMAP_NODE_VERIFIED, USER_ID + ":" + NODE_ID);
     }
 
     @Test
@@ -387,6 +396,8 @@ class SkillVerificationServiceTest {
       assertThat(progress.getVerifier()).isEqualTo(moderator);
       assertThat(progress.getVerifiedAt()).isNotNull();
       verify(progressRepository).save(progress);
+      verify(reputationEventPublisher)
+          .award(USER_ID, RepSourceType.ROADMAP_NODE_VERIFIED, USER_ID + ":" + NODE_ID);
     }
   }
 

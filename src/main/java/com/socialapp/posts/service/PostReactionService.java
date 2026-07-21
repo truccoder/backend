@@ -16,6 +16,8 @@ import com.socialapp.posts.entity.PostReactionEntity;
 import com.socialapp.posts.entity.PostReactionId;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -29,6 +31,7 @@ public class PostReactionService {
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   @Transactional(readOnly = true)
   public MyReactionResponseDto getMyReaction(Integer userId, Integer postId) {
@@ -58,17 +61,19 @@ public class PostReactionService {
 
     if (isNewReaction) {
       notifyPostAuthor(post, userId);
+      awardReactionRep(post, userId);
     }
   }
 
   @Transactional
   public void removeReaction(Integer userId, Integer postId) {
-    verifyPostExists(postId);
+    PostEntity post = findPostOrThrow(postId);
     PostReactionId reactionId = new PostReactionId(userId, postId);
     if (!postReactionRepository.existsById(reactionId)) {
       throw new NotFoundException("Reaction not found for this post");
     }
     postReactionRepository.deleteById(reactionId);
+    revokeReactionRep(post, userId);
   }
 
   private void verifyPostExists(Integer postId) {
@@ -81,6 +86,30 @@ public class PostReactionService {
     return postRepository
         .findById(postId)
         .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
+  }
+
+  private void awardReactionRep(PostEntity post, Integer reactorId) {
+    if (post.getAuthorId().equals(reactorId)) {
+      return;
+    }
+    reputationEventPublisher.award(
+        post.getAuthorId(),
+        RepSourceType.REACTION_RECEIVED,
+        reactionSourceId(post.getId(), reactorId));
+  }
+
+  private void revokeReactionRep(PostEntity post, Integer reactorId) {
+    if (post.getAuthorId().equals(reactorId)) {
+      return;
+    }
+    reputationEventPublisher.revoke(
+        post.getAuthorId(),
+        RepSourceType.REACTION_RECEIVED,
+        reactionSourceId(post.getId(), reactorId));
+  }
+
+  private String reactionSourceId(Integer postId, Integer reactorId) {
+    return postId + ":" + reactorId;
   }
 
   private void checkBanStatus(Integer userId) {

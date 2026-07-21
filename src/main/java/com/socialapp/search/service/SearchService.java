@@ -110,6 +110,7 @@ public class SearchService {
                     .fullName(u.getFullName())
                     .username(u.getUsername())
                     .profilePictureUrl(u.getProfilePictureUrl())
+                    .eliteScore(u.getEliteScore())
                     .build())
         .toList();
   }
@@ -145,6 +146,7 @@ public class SearchService {
                   .authorId(post.getAuthorId())
                   .authorFullName(author != null ? author.getFullName() : null)
                   .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
+                  .authorEliteScore(author != null ? author.getEliteScore() : null)
                   .visibility(post.getVisibility() != null ? post.getVisibility().name() : null)
                   .createdAt(
                       post.getCreatedAt() != null ? post.getCreatedAt().toLocalDateTime() : null)
