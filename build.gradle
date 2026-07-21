@@ -37,6 +37,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-mail'
 
+    // OpenAPI spec + Swagger UI. The generated /v3/api-docs is the contract the frontend
+    // generates its TypeScript types from, so a renamed DTO field breaks the FE build instead
+    // of silently 404-ing at runtime. Disabled via SPRINGDOC_ENABLED=false in production.
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.5.0'
+
     // Flyway
     implementation 'org.flywaydb:flyway-core:10.20.1'
     implementation 'org.flywaydb:flyway-database-postgresql:10.20.1'

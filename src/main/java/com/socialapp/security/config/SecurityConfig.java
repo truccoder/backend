@@ -52,6 +52,12 @@ public class SecurityConfig {
                     // the "state" param instead (see EventController#handleGoogleCallback).
                     .requestMatchers("/v1/api/events/google/callback")
                     .permitAll()
+                    // Swagger UI fetches the spec before any login happens, so both paths
+                    // have to be open. Nothing is exposed when SPRINGDOC_ENABLED=false: the
+                    // handlers aren't registered at all, so these matchers hit a 404.
+                    .requestMatchers(
+                        "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**")
+                    .permitAll()
                     .requestMatchers("/v1/api/admin/**")
                     .hasRole("ADMIN")
                     .anyRequest()

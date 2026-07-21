@@ -61,6 +61,20 @@ spring:
       username: neo4j
       password: neo4j_password
 
+# Defaults to on for local dev so the frontend can regenerate its types from /v3/api-docs.
+# Production must set SPRINGDOC_ENABLED=false — the spec enumerates every endpoint and DTO
+# field, which is reconnaissance material, and Swagger UI is a live request console.
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /swagger-ui.html
+    # Endpoints grouped by tag (one tag per controller) rather than one flat list of 100+.
+    tags-sorter: alpha
+    operations-sorter: alpha
+
 cache:
   default-ttl: 30m
   jitter-percent: 10
