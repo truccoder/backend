@@ -65,6 +65,12 @@ spring:
 # Production must set SPRINGDOC_ENABLED=false — the spec enumerates every endpoint and DTO
 # field, which is reconnaissance material, and Swagger UI is a live request console.
 springdoc:
+  # Serialize every JSON map with its keys sorted. Without this, schema properties come
+  # out in whatever order reflection produced for that JVM run: stable while the process
+  # lives, different after a restart. The frontend commits the generated types and relies
+  # on `git diff` being empty to detect contract drift, so a restart-dependent ordering
+  # buried real changes under ~13k lines of reshuffling.
+  writer-with-order-by-keys: true
   api-docs:
     enabled: ${SPRINGDOC_ENABLED:true}
     path: /v3/api-docs
