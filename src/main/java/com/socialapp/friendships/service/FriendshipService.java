@@ -170,6 +170,15 @@ public class FriendshipService {
         friends, nextCursor, hasMore, friendshipRepository.countFriends(userId));
   }
 
+  /**
+   * Every friend id, unpaginated and without the profile lookups {@link #getFriends} does. Exists
+   * so other modules (chat) can fan out over a user's friends without reaching into this module's
+   * Neo4j repository directly.
+   */
+  public List<Integer> getFriendIds(Integer userId) {
+    return friendshipRepository.findFriendIds(userId);
+  }
+
   public List<PendingFriendRequestDto> getPendingRequests(Integer userId) {
     List<FriendRequestEntity> requests =
         friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(

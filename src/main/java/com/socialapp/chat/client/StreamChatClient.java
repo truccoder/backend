@@ -1,6 +1,9 @@
 package com.socialapp.chat.client;
 
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,6 +30,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class StreamChatClient {
 
+  /** Stream rejects a {@code POST /users} payload carrying more than this many users. */
+  private static final int MAX_USERS_PER_UPSERT = 100;
+
   private final WebClient streamChatWebClient;
   private final StreamChatProperties properties;
   private final StreamTokenSigner tokenSigner;
@@ -41,18 +47,39 @@ public class StreamChatClient {
   }
 
   /**
-   * Creates or updates the user's Stream profile so the chat UI renders names and avatars instead
-   * of raw numeric ids.
+   * Creates or updates Stream profiles so the chat UI renders names and avatars instead of raw
+   * numeric ids — and, more importantly, so a channel can be created with these users at all:
+   * Stream rejects {@code GetOrCreateChannel} for members it has never seen.
+   *
+   * <p>Stream's {@code POST /users} body is already a map keyed by id, so a whole batch travels in
+   * a single call. Stream caps that map at {@value #MAX_USERS_PER_UPSERT} entries per request, so
+   * larger collections are chunked.
    */
-  public void upsertUser(UserEntity user) {
-    Map<String, Object> streamUser = new HashMap<>();
-    streamUser.put("id", String.valueOf(user.getId()));
-    streamUser.put("name", displayName(user));
-    if (StringUtils.hasText(user.getProfilePictureUrl())) {
-      streamUser.put("image", user.getProfilePictureUrl());
+  public void upsertUsers(Collection<UserEntity> users) {
+    if (users.isEmpty()) {
+      return;
     }
 
-    Map<String, Object> body = Map.of("users", Map.of(String.valueOf(user.getId()), streamUser));
+    List<UserEntity> all = List.copyOf(users);
+    for (int from = 0; from < all.size(); from += MAX_USERS_PER_UPSERT) {
+      upsertBatch(all.subList(from, Math.min(from + MAX_USERS_PER_UPSERT, all.size())));
+    }
+  }
+
+  private void upsertBatch(List<UserEntity> batch) {
+    Map<String, Object> usersById = new LinkedHashMap<>();
+    for (UserEntity user : batch) {
+      String id = String.valueOf(user.getId());
+      Map<String, Object> streamUser = new HashMap<>();
+      streamUser.put("id", id);
+      streamUser.put("name", displayName(user));
+      if (StringUtils.hasText(user.getProfilePictureUrl())) {
+        streamUser.put("image", user.getProfilePictureUrl());
+      }
+      usersById.put(id, streamUser);
+    }
+
+    Map<String, Object> body = Map.of("users", usersById);
 
     try {
       streamChatWebClient
@@ -67,7 +94,7 @@ public class StreamChatClient {
           .bodyToMono(String.class)
           .block();
     } catch (Exception e) {
-      throw new ExternalApiException("Failed to sync user profile to Stream Chat", e);
+      throw new ExternalApiException("Failed to sync user profiles to Stream Chat", e);
     }
   }
 
