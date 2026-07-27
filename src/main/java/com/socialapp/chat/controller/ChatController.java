@@ -19,8 +19,6 @@ public class ChatController {
 
   @GetMapping("/token")
   public ChatTokenResponse getToken() {
-    Integer userId = SecurityUtils.getCurrentUserId();
-    String token = streamChatService.generateUserToken(userId);
-    return ChatTokenResponse.builder().userId(String.valueOf(userId)).streamToken(token).build();
+    return streamChatService.issueToken(SecurityUtils.requireCurrentUser());
   }
 }

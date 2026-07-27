@@ -1,96 +1,140 @@
 package com.socialapp.chat.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
 
+import java.time.Duration;
+import java.time.Instant;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.chat.client.StreamChatClient;
+import com.socialapp.chat.config.StreamChatProperties;
+import com.socialapp.chat.dto.ChatTokenResponse;
+import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.MissingConfigurationException;
-
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
+import com.socialapp.security.entity.UserEntity;
 
 /**
  * Component (unit) tests for {@link StreamChatService}, per ISTQB CTFL v4.0.1 (Section 2.2.1
- * component testing; Section 4.2.1 equivalence partitioning over the missing/weak/valid
- * {@code stream.chat.api-secret} partitions; Section 4.3.2 branch testing over the
- * {@code apiSecret == null || apiSecret.isBlank()} short-circuit).
+ * component testing; Section 4.2.1 equivalence partitioning over the configured/unconfigured
+ * partitions; Section 4.3.2 branch testing over the best-effort profile-sync try/catch).
  */
+@ExtendWith(MockitoExtension.class)
 class StreamChatServiceTest {
 
-  private static final Integer USER_ID = 42;
+  private static final String API_KEY = "stream-public-key";
+  private static final String API_SECRET =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-  private static StreamChatService serviceWithSecret(String apiSecret) {
-    StreamChatService service = new StreamChatService();
-    ReflectionTestUtils.setField(service, "apiSecret", apiSecret);
-    return service;
+  @Mock private StreamChatClient streamChatClient;
+
+  private StreamChatProperties properties;
+  private StreamChatService service;
+  private UserEntity user;
+
+  @BeforeEach
+  void setUp() {
+    properties = new StreamChatProperties();
+    properties.setApiKey(API_KEY);
+    properties.setApiSecret(API_SECRET);
+    properties.setTokenTtl(Duration.ofHours(24));
+
+    service =
+        new StreamChatService(properties, new StreamTokenSigner(properties), streamChatClient);
+
+    user = new UserEntity();
+    user.setId(42);
+    user.setFullName("Ada Lovelace");
   }
 
   @Nested
-  @DisplayName("generateUserToken")
-  class GenerateUserTokenTests {
+  @DisplayName("issueToken")
+  class IssueTokenTests {
 
     @Test
-    @DisplayName("should reject when the api-secret is null")
-    void shouldThrowMissingConfigurationException_whenSecretIsNull() {
-      // Given
-      StreamChatService service = serviceWithSecret(null);
-
-      // When / Then
-      assertThatThrownBy(() -> service.generateUserToken(USER_ID))
-          .isInstanceOf(MissingConfigurationException.class);
-    }
-
-    @Test
-    @DisplayName("should reject when the api-secret is blank (whitespace-only)")
-    void shouldThrowMissingConfigurationException_whenSecretIsBlank() {
-      // Given: exercises the second operand of the null-check "||" — the secret is non-null but
-      // still rejected because isBlank() (not merely isEmpty()) is used.
-      StreamChatService service = serviceWithSecret("   ");
-
-      // When / Then
-      assertThatThrownBy(() -> service.generateUserToken(USER_ID))
-          .isInstanceOf(MissingConfigurationException.class);
-    }
-
-    @Test
-    @DisplayName("should wrap a signing failure as a MissingConfigurationException")
-    void shouldWrapSigningFailure_whenSecretIsTooWeakForHmacSha256() {
-      // Given: HS256 requires a key of at least 256 bits; a short secret makes
-      // Keys.hmacShaKeyFor(...) throw, exercising the try/catch branch for real rather than
-      // via a mock.
-      StreamChatService service = serviceWithSecret("too-short");
-
-      // When / Then
-      assertThatThrownBy(() -> service.generateUserToken(USER_ID))
-          .isInstanceOf(MissingConfigurationException.class)
-          .hasMessageContaining("Could not generate chat token");
-    }
-
-    @Test
-    @DisplayName("should issue a token carrying the user id when the secret is configured")
-    void shouldIssueToken_whenSecretIsConfigured() {
-      // Given
-      String secret = "a-sufficiently-long-stream-chat-api-secret-for-hs256";
-      StreamChatService service = serviceWithSecret(secret);
-
+    @DisplayName("should return the public api key alongside the token")
+    void shouldReturnApiKey_soTheFrontendHasASingleSourceOfTruth() {
       // When
-      String token = service.generateUserToken(USER_ID);
+      ChatTokenResponse response = service.issueToken(user);
 
       // Then
-      assertThat(token).isNotBlank();
-      String userIdClaim =
-          Jwts.parser()
-              .verifyWith(
-                  Keys.hmacShaKeyFor(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-              .build()
-              .parseSignedClaims(token)
-              .getPayload()
-              .get("user_id", String.class);
-      assertThat(userIdClaim).isEqualTo(String.valueOf(USER_ID));
+      assertThat(response.getApiKey()).isEqualTo(API_KEY);
+      assertThat(response.getUserId()).isEqualTo("42");
+      assertThat(response.getStreamToken()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("should return an expiry roughly one token-ttl into the future")
+    void shouldReturnExpiresAt_derivedFromConfiguredTtl() {
+      // Given
+      Instant before = Instant.now();
+
+      // When
+      ChatTokenResponse response = service.issueToken(user);
+
+      // Then
+      assertThat(response.getExpiresAt())
+          .isBetween(before.plus(Duration.ofHours(24)), Instant.now().plus(Duration.ofHours(24)));
+    }
+
+    @Test
+    @DisplayName("should push the user profile to Stream so the UI shows names, not numeric ids")
+    void shouldUpsertUser() {
+      // When
+      service.issueToken(user);
+
+      // Then
+      then(streamChatClient).should().upsertUser(user);
+    }
+
+    @Test
+    @DisplayName("should still issue a token when the profile sync fails")
+    void shouldSwallowSyncFailure_becauseADegradedUiBeatsNoChatAtAll() {
+      // Given
+      willThrow(new ExternalApiException("Stream unreachable"))
+          .given(streamChatClient)
+          .upsertUser(any());
+
+      // When / Then
+      assertThatCode(() -> assertThat(service.issueToken(user).getStreamToken()).isNotBlank())
+          .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("should reject when the api-secret is missing")
+    void shouldThrowMissingConfigurationException_whenSecretIsMissing() {
+      // Given
+      properties.setApiSecret("");
+
+      // When / Then
+      assertThatThrownBy(() -> service.issueToken(user))
+          .isInstanceOf(MissingConfigurationException.class);
+      then(streamChatClient).should(never()).upsertUser(any());
+    }
+
+    @Test
+    @DisplayName("should reject when the api-key is missing")
+    void shouldThrowMissingConfigurationException_whenKeyIsMissing() {
+      // Given: a token signed against an app whose public key the frontend never receives is
+      // unusable, so this fails loudly at the same 503 rather than returning a null apiKey.
+      properties.setApiKey(null);
+
+      // When / Then
+      assertThatThrownBy(() -> service.issueToken(user))
+          .isInstanceOf(MissingConfigurationException.class);
+      then(streamChatClient).should(never()).upsertUser(any());
     }
   }
 }

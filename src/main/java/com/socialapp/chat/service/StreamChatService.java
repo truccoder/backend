@@ -1,40 +1,58 @@
 package com.socialapp.chat.service;
 
-import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.socialapp.chat.client.StreamChatClient;
+import com.socialapp.chat.config.StreamChatProperties;
+import com.socialapp.chat.dto.ChatTokenResponse;
 import com.socialapp.common.exception.MissingConfigurationException;
+import com.socialapp.security.entity.UserEntity;
 
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
-import javax.crypto.SecretKey;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class StreamChatService {
 
-  @Value("${stream.chat.api-secret:}")
-  private String apiSecret;
+  private final StreamChatProperties properties;
+  private final StreamTokenSigner tokenSigner;
+  private final StreamChatClient streamChatClient;
 
-  public String generateUserToken(Integer userId) {
-    if (apiSecret == null || apiSecret.isBlank()) {
+  public ChatTokenResponse issueToken(UserEntity user) {
+    if (!properties.isConfigured()) {
       throw new MissingConfigurationException(
-          "Stream Chat is not configured (missing stream.chat.api-secret); cannot issue a chat"
-              + " token");
+          "Stream Chat is not configured (missing stream.chat.api-key/api-secret); cannot issue a"
+              + " chat token");
     }
 
-    try {
-      SecretKey key = Keys.hmacShaKeyFor(apiSecret.getBytes(StandardCharsets.UTF_8));
+    Instant issuedAt = Instant.now();
+    Instant expiresAt = issuedAt.plus(properties.getTokenTtl());
+    String token = tokenSigner.userToken(user.getId(), issuedAt, expiresAt);
 
-      return Jwts.builder().claim("user_id", String.valueOf(userId)).signWith(key).compact();
+    syncProfileBestEffort(user);
+
+    return ChatTokenResponse.builder()
+        .userId(String.valueOf(user.getId()))
+        .apiKey(properties.getApiKey())
+        .streamToken(token)
+        .expiresAt(expiresAt)
+        .build();
+  }
+
+  /**
+   * A failed profile sync degrades the chat UI to numeric ids; a failed token blocks chat entirely.
+   * Never let the former cause the latter — Stream lazily creates the user on {@code connectUser}
+   * anyway.
+   */
+  private void syncProfileBestEffort(UserEntity user) {
+    try {
+      streamChatClient.upsertUser(user);
     } catch (Exception e) {
-      log.error("Failed to generate Stream chat token", e);
-      // Same root cause as the check above: an operator-configured secret that's unusable (e.g.
-      // too short for HMAC signing) rather than merely unset — still a config problem, not a bug.
-      throw new MissingConfigurationException("Could not generate chat token", e);
+      log.warn("Could not sync user {} to Stream Chat; issuing token anyway", user.getId(), e);
     }
   }
 }

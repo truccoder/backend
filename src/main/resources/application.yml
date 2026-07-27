@@ -125,6 +125,8 @@ stream:
   chat:
     api-key: ${STREAM_API_KEY:}
     api-secret: ${STREAM_API_SECRET:}
+    base-url: ${STREAM_BASE_URL:https://chat.stream-io-api.com}
+    token-ttl: ${STREAM_TOKEN_TTL:24h}
 
 trending:
   crawl-interval-ms: 3600000
