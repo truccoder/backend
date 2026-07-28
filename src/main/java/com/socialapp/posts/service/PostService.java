@@ -1,14 +1,19 @@
 package com.socialapp.posts.service;
 
+import java.beans.FeatureDescriptor;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.BeanWrapper;
+import org.springframework.beans.BeanWrapperImpl;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -178,7 +183,34 @@ public class PostService {
     PostEntity post = findPostOrThrow(postId);
     verifyAuthor(actorId, post);
     findUserOrThrow(actorId);
-    validateTags(request.getVisibility(), request.getTaggedUserIds(), request.getContent());
+
+    // An omitted field now means "leave alone", which splits tag validation in two.
+    //
+    // The privacy rule is an invariant of the stored post, so it is judged on the merged result:
+    // flipping an already-tagged post to PRIVATE without resending the tags must still fail.
+    //
+    // The placeholder/duplicate/limit rules describe how a tag list relates to the content it
+    // arrived with, so they only apply to a list the caller actually sent. Judging them on tags
+    // the caller never mentioned would make editing the caption of a tagged post impossible —
+    // the new text has no @[i] placeholders in it, and rejecting that edit is no better than the
+    // old behaviour of silently discarding the tags.
+    PostVisibility effectiveVisibility =
+        Objects.nonNull(request.getVisibility()) ? request.getVisibility() : post.getVisibility();
+    List<Integer> effectiveTaggedUserIds =
+        Objects.nonNull(request.getTaggedUserIds())
+            ? request.getTaggedUserIds()
+            : extractTaggedUserIds(post);
+
+    if (PostVisibility.PRIVATE.equals(effectiveVisibility)
+        && !CollectionUtils.isEmpty(effectiveTaggedUserIds)) {
+      throw new ValidationException("Private posts cannot tag other users");
+    }
+
+    if (Objects.nonNull(request.getTaggedUserIds())) {
+      String effectiveContent =
+          Objects.nonNull(request.getContent()) ? request.getContent() : post.getContent();
+      validateTags(effectiveVisibility, request.getTaggedUserIds(), effectiveContent);
+    }
 
     if (request.getQuizDetails() != null) {
       validateQuizDetails(request.getQuizDetails());
@@ -191,10 +223,15 @@ public class PostService {
       }
     }
 
-    BeanUtils.copyProperties(request, post);
-    post.getTags().clear();
-    postRepository.flush();
-    setTags(post, request.getTaggedUserIds());
+    BeanUtils.copyProperties(request, post, nullPropertyNames(request));
+
+    // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
+    // clearing it made "edit the caption" silently un-tag everybody.
+    if (Objects.nonNull(request.getTaggedUserIds())) {
+      post.getTags().clear();
+      postRepository.flush();
+      setTags(post, request.getTaggedUserIds());
+    }
     processHashtags(post);
 
     if (moderationProperties.isEnabled()) {
@@ -256,6 +293,27 @@ public class PostService {
     } catch (Exception e) {
       log.warn("Failed to remove post {} from feeds: {}", postId, e.getMessage());
     }
+  }
+
+  /**
+   * Names of every property that is null on {@code source}, for {@code BeanUtils.copyProperties}
+   * to skip.
+   *
+   * <p>Without this, an update wrote null over any column the request did not mention, so a
+   * client that edited only the caption erased the post's quiz, poll, images and tags. Treating
+   * an absent field as "leave alone" is the only reading that makes a partial update safe.
+   *
+   * <p>The trade-off is deliberate: a field can no longer be cleared by sending {@code null}.
+   * Lists still accept {@code []} to mean "empty this", but a detail block (quiz, poll, article…)
+   * cannot be removed through this endpoint at all. Losing the ability to delete a block is worth
+   * far less than losing a user's data to a routine edit.
+   */
+  private static String[] nullPropertyNames(Object source) {
+    BeanWrapper wrapper = new BeanWrapperImpl(source);
+    return Stream.of(wrapper.getPropertyDescriptors())
+        .map(FeatureDescriptor::getName)
+        .filter(name -> Objects.isNull(wrapper.getPropertyValue(name)))
+        .toArray(String[]::new);
   }
 
   private void validateTags(

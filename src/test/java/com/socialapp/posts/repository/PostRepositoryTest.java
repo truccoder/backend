@@ -17,6 +17,8 @@ import com.socialapp.AbstractIntegrationTest;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.PostTagEntity;
+import com.socialapp.posts.entity.PostTagId;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -379,6 +381,63 @@ class PostRepositoryTest extends AbstractIntegrationTest {
 
       // Then
       assertThat(result.getContent()).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // tag collection mapping
+  // =====================================================================
+
+  @Nested
+  @DisplayName("tags collection")
+  class TagsCollectionTests {
+
+    @Test
+    @DisplayName("clearing the tag list deletes the rows instead of orphaning them")
+    void clearingTagsDeletesRows() {
+      // Given — a saved post that already carries a tag
+      PostEntity post =
+          postRepository.saveAndFlush(
+              post(authorId, "tagged post", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), authorId));
+      postRepository.saveAndFlush(post);
+
+      // When — this is what updatePost does before rebuilding the list. Hibernate used to plan
+      // "UPDATE t_post_tags SET post_id = NULL" here, which the composite primary key rejects,
+      // so every edit of an already-tagged post failed with a constraint violation.
+      post.getTags().clear();
+
+      // Then
+      postRepository.flush();
+      PostEntity reloaded = postRepository.findById(post.getId()).orElseThrow();
+      assertThat(reloaded.getTags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("replacing the tag list keeps the new tags in position order")
+    void replacingTagsKeepsOrder() {
+      // Given
+      PostEntity post =
+          postRepository.saveAndFlush(
+              post(authorId, "tagged post", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), authorId));
+      postRepository.saveAndFlush(post);
+
+      Integer otherId = userRepository.saveAndFlush(user("other@example.com", "other")).getId();
+
+      // When
+      post.getTags().clear();
+      postRepository.flush();
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), otherId));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 1), authorId));
+      postRepository.saveAndFlush(post);
+
+      // Then — post_id is written by the child entity itself, so insert still works even though
+      // the association no longer owns that column
+      PostEntity reloaded = postRepository.findById(post.getId()).orElseThrow();
+      assertThat(reloaded.getTags())
+          .extracting(PostTagEntity::getTaggedUserId)
+          .containsExactly(otherId, authorId);
     }
   }
 }

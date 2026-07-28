@@ -52,10 +52,12 @@ import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.HashtagEntity;
+import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
 import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.CommentRepository;
@@ -633,6 +635,147 @@ class PostServiceTest {
   @Nested
   @DisplayName("updatePost")
   class UpdatePostTests {
+
+    @Test
+    @DisplayName("should keep detail blocks, images and tags that the request did not mention")
+    void shouldKeepUnmentionedFields_whenRequestIsPartial() {
+      // Given — a caption-only edit, exactly what a client sends when it has nothing else to
+      // say. Before this, BeanUtils.copyProperties wrote null over every omitted column and one
+      // such edit erased the post's quiz, poll, images and tag list.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setQuizDetails(new QuizDetails());
+      post.setPollDetails(new PollDetails());
+      post.setImages(List.of("a.png"));
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("Only the caption changed");
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getContent()).isEqualTo("Only the caption changed");
+      assertThat(post.getQuizDetails()).isNotNull();
+      assertThat(post.getPollDetails()).isNotNull();
+      assertThat(post.getImages()).containsExactly("a.png");
+      assertThat(post.getVisibility()).isEqualTo(PostVisibility.PUBLIC);
+      assertThat(post.getTags()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should still replace fields the request does mention")
+    void shouldReplaceMentionedFields() {
+      // Given — "leave alone" must not turn into "ignore": a value that IS sent still wins
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setImages(List.of("old.png"));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setImages(List.of("new.png"));
+      request.setVisibility(PostVisibility.FRIENDS);
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getImages()).containsExactly("new.png");
+      assertThat(post.getVisibility()).isEqualTo(PostVisibility.FRIENDS);
+      assertThat(post.getContent()).isEqualTo("Old content");
+    }
+
+    @Test
+    @DisplayName("should clear the tag list when the request sends an empty one")
+    void shouldClearTags_whenRequestSendsEmptyList() {
+      // Given — an empty list is the escape hatch that null no longer provides
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setTaggedUserIds(List.of());
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getTags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should judge the privacy rule on the merged post, not on the request alone")
+    void shouldEnforcePrivacyRule_againstExistingTags() {
+      // Given — the post already tags someone and the request only flips it to PRIVATE. The
+      // tags are never mentioned, yet the merged post would be a private post with tags.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setVisibility(PostVisibility.PRIVATE);
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.updatePost(AUTHOR_ID, POST_ID, request))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Private posts cannot tag other users");
+    }
+
+    @Test
+    @DisplayName("should not apply the placeholder rule to tags the request never sent")
+    void shouldSkipPlaceholderRule_whenTagsAreNotSent() {
+      // Given — editing the caption of a tagged post. The new text carries no @[i] placeholder,
+      // but the caller is not touching the tags, so the rule does not apply to them.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("A caption with no placeholders");
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When / Then — rejecting this edit would be no better than silently dropping the tags
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+      assertThat(post.getTags()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should still apply the placeholder rule to a tag list the request does send")
+    void shouldApplyPlaceholderRule_whenTagsAreSent() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("No placeholder here");
+      request.setTaggedUserIds(List.of(42));
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.updatePost(AUTHOR_ID, POST_ID, request))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Missing placeholder");
+    }
 
     @Test
     @DisplayName("should reject when the actor is currently banned")

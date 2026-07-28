@@ -43,8 +43,15 @@ public class PostEntity {
   @Column(name = "images", columnDefinition = "jsonb")
   private List<String> images;
 
+  // insertable/updatable = false is load-bearing, not documentation. For a unidirectional
+  // @OneToMany with a @JoinColumn, Hibernate's default removal plan is
+  // "UPDATE t_post_tags SET post_id = NULL" before the DELETE — but post_id is half of this
+  // table's primary key, so that statement died on the not-null constraint and every edit of an
+  // already-tagged post came back 409. Taking write control of the column away from the
+  // association leaves only the DELETE. Nothing is lost on insert: PostTagEntity carries post_id
+  // itself, inside its own composite id.
   @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
-  @JoinColumn(name = "post_id")
+  @JoinColumn(name = "post_id", insertable = false, updatable = false)
   @OrderBy("id.position ASC")
   @ToString.Exclude
   @EqualsAndHashCode.Exclude
