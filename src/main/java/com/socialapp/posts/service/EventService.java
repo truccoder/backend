@@ -11,6 +11,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.EventRsvpEntity;
@@ -32,6 +35,7 @@ public class EventService {
   private final PostRepository postRepository;
   private final EventRsvpRepository rsvpRepository;
   private final UserRepository userRepository;
+  private final NotificationService notificationService;
   private final GoogleCalendarService googleCalendarService;
 
   private static final DateTimeFormatter ICS_FORMAT =
@@ -54,8 +58,53 @@ public class EventService {
             .findByPostIdAndUserId(postId, userId)
             .orElseGet(() -> EventRsvpEntity.builder().postId(postId).userId(userId).build());
 
+    RsvpStatus previousStatus = rsvp.getStatus();
     rsvp.setStatus(status);
     rsvpRepository.save(rsvp);
+
+    if (!status.equals(previousStatus)) {
+      notifyHost(post, userId, status);
+    }
+  }
+
+  /**
+   * Tells the event's host that somebody answered. EVENT_RSVP was one of four notification types
+   * the enum declared with no publisher anywhere: the RSVP itself worked, only the ping was
+   * missing.
+   *
+   * <p>Only fired on an actual change of answer (see the caller) and never for {@code NOT_GOING} —
+   * a decline is not worth a notification, and without that guard flipping GOING → NOT_GOING would
+   * ping the host twice for one person's change of mind.
+   */
+  private void notifyHost(PostEntity post, Integer attendeeId, RsvpStatus status) {
+    Integer hostId = post.getAuthorId();
+    if (RsvpStatus.NOT_GOING.equals(status)
+        || Objects.isNull(hostId)
+        || hostId.equals(attendeeId)) {
+      return;
+    }
+
+    String attendeeName =
+        userRepository
+            .findById(attendeeId)
+            .map(UserEntity::getFullName)
+            .filter(name -> Objects.nonNull(name) && !name.isBlank())
+            .orElse("Someone");
+    String eventTitle = Objects.toString(post.getEventDetails().getEventTitle(), "your event");
+
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(hostId)
+            .actorId(attendeeId)
+            .type(NotificationType.EVENT_RSVP)
+            .title("New RSVP for your event")
+            .body(
+                attendeeName
+                    + (RsvpStatus.GOING.equals(status) ? " is going to " : " is interested in ")
+                    + eventTitle)
+            .referenceId(post.getId())
+            .referenceType("POST")
+            .build());
   }
 
   /**

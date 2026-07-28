@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -23,6 +24,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.EventRsvpEntity;
@@ -43,11 +47,13 @@ import com.socialapp.security.repository.UserRepository;
 class EventServiceTest {
 
   private static final Integer USER_ID = 1;
+  private static final Integer HOST_ID = 7;
   private static final Integer POST_ID = 100;
 
   @Mock private PostRepository postRepository;
   @Mock private EventRsvpRepository rsvpRepository;
   @Mock private UserRepository userRepository;
+  @Mock private NotificationService notificationService;
   @Mock private GoogleCalendarService googleCalendarService;
 
   @InjectMocks private EventService eventService;
@@ -65,6 +71,7 @@ class EventServiceTest {
 
     PostEntity post = new PostEntity();
     post.setId(POST_ID);
+    post.setAuthorId(HOST_ID);
     post.setPostType(PostType.EVENT);
     post.setEventDetails(details);
     return post;
@@ -130,6 +137,97 @@ class EventServiceTest {
       // Then
       verify(rsvpRepository).save(rsvpCaptor.capture());
       assertThat(rsvpCaptor.getValue().getStatus()).isEqualTo(RsvpStatus.NOT_GOING);
+    }
+
+    @Test
+    @DisplayName("should notify the host when somebody says they are going")
+    void shouldNotifyHost_whenRsvpIsGoing() {
+      // Given — EVENT_RSVP was declared in NotificationType with no publisher anywhere (B16)
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser()));
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING);
+
+      // Then
+      ArgumentCaptor<SendNotificationRequest> sent =
+          ArgumentCaptor.forClass(SendNotificationRequest.class);
+      verify(notificationService).send(sent.capture());
+      assertThat(sent.getValue().getRecipientId()).isEqualTo(HOST_ID);
+      assertThat(sent.getValue().getActorId()).isEqualTo(USER_ID);
+      assertThat(sent.getValue().getType()).isEqualTo(NotificationType.EVENT_RSVP);
+      assertThat(sent.getValue().getBody()).isEqualTo("Nguyen Truc is going to Tech Meetup");
+      assertThat(sent.getValue().getReferenceId()).isEqualTo(POST_ID);
+      assertThat(sent.getValue().getReferenceType()).isEqualTo("POST");
+    }
+
+    @Test
+    @DisplayName("should not notify the host when the answer is NOT_GOING")
+    void shouldNotNotifyHost_whenRsvpIsNotGoing() {
+      // Given — a decline is not worth a ping, and it also stops GOING -> NOT_GOING from
+      // notifying the host twice about one person changing their mind
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.NOT_GOING);
+
+      // Then
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should not notify when the RSVP repeats the answer already on file")
+    void shouldNotNotifyHost_whenStatusIsUnchanged() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID))
+          .thenReturn(
+              Optional.of(
+                  EventRsvpEntity.builder()
+                      .postId(POST_ID)
+                      .userId(USER_ID)
+                      .status(RsvpStatus.GOING)
+                      .build()));
+
+      // When — the client re-sends GOING
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING);
+
+      // Then
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should not notify the host about their own RSVP")
+    void shouldNotNotifyHost_whenHostRsvpsToOwnEvent() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, HOST_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(HOST_ID, POST_ID, RsvpStatus.GOING);
+
+      // Then
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should fall back to a generic actor name when the attendee cannot be loaded")
+    void shouldUseFallbackName_whenAttendeeIsMissing() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      eventService.rsvp(USER_ID, POST_ID, RsvpStatus.INTERESTED);
+
+      // Then
+      ArgumentCaptor<SendNotificationRequest> sent =
+          ArgumentCaptor.forClass(SendNotificationRequest.class);
+      verify(notificationService).send(sent.capture());
+      assertThat(sent.getValue().getBody()).isEqualTo("Someone is interested in Tech Meetup");
     }
 
     @Test
