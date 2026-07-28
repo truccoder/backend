@@ -2,7 +2,9 @@ package com.socialapp.posts.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -25,6 +27,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.posts.entity.EventRsvpEntity;
 import com.socialapp.posts.entity.enums.RsvpStatus;
@@ -51,9 +54,10 @@ import com.socialapp.security.repository.UserRepository;
  * anyRequest().authenticated()} like every other endpoint here and would have rejected the real
  * OAuth redirect with 401).
  *
- * <p>{@code state} is parsed with {@code Integer.parseInt(state)}; a non-numeric {@code state}
- * now maps to 400 via {@code GlobalExceptionHandler}'s {@code NumberFormatException} handler
- * (previously fell through to the generic {@code Exception} handler as 500).
+ * <p>Because that path is open, {@code state} carries the authorisation: it is a single-use
+ * server-issued nonce redeemed by {@code consumeOAuthState}, not a user id. Any state the server
+ * did not issue — a guessed id, a spent nonce, junk — is a 403. It used to be
+ * {@code Integer.parseInt(state)}, which meant anyone could name the account to bind (B1).
  */
 @WebMvcTest(EventController.class)
 @Import({
@@ -339,31 +343,58 @@ class EventControllerTest {
   class GoogleCallbackTests {
 
     @Test
-    @DisplayName("shouldReturn200_whenCodeAndStateAreValid_happyPath")
-    void shouldReturn200_whenCodeAndStateAreValid_happyPath() throws Exception {
+    @DisplayName("shouldReturn200_whenStateIsAValidIssuedNonce_happyPath")
+    void shouldReturn200_whenStateIsAValidIssuedNonce_happyPath() throws Exception {
+      // Given — the nonce redeems to the user who started the authorize flow
+      when(googleCalendarService.consumeOAuthState("issued-nonce")).thenReturn(1);
+
       // When / Then
       mockMvc
           .perform(
               authed(get(EVENTS_URL + "/google/callback"))
                   .param("code", "auth-code-abc")
-                  .param("state", "1"))
+                  .param("state", "issued-nonce"))
           .andExpect(status().isOk());
 
       verify(googleCalendarService).handleOAuthCallback(1, "auth-code-abc");
     }
 
     @Test
-    @DisplayName("shouldReturn400_whenStateIsNotNumeric")
-    void shouldReturn400_whenStateIsNotNumeric() throws Exception {
-      // Given — state is parsed with Integer.parseInt(state); NumberFormatException now has a
-      // dedicated handler in GlobalExceptionHandler
+    @DisplayName("shouldReturn403_whenStateIsAGuessedUserId")
+    void shouldReturn403_whenStateIsAGuessedUserId() throws Exception {
+      // Given — B1: before the fix, state WAS the user id, so this call bound the caller's
+      // Google account to user 9001. The nonce was never issued, so redemption must fail.
+      when(googleCalendarService.consumeOAuthState("9001"))
+          .thenThrow(new ForbiddenException("Invalid or expired OAuth state"));
+
+      // When / Then
+      mockMvc
+          .perform(
+              get(EVENTS_URL + "/google/callback")
+                  .param("code", "attacker-auth-code")
+                  .param("state", "9001"))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.message").value("Invalid or expired OAuth state"));
+
+      // Then — no token was written for anyone
+      verify(googleCalendarService, never()).handleOAuthCallback(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenStateIsNotNumeric")
+    void shouldReturn403_whenStateIsNotNumeric() throws Exception {
+      // Given — state is now an opaque string, so a non-numeric value is no longer a parse
+      // error (400) but simply an unknown nonce (403), same as any other forged state
+      when(googleCalendarService.consumeOAuthState("not-a-number"))
+          .thenThrow(new ForbiddenException("Invalid or expired OAuth state"));
+
+      // When / Then
       mockMvc
           .perform(
               get(EVENTS_URL + "/google/callback")
                   .param("code", "auth-code-abc")
                   .param("state", "not-a-number"))
-          .andExpect(status().isBadRequest())
-          .andExpect(jsonPath("$.message").value("Invalid numeric value in request"));
+          .andExpect(status().isForbidden());
     }
 
     @Test
@@ -371,14 +402,16 @@ class EventControllerTest {
     void shouldReturn200_whenCalledWithNoAuthorizationHeader_permitAll() throws Exception {
       // Given — this is exactly how Google's browser redirect calls this endpoint: no
       // Authorization header at all, since Google doesn't have this app's bearer token.
-      // SecurityConfig now permitAll()s this specific path for that reason.
+      // SecurityConfig permitAll()s this specific path for that reason; authorisation is
+      // enforced by consumeOAuthState instead.
+      when(googleCalendarService.consumeOAuthState("issued-nonce")).thenReturn(1);
 
       // When / Then
       mockMvc
           .perform(
               get(EVENTS_URL + "/google/callback")
                   .param("code", "auth-code-abc")
-                  .param("state", "1"))
+                  .param("state", "issued-nonce"))
           .andExpect(status().isOk());
 
       verify(googleCalendarService).handleOAuthCallback(1, "auth-code-abc");

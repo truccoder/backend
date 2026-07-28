@@ -48,8 +48,11 @@ public class SecurityConfig {
                     .requestMatchers("/v1/api/payments/momo/webhook")
                     .permitAll()
                     // Google's OAuth consent screen redirects the browser directly to this URL
-                    // with no way to attach this app's own bearer token; the userId travels in
-                    // the "state" param instead (see EventController#handleGoogleCallback).
+                    // with no way to attach this app's own bearer token, so it has to stay open.
+                    // Authorisation is enforced inside the handler instead: "state" is a
+                    // single-use server-issued nonce that maps back to the user who started the
+                    // flow (GoogleCalendarService#consumeOAuthState). It is NOT the user id —
+                    // it used to be, which made this endpoint an account-takeover vector.
                     .requestMatchers("/v1/api/events/google/callback")
                     .permitAll()
                     // Swagger UI fetches the spec before any login happens, so both paths
