@@ -8,7 +8,6 @@ import org.springframework.stereotype.Service;
 import com.socialapp.trending.crawler.CrawledItem;
 import com.socialapp.trending.crawler.TrendingCrawler;
 import com.socialapp.trending.entity.TrendingItemEntity;
-import com.socialapp.trending.entity.enums.TrendingCategory;
 import com.socialapp.trending.repository.TrendingItemRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -42,12 +41,11 @@ public class TrendingCrawlScheduler {
           continue;
         }
 
-        List<TrendingCategory> categories = classificationService.classifyBatch(newItems);
+        List<TrendingClassification> classifications =
+            classificationService.classifyBatch(newItems);
 
         for (int i = 0; i < newItems.size(); i++) {
-          CrawledItem crawled = newItems.get(i);
-          TrendingCategory category = categories.get(i);
-          saveItem(crawled, category);
+          saveItem(newItems.get(i), classifications.get(i));
         }
 
         log.info("Saved {} new items from {}", newItems.size(), crawler.getSource());
@@ -57,7 +55,7 @@ public class TrendingCrawlScheduler {
     }
   }
 
-  private void saveItem(CrawledItem crawled, TrendingCategory category) {
+  private void saveItem(CrawledItem crawled, TrendingClassification classification) {
     TrendingItemEntity entity =
         TrendingItemEntity.builder()
             .title(crawled.getTitle())
@@ -65,7 +63,11 @@ public class TrendingCrawlScheduler {
             .url(crawled.getUrl())
             .source(crawled.getSource())
             .sourceId(crawled.getSourceId())
-            .category(category)
+            .category(classification.category())
+            // Gemini has always returned these alongside the category and this line has always
+            // been missing, so every row was written with no tags while the quota to generate
+            // them was spent on every crawl cycle.
+            .tags(classification.tags())
             .score(crawled.getScore())
             .author(crawled.getAuthor())
             .publishedAt(crawled.getPublishedAt())

@@ -23,24 +23,24 @@ public class TrendingClassificationService {
 
   private static final int BATCH_SIZE = 10;
 
-  public TrendingCategory classify(CrawledItem item) {
+  public TrendingClassification classify(CrawledItem item) {
     try {
       String prompt = buildSingleClassificationPrompt(item);
       String response = geminiClient.generateContent(prompt);
-      return parseCategory(response);
+      return parseClassification(response);
     } catch (Exception e) {
       log.warn(
           "Failed to classify item '{}', defaulting to OTHER: {}", item.getTitle(), e.getMessage());
-      return TrendingCategory.OTHER;
+      return TrendingClassification.other();
     }
   }
 
-  public List<TrendingCategory> classifyBatch(List<CrawledItem> items) {
+  public List<TrendingClassification> classifyBatch(List<CrawledItem> items) {
     if (items.size() <= BATCH_SIZE) {
       return classifyBatchInternal(items);
     }
 
-    List<TrendingCategory> results = new java.util.ArrayList<>();
+    List<TrendingClassification> results = new java.util.ArrayList<>();
     for (int i = 0; i < items.size(); i += BATCH_SIZE) {
       List<CrawledItem> batch = items.subList(i, Math.min(i + BATCH_SIZE, items.size()));
       results.addAll(classifyBatchInternal(batch));
@@ -48,14 +48,14 @@ public class TrendingClassificationService {
     return results;
   }
 
-  private List<TrendingCategory> classifyBatchInternal(List<CrawledItem> items) {
+  private List<TrendingClassification> classifyBatchInternal(List<CrawledItem> items) {
     try {
       String prompt = buildBatchClassificationPrompt(items);
       String response = geminiClient.generateContent(prompt);
-      return parseBatchCategories(response, items.size());
+      return parseBatchClassifications(response, items.size());
     } catch (Exception e) {
       log.warn("Batch classification failed, defaulting all to OTHER: {}", e.getMessage());
-      return items.stream().map(i -> TrendingCategory.OTHER).toList();
+      return items.stream().map(i -> TrendingClassification.other()).toList();
     }
   }
 
@@ -118,49 +118,75 @@ public class TrendingClassificationService {
     return sb.toString();
   }
 
-  private TrendingCategory parseCategory(String response) {
+  private TrendingClassification parseClassification(String response) {
     try {
       JsonNode root = objectMapper.readTree(response);
-      String category = root.path("category").asText("OTHER");
-      return TrendingCategory.valueOf(category);
+      return new TrendingClassification(
+          parseCategory(root.path("category").asText("OTHER")), parseTags(root.path("tags")));
     } catch (Exception e) {
-      return TrendingCategory.OTHER;
+      return TrendingClassification.other();
     }
   }
 
-  private List<TrendingCategory> parseBatchCategories(String response, int expectedSize) {
+  private List<TrendingClassification> parseBatchClassifications(
+      String response, int expectedSize) {
+    List<TrendingClassification> results = new java.util.ArrayList<>();
+    for (int i = 0; i < expectedSize; i++) {
+      results.add(TrendingClassification.other());
+    }
+
     try {
       JsonNode root = objectMapper.readTree(response);
       JsonNode classifications = root.path("classifications");
 
-      List<TrendingCategory> results = new java.util.ArrayList<>();
-      for (int i = 0; i < expectedSize; i++) {
-        results.add(TrendingCategory.OTHER);
-      }
-
       if (classifications.isArray()) {
         for (JsonNode node : classifications) {
+          // The model echoes a 1-based index rather than relying on array order, so an entry it
+          // skips or repeats cannot shift everything after it onto the wrong article.
           int index = node.path("index").asInt(0) - 1;
-          String category = node.path("category").asText("OTHER");
           if (index >= 0 && index < expectedSize) {
-            try {
-              results.set(index, TrendingCategory.valueOf(category));
-            } catch (IllegalArgumentException e) {
-              log.warn(
-                  "Unknown trending category '{}' at index {}, keeping OTHER", category, index);
-            }
+            results.set(
+                index,
+                new TrendingClassification(
+                    parseCategory(node.path("category").asText("OTHER")),
+                    parseTags(node.path("tags"))));
           }
         }
       }
-
-      return results;
     } catch (Exception e) {
       log.warn("Failed to parse batch classification response: {}", e.getMessage());
-      List<TrendingCategory> defaults = new java.util.ArrayList<>();
-      for (int i = 0; i < expectedSize; i++) {
-        defaults.add(TrendingCategory.OTHER);
-      }
-      return defaults;
     }
+
+    return results;
+  }
+
+  private TrendingCategory parseCategory(String category) {
+    try {
+      return TrendingCategory.valueOf(category);
+    } catch (IllegalArgumentException e) {
+      log.warn("Unknown trending category '{}', keeping OTHER", category);
+      return TrendingCategory.OTHER;
+    }
+  }
+
+  /**
+   * Reads the {@code tags} array the prompt asks for, tolerating its absence.
+   *
+   * <p>Blank entries are dropped and the rest trimmed: the model occasionally answers with an
+   * empty string or padded text, and a blank chip on the card is worse than no chip.
+   */
+  private List<String> parseTags(JsonNode tagsNode) {
+    if (!tagsNode.isArray()) {
+      return List.of();
+    }
+
+    List<String> tags = new java.util.ArrayList<>();
+    for (JsonNode tag : tagsNode) {
+      String text = tag.asText("").trim();
+      if (!text.isEmpty()) {
+        tags.add(text);
+      }
+    }
+    return tags;
   }
 }

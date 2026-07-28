@@ -102,7 +102,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(item1)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
@@ -118,6 +118,30 @@ class TrendingCrawlSchedulerTest {
     }
 
     @Test
+    @DisplayName("should persist the tags the classifier returned")
+    void shouldPersistTags() {
+      // Given — B3: the quota to generate these was being spent on every crawl cycle and the
+      // result never reached the row, so the whole table read back with empty tags
+      CrawledItem item1 = crawled("1", "short summary");
+      when(crawlerA.crawl()).thenReturn(List.of(item1));
+      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
+          .thenReturn(false);
+      when(classificationService.classifyBatch(List.of(item1)))
+          .thenReturn(
+              List.of(new TrendingClassification(TrendingCategory.TOOL, List.of("cli", "rust"))));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getTags()).containsExactly("cli", "rust");
+    }
+
+    @Test
     @DisplayName("should filter out items that already exist before classifying")
     void shouldFilterOutExistingItems_beforeClassifying() {
       // Given
@@ -129,7 +153,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "2"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(fresh)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
@@ -152,7 +176,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(item)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA, crawlerB), classificationService, trendingItemRepository);
@@ -172,7 +196,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(item)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
@@ -195,7 +219,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(item)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
@@ -218,7 +242,7 @@ class TrendingCrawlSchedulerTest {
       when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
           .thenReturn(false);
       when(classificationService.classifyBatch(List.of(item)))
-          .thenReturn(List.of(TrendingCategory.TOOL));
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
