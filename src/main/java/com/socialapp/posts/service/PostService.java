@@ -272,7 +272,14 @@ public class PostService {
     }
 
     qnaDetails.setAcceptedAnswerId(commentId);
+    // isResolved is written nowhere else — posts are created with false and no other path flips
+    // it — so without this line every answered question stayed labelled "unanswered" forever.
+    qnaDetails.setIsResolved(true);
     postRepository.save(post);
+
+    // The feed serves qnaDetails straight out of Redis and never re-reads Postgres, so fixing the
+    // row alone would leave readers looking at the stale "unanswered" copy until the next fan-out.
+    newsfeedService.updateCachedQnaDetails(postId, qnaDetails);
 
     if (!comment.getAuthorId().equals(actorId)) {
       reputationEventPublisher.award(

@@ -158,6 +158,8 @@ class ReputationServiceTest {
       assertThat(result.getEliteScore()).isEqualTo(120);
       assertThat(result.getLevel()).isEqualTo(RepLevel.CONTRIBUTOR.getLevel());
       assertThat(result.getLevelName()).isEqualTo("Contributor");
+      // B15: without the current level's floor a progress bar can only run 0 → nextLevelMin
+      assertThat(result.getCurrentLevelMin()).isEqualTo(RepLevel.CONTRIBUTOR.getMin());
       assertThat(result.getNextLevelMin()).isEqualTo(RepLevel.PRACTITIONER.getMin());
       assertThat(result.isVerifiedExpert()).isTrue();
     }
@@ -179,6 +181,7 @@ class ReputationServiceTest {
 
       // Then
       assertThat(result.getLevelName()).isEqualTo("Elite");
+      assertThat(result.getCurrentLevelMin()).isEqualTo(RepLevel.ELITE.getMin());
       assertThat(result.getNextLevelMin()).isNull();
       assertThat(result.isVerifiedExpert()).isFalse();
     }

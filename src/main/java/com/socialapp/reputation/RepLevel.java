@@ -45,6 +45,14 @@ public enum RepLevel {
     return result;
   }
 
+  /**
+   * Label for a raw Elite Score, null-tolerant. Shared by the feed and search payloads so the
+   * level shown next to a score is computed from this table and nowhere else.
+   */
+  public static String displayNameForScore(Integer score) {
+    return score == null ? null : forScore(score).getDisplayName();
+  }
+
   /** Null once ELITE is reached — there's no next level. */
   public RepLevel next() {
     RepLevel[] all = values();

@@ -1053,9 +1053,27 @@ class PostServiceTest {
 
       // Then
       assertThat(post.getQnaDetails().getAcceptedAnswerId()).isEqualTo(COMMENT_ID);
+      // B10: isResolved was never written by anything, so an answered question kept the
+      // "unanswered" label forever
+      assertThat(post.getQnaDetails().getIsResolved()).isTrue();
       verify(postRepository).save(post);
       verify(reputationEventPublisher)
           .award(COMMENTER_ID, RepSourceType.ACCEPTED_ANSWER, COMMENT_ID.toString());
+    }
+
+    @Test
+    @DisplayName("should refresh the cached QNA block so the feed stops saying unanswered")
+    void shouldRefreshCachedQnaDetails() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(COMMENTER_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then — the feed reads qnaDetails out of Redis and never falls back to Postgres
+      verify(newsfeedService).updateCachedQnaDetails(POST_ID, post.getQnaDetails());
     }
 
     @Test

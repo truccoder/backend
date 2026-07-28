@@ -426,6 +426,30 @@ class NewsfeedServiceTest {
     }
 
     @Test
+    @DisplayName("should label the author's elite score with the matching reputation level")
+    void shouldCacheAuthorLevelName() throws Exception {
+      // Given — B15: the feed carried the raw score only, so the chip had no level suffix to show
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      UserEntity author = user(AUTHOR_ID, "Alice");
+      author.setEliteScore(5_000);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(author));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then — 5,000 is exactly the EXPERT floor
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      assertThat(cached.getValue().getAuthorEliteScore()).isEqualTo(5_000);
+      assertThat(cached.getValue().getAuthorLevelName()).isEqualTo("Expert");
+    }
+
+    @Test
     @DisplayName("should read like and comment counts from the database, not assume zero")
     void shouldReadCounters_fromDatabase() throws Exception {
       // Given — fan-out also runs on edit and on a late moderation approval, by which time the
@@ -495,6 +519,28 @@ class NewsfeedServiceTest {
 
       // Then
       assertThat(cachedPost.getCommentCount()).isEqualTo(2);
+      verify(valueOperations).set(eq("feedpost:" + POST_ID), anyString(), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should rewrite the cached QNA block in place")
+    void shouldRewriteCachedQnaDetails() throws Exception {
+      // Given — accepting an answer flips isResolved in Postgres, and the feed only ever reads
+      // Redis (B10)
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      cachedPost.setQnaDetails(new QnaDetails(false, null, null));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"qnaDetails\":{}}");
+
+      // When
+      newsfeedService.updateCachedQnaDetails(POST_ID, new QnaDetails(true, null, 500));
+
+      // Then
+      assertThat(cachedPost.getQnaDetails().getIsResolved()).isTrue();
+      assertThat(cachedPost.getQnaDetails().getAcceptedAnswerId()).isEqualTo(500);
       verify(valueOperations).set(eq("feedpost:" + POST_ID), anyString(), eq(Duration.ofDays(7)));
     }
 

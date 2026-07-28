@@ -30,6 +30,15 @@ public class FeedPostDataDto {
   private String authorFullName;
   private String authorProfilePictureUrl;
   private Integer authorEliteScore;
+
+  /**
+   * The label that goes with {@link #authorEliteScore} ("Contributor", "Expert", …). Derived from
+   * the score by {@link com.socialapp.reputation.RepLevel}, and sent rather than left to the
+   * client so the threshold table stays in one place — a client computing it from the raw score
+   * would be a second copy that drifts the moment a threshold moves.
+   */
+  private String authorLevelName;
+
   private String content;
   private PostVisibility visibility;
   private String googlePlaceId;

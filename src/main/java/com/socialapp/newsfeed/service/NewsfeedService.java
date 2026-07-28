@@ -32,11 +32,13 @@ import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
+import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.RepLevel;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -87,6 +89,7 @@ public class NewsfeedService {
             .authorFullName(author.getFullName())
             .authorProfilePictureUrl(author.getProfilePictureUrl())
             .authorEliteScore(author.getEliteScore())
+            .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()))
             .content(post.getContent())
             .visibility(post.getVisibility())
             .googlePlaceId(post.getGooglePlaceId())
@@ -242,6 +245,15 @@ public class NewsfeedService {
   /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
   public void updateCachedCommentCount(Integer postId, int commentCount) {
     mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
+  }
+
+  /**
+   * Rewrites the cached QNA block for one post — see {@link #updateCachedLikeCount}. Accepting an
+   * answer changes {@code isResolved}/{@code acceptedAnswerId}, and the feed would otherwise keep
+   * serving the pre-accept copy.
+   */
+  public void updateCachedQnaDetails(Integer postId, QnaDetails qnaDetails) {
+    mutateCachedPost(postId, post -> post.setQnaDetails(qnaDetails));
   }
 
   private void mutateCachedPost(Integer postId, Consumer<FeedPostDataDto> mutation) {

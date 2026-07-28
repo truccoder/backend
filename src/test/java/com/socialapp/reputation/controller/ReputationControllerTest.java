@@ -99,6 +99,7 @@ class ReputationControllerTest {
               .eliteScore(120)
               .level(2)
               .levelName("Contributor")
+              .currentLevelMin(100)
               .nextLevelMin(1000)
               .verifiedExpert(true)
               .build();
@@ -111,6 +112,7 @@ class ReputationControllerTest {
           .andExpect(jsonPath("$.eliteScore").value(120))
           .andExpect(jsonPath("$.level").value(2))
           .andExpect(jsonPath("$.levelName").value("Contributor"))
+          .andExpect(jsonPath("$.currentLevelMin").value(100))
           .andExpect(jsonPath("$.nextLevelMin").value(1000))
           .andExpect(jsonPath("$.verifiedExpert").value(true));
 

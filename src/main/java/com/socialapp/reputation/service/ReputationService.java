@@ -78,6 +78,7 @@ public class ReputationService {
         .eliteScore(score)
         .level(level.getLevel())
         .levelName(level.getDisplayName())
+        .currentLevelMin(level.getMin())
         .nextLevelMin(next != null ? next.getMin() : null)
         .verifiedExpert(verifiedExpert)
         .build();

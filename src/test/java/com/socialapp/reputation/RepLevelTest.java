@@ -39,6 +39,15 @@ class RepLevelTest {
   }
 
   @Test
+  @DisplayName("displayNameForScore should label a score, and tolerate a null one")
+  void displayNameForScore_shouldLabelScoreAndTolerateNull() {
+    // When / Then — the feed and search payloads call this with a nullable column
+    assertThat(RepLevel.displayNameForScore(0)).isEqualTo("Newcomer");
+    assertThat(RepLevel.displayNameForScore(4_999)).isEqualTo("Practitioner");
+    assertThat(RepLevel.displayNameForScore(null)).isNull();
+  }
+
+  @Test
   @DisplayName("next should return the following level for every level except ELITE")
   void next_shouldReturnFollowingLevel_forAllButElite() {
     // When / Then

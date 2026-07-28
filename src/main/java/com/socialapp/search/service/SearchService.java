@@ -14,6 +14,7 @@ import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.RepLevel;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResult;
@@ -150,9 +151,12 @@ public class SearchService {
                   .authorFullName(author != null ? author.getFullName() : null)
                   .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
                   .authorEliteScore(author != null ? author.getEliteScore() : null)
+                  .authorLevelName(
+                      author != null ? RepLevel.displayNameForScore(author.getEliteScore()) : null)
                   .visibility(post.getVisibility() != null ? post.getVisibility().name() : null)
-                  .createdAt(
-                      post.getCreatedAt() != null ? post.getCreatedAt().toLocalDateTime() : null)
+                  // Handed over whole, offset included — see PostDto#createdAt for why the old
+                  // toLocalDateTime() call skewed every search result by the reader's offset.
+                  .createdAt(post.getCreatedAt())
                   // PostDto has declared these six all along and nothing ever set them, so every
                   // quiz/poll/code post in a search result came back as text only. This is the
                   // same omission as NewsfeedService.fanOutPost, in the second service that

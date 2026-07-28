@@ -323,6 +323,50 @@ class SearchServiceTest {
     }
 
     @Test
+    @DisplayName("should hand back createdAt with its offset intact, not a zone-less local time")
+    void shouldKeepOffsetOnCreatedAt() {
+      // Given — B9: created_at is a timestamptz and the DTO used to declare LocalDateTime, so the
+      // service dropped the zone and every client re-read the string as its own local time.
+      OffsetDateTime createdAt = OffsetDateTime.parse("2026-07-27T18:24:54Z");
+      PostEntity postEntity = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      postEntity.setCreatedAt(createdAt);
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(postEntity)));
+      stubEmptyBookSearch();
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
+          .thenReturn(List.of(user(CURRENT_USER_ID, "Me")));
+
+      // When
+      List<PostDto> result =
+          searchService.searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(result.get(0).getCreatedAt()).isEqualTo(createdAt);
+    }
+
+    @Test
+    @DisplayName("should label the author's elite score with the matching reputation level")
+    void shouldMapAuthorLevelName() {
+      // Given — B15: the payload carried the raw score with no label, so the chip in a search
+      // result had nothing to render but a number.
+      PostEntity postEntity = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(postEntity)));
+      stubEmptyBookSearch();
+      UserEntity author = user(CURRENT_USER_ID, "Me");
+      author.setEliteScore(1_200);
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID))).thenReturn(List.of(author));
+
+      // When
+      List<PostDto> result =
+          searchService.searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of());
+
+      // Then — 1,200 sits between PRACTITIONER (1,000) and EXPERT (5,000)
+      assertThat(result.get(0).getAuthorEliteScore()).isEqualTo(1_200);
+      assertThat(result.get(0).getAuthorLevelName()).isEqualTo("Practitioner");
+    }
+
+    @Test
     @DisplayName("should map all six detail blocks so non-text posts are not reduced to text")
     void shouldMapAllDetailBlocks() {
       // Given — PostDto declared these six all along and toPostDtos never set any of them, so a

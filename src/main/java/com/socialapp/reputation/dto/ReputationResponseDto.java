@@ -15,6 +15,13 @@ public class ReputationResponseDto {
   private int level;
   private String levelName;
 
+  /**
+   * Floor of the level the user is on right now. Without it a progress bar can only run
+   * {@code 0 → nextLevelMin}; the alternative — the client hardcoding the threshold table — would
+   * be a third copy of {@link com.socialapp.reputation.RepLevel} to keep in sync.
+   */
+  private int currentLevelMin;
+
   /** Null once the user has reached the top level (Elite). */
   private Integer nextLevelMin;
 
