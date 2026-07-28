@@ -33,7 +33,9 @@ public class BookService {
 
   private static final List<String> ALLOWED_FORMATS = List.of("pdf", "epub");
 
-  private record GeneratedPreview(String fileKey, int totalUnits) {}
+  // Carries the bytes rather than an object key: generating a preview must not have
+  // uploaded anything yet, since this is the step that can still reject the request.
+  private record GeneratedPreview(byte[] previewBytes, int totalUnits) {}
 
   /**
    * Creates a book already linked to a post. This is the only way to create a book — always
@@ -56,13 +58,11 @@ public class BookService {
       CreateBookRequestDto request,
       MultipartFile bookFile,
       MultipartFile coverFile) {
+    // Everything that can reject the request runs before the first byte reaches MinIO. Uploads
+    // used to come first, and because MinIO is not part of the surrounding transaction, a book
+    // rejected for its previewPages left its file (and cover) in the bucket forever while
+    // Postgres rolled back cleanly — measured at 4 objects for 2 books.
     validateFile(bookFile);
-
-    String fileKey = bookStorageService.uploadBook(authorId, bookFile);
-    String coverUrl = null;
-    if (coverFile != null && !coverFile.isEmpty()) {
-      coverUrl = bookStorageService.uploadCover(authorId, coverFile);
-    }
 
     FileFormat format = resolveFormat(bookFile.getOriginalFilename());
     boolean isFree = request.getPrice() == null || request.getPrice() <= 0;
@@ -71,18 +71,67 @@ public class BookService {
       throw new ValidationException("Paid books must have preview pages configured");
     }
 
-    String previewFileKey = null;
     Integer totalPages;
+    byte[] previewBytes = null;
 
     if (isFree) {
       totalPages = countPages(format, bookFile);
     } else {
-      GeneratedPreview preview =
-          generatePreview(authorId, format, bookFile, request.getPreviewPages());
-      previewFileKey = preview.fileKey();
+      // Generated in memory here, uploaded below: this is the step that rejects a previewPages
+      // value larger than the book itself, and it must be able to do so with nothing uploaded.
+      GeneratedPreview preview = generatePreview(format, bookFile, request.getPreviewPages());
+      previewBytes = preview.previewBytes();
       totalPages = preview.totalUnits();
     }
 
+    // Past this line uploads begin. Validation cannot fail any more, but MinIO or the insert
+    // still can, so whatever landed is removed on the way out.
+    String fileKey = null;
+    String previewFileKey = null;
+    String coverKey = null;
+
+    try {
+      fileKey = bookStorageService.uploadBook(authorId, bookFile);
+
+      if (previewBytes != null) {
+        String extension = format == FileFormat.EPUB ? "epub" : "pdf";
+        previewFileKey = bookStorageService.uploadPreview(authorId, previewBytes, extension);
+      }
+
+      if (coverFile != null && !coverFile.isEmpty()) {
+        coverKey = bookStorageService.uploadCover(authorId, coverFile);
+      }
+
+      return saveBook(
+          authorId,
+          postId,
+          request,
+          bookFile,
+          format,
+          isFree,
+          fileKey,
+          previewFileKey,
+          coverKey,
+          totalPages);
+    } catch (RuntimeException e) {
+      bookStorageService.deleteQuietly(bookStorageService.booksBucket(), fileKey);
+      bookStorageService.deleteQuietly(bookStorageService.booksBucket(), previewFileKey);
+      bookStorageService.deleteQuietly(bookStorageService.coversBucket(), coverKey);
+      throw e;
+    }
+  }
+
+  private BookEntity saveBook(
+      Integer authorId,
+      Integer postId,
+      CreateBookRequestDto request,
+      MultipartFile bookFile,
+      FileFormat format,
+      boolean isFree,
+      String fileKey,
+      String previewFileKey,
+      String coverKey,
+      Integer totalPages) {
     BookEntity book =
         BookEntity.builder()
             .authorId(authorId)
@@ -91,7 +140,7 @@ public class BookService {
             .description(request.getDescription())
             .fileKey(fileKey)
             .previewFileKey(previewFileKey)
-            .coverImageUrl(coverUrl)
+            .coverImageKey(coverKey)
             .fileFormat(format)
             .fileSizeBytes(bookFile.getSize())
             .totalPages(totalPages)
@@ -121,7 +170,7 @@ public class BookService {
    * URL the client has.
    */
   private GeneratedPreview generatePreview(
-      Integer authorId, FileFormat format, MultipartFile bookFile, int previewPages) {
+      FileFormat format, MultipartFile bookFile, int previewPages) {
     try {
       byte[] original = bookFile.getBytes();
       BookPreviewResult result =
@@ -138,10 +187,7 @@ public class BookService {
                 + ")");
       }
 
-      String extension = format == FileFormat.EPUB ? "epub" : "pdf";
-      String previewFileKey =
-          bookStorageService.uploadPreview(authorId, result.previewBytes(), extension);
-      return new GeneratedPreview(previewFileKey, result.totalUnits());
+      return new GeneratedPreview(result.previewBytes(), result.totalUnits());
     } catch (IOException e) {
       throw new ValidationException("Book file is corrupted or not a valid " + format, e);
     }
@@ -239,7 +285,7 @@ public class BookService {
         .description(book.getDescription())
         .downloadUrl(downloadUrl)
         .previewUrl(previewUrl)
-        .coverImageUrl(book.getCoverImageUrl())
+        .coverImageUrl(bookStorageService.getCoverUrl(book.getCoverImageKey()))
         .fileFormat(book.getFileFormat())
         .fileSizeBytes(book.getFileSizeBytes())
         .totalPages(book.getTotalPages())

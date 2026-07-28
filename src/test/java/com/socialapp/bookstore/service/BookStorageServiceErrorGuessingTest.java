@@ -268,16 +268,13 @@ class BookStorageServiceErrorGuessingTest {
     @DisplayName("shouldWrapWithoutLeakingRawMinioType_whenUploadSucceedsButUrlGenerationFails")
     void shouldWrapWithoutLeakingRawMinioType_whenUploadSucceedsButUrlGenerationFails()
         throws Exception {
-      // Given — the upload itself succeeds, but the follow-up presigned-URL call (a separate
-      // network round-trip) fails; the caller should still only ever see our own exception type
-      MultipartFile file = mockCoverFile("cover.jpg");
+      // Given — uploadCover no longer signs anything (B4), so the equivalent split is the
+      // download path: the object is there, the presigned-URL round-trip is what fails
       when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new ConnectException("Connection refused"));
 
-      // When / Then
-      assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
-          .isInstanceOf(StorageException.class)
-          .cause()
+      // When / Then — the caller still only ever sees our own exception type
+      assertThatThrownBy(() -> bookStorageService.getDownloadUrl("books/1/abc.pdf"))
           .isInstanceOf(StorageException.class)
           .hasCauseInstanceOf(ConnectException.class);
     }

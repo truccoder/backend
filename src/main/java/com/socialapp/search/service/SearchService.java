@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
@@ -34,6 +35,7 @@ public class SearchService {
   private final UserRepository userRepository;
   private final PostRepository postRepository;
   private final BookRepository bookRepository;
+  private final BookStorageService bookStorageService;
 
   public SearchResult<UserDto> searchUsers(
       String query, int page, int size, List<Integer> friendIds) {
@@ -172,7 +174,7 @@ public class SearchService {
         .id(b.getId())
         .title(b.getTitle())
         .description(b.getDescription())
-        .coverImageUrl(b.getCoverImageUrl())
+        .coverImageUrl(bookStorageService.getCoverUrl(b.getCoverImageKey()))
         .authorId(b.getAuthorId())
         .price(b.getPrice())
         .isFree(b.getIsFree())

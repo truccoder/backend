@@ -83,7 +83,6 @@ class BookServiceErrorGuessingTest {
       // Given — PDFBox rejects the bytes as not a valid PDF (e.g. a renamed .txt file)
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] garbage = {0, 1, 2};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.countPdfPages(garbage))
           .thenThrow(new IOException("Error: Header doesn't contain versioninfo"));
@@ -105,7 +104,6 @@ class BookServiceErrorGuessingTest {
       // Given — epublib rejects the bytes as not a valid EPUB archive
       MultipartFile bookFile = mockFile("book.epub");
       byte[] garbage = {0, 1, 2};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.countEpubChapters(garbage))
           .thenThrow(new IOException("Not a valid ZIP/EPUB archive"));
@@ -127,7 +125,6 @@ class BookServiceErrorGuessingTest {
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] garbage = {0, 1, 2};
       IOException original = new IOException("Header doesn't contain versioninfo");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.countPdfPages(garbage)).thenThrow(original);
 
@@ -157,7 +154,6 @@ class BookServiceErrorGuessingTest {
       // Given — the file passes the extension check but PDFBox can't actually parse it
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] garbage = {0, 1, 2};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.generatePdfPreview(garbage, 5))
           .thenThrow(new IOException("Error: End-of-File, expected line"));
@@ -180,7 +176,6 @@ class BookServiceErrorGuessingTest {
       // Given
       MultipartFile bookFile = mockFile("book.epub");
       byte[] garbage = {0, 1, 2};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.generateEpubPreview(garbage, 3))
           .thenThrow(new IOException("Not a valid ZIP/EPUB archive"));
@@ -202,7 +197,6 @@ class BookServiceErrorGuessingTest {
       // Given — a worst-case third-party exception carrying no message at all
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] garbage = {0, 1, 2};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(garbage);
       when(bookPreviewGenerator.generatePdfPreview(garbage, 5))
           .thenThrow(new IOException((String) null));

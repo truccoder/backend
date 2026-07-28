@@ -16,6 +16,7 @@ import com.socialapp.bookstore.dto.RatingBreakdownDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
+import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.utils.GoogleMapsUrlBuilder;
 import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
@@ -58,6 +59,7 @@ public class NewsfeedService {
   private final BookReviewService bookReviewService;
   private final PostReactionRepository postReactionRepository;
   private final CommentRepository commentRepository;
+  private final BookStorageService bookStorageService;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
@@ -174,7 +176,7 @@ public class NewsfeedService {
         .bookId(book.getId())
         .title(book.getTitle())
         .description(book.getDescription())
-        .coverImageUrl(book.getCoverImageUrl())
+        .coverImageKey(book.getCoverImageKey())
         .fileFormat(book.getFileFormat())
         .fileSizeBytes(book.getFileSizeBytes())
         .totalPages(book.getTotalPages())
@@ -296,6 +298,7 @@ public class NewsfeedService {
     }
 
     List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
+    signBookCovers(posts);
 
     boolean hasMore = posts.size() > size;
     if (hasMore) {
@@ -313,6 +316,22 @@ public class NewsfeedService {
     entity.setAuthorId(authorId);
     entity.setType(type);
     userInteractionRepository.save(entity);
+  }
+
+  /**
+   * Signs each cached cover key as the feed is served.
+   *
+   * <p>Deliberately here and not in {@code fanOutPost}: a signature lasts 24h and a cache entry
+   * lasts 7 days, so anything signed at fan-out time is dead for most of its life in the cache.
+   * Signing is a local HMAC computation, not a call to MinIO, so doing it per page is cheap.
+   */
+  private void signBookCovers(List<FeedPostDataDto> posts) {
+    for (FeedPostDataDto post : posts) {
+      FeedBookSummaryDto book = post.getBook();
+      if (Objects.nonNull(book)) {
+        book.setCoverImageUrl(bookStorageService.getCoverUrl(book.getCoverImageKey()));
+      }
+    }
   }
 
   private List<FeedPostDataDto> loadPostsFromCache(Collection<String> postIds) {

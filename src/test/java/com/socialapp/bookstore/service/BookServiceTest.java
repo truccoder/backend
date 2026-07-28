@@ -209,7 +209,7 @@ class BookServiceTest {
       assertThat(saved.getPreviewPages()).isZero();
       assertThat(saved.getPrice()).isZero();
       assertThat(saved.getPreviewFileKey()).isNull();
-      assertThat(saved.getCoverImageUrl()).isNull();
+      assertThat(saved.getCoverImageKey()).isNull();
       assertThat(saved.getFileKey()).isEqualTo("book-key");
       verify(bookStorageService, never()).uploadCover(any(), any());
     }
@@ -253,7 +253,7 @@ class BookServiceTest {
 
       // Then
       verify(bookRepository).save(bookCaptor.capture());
-      assertThat(bookCaptor.getValue().getCoverImageUrl()).isEqualTo("cover-key");
+      assertThat(bookCaptor.getValue().getCoverImageKey()).isEqualTo("cover-key");
     }
 
     @Test
@@ -282,7 +282,6 @@ class BookServiceTest {
     void shouldThrowValidationException_whenCountingPagesFails() throws IOException {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenThrow(new IOException("disk read failure"));
 
       // When / Then
@@ -294,6 +293,10 @@ class BookServiceTest {
           .hasMessageContaining("corrupted or not a valid")
           .hasCauseInstanceOf(IOException.class);
       verify(bookRepository, never()).save(any());
+      // B11: nothing may reach MinIO on a rejected book — Postgres rolls back, the bucket does not
+      verify(bookStorageService, never()).uploadBook(any(), any());
+      verify(bookStorageService, never()).uploadCover(any(), any());
+      verify(bookStorageService, never()).uploadPreview(any(), any(), any());
     }
 
     @Test
@@ -301,7 +304,6 @@ class BookServiceTest {
     void shouldThrowValidationException_whenPaidBookMissingPreviewPages() {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
 
       // When / Then
       assertThatThrownBy(
@@ -311,6 +313,10 @@ class BookServiceTest {
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("Paid books must have preview pages configured");
       verify(bookRepository, never()).save(any());
+      // B11: nothing may reach MinIO on a rejected book — Postgres rolls back, the bucket does not
+      verify(bookStorageService, never()).uploadBook(any(), any());
+      verify(bookStorageService, never()).uploadCover(any(), any());
+      verify(bookStorageService, never()).uploadPreview(any(), any(), any());
     }
 
     @Test
@@ -318,7 +324,6 @@ class BookServiceTest {
     void shouldThrowValidationException_whenPaidBookHasNonPositivePreviewPages() {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
 
       // When / Then
       assertThatThrownBy(
@@ -336,7 +341,6 @@ class BookServiceTest {
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] original = {1, 2, 3};
       byte[] previewBytes = {4, 5};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(original);
       when(bookPreviewGenerator.generatePdfPreview(original, 5))
           .thenReturn(new BookPreviewResult(previewBytes, 20));
@@ -363,7 +367,6 @@ class BookServiceTest {
       MultipartFile bookFile = mockFile("book.epub");
       byte[] original = {1, 2, 3};
       byte[] previewBytes = {4, 5};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(original);
       when(bookPreviewGenerator.generateEpubPreview(original, 3))
           .thenReturn(new BookPreviewResult(previewBytes, 10));
@@ -387,7 +390,6 @@ class BookServiceTest {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
       byte[] original = {1, 2, 3};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenReturn(original);
       when(bookPreviewGenerator.generatePdfPreview(original, 10))
           .thenReturn(new BookPreviewResult(new byte[] {1}, 10));
@@ -400,6 +402,10 @@ class BookServiceTest {
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("must be less than the book's total");
       verify(bookRepository, never()).save(any());
+      // B11: nothing may reach MinIO on a rejected book — Postgres rolls back, the bucket does not
+      verify(bookStorageService, never()).uploadBook(any(), any());
+      verify(bookStorageService, never()).uploadCover(any(), any());
+      verify(bookStorageService, never()).uploadPreview(any(), any(), any());
       verify(bookStorageService, never()).uploadPreview(any(), any(), anyString());
     }
 
@@ -409,7 +415,6 @@ class BookServiceTest {
     void shouldThrowValidationException_whenGeneratingPreviewFails() throws IOException {
       // Given
       MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
       when(bookFile.getBytes()).thenThrow(new IOException("disk read failure"));
 
       // When / Then
@@ -671,6 +676,10 @@ class BookServiceTest {
           .isInstanceOf(ForbiddenException.class)
           .hasMessageContaining("You must purchase this book before downloading");
       verify(bookRepository, never()).save(any());
+      // B11: nothing may reach MinIO on a rejected book — Postgres rolls back, the bucket does not
+      verify(bookStorageService, never()).uploadBook(any(), any());
+      verify(bookStorageService, never()).uploadCover(any(), any());
+      verify(bookStorageService, never()).uploadPreview(any(), any(), any());
     }
   }
 

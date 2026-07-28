@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -35,7 +36,9 @@ import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.FileFormat;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
+import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -87,6 +90,7 @@ class NewsfeedServiceTest {
   @Mock private NotificationService notificationService;
   @Mock private BookRepository bookRepository;
   @Mock private BookReviewService bookReviewService;
+  @Mock private BookStorageService bookStorageService;
   @Mock private PostReactionRepository postReactionRepository;
   @Mock private CommentRepository commentRepository;
 
@@ -661,6 +665,54 @@ class NewsfeedServiceTest {
   // =====================================================================
   // getFeed
   // =====================================================================
+
+  @Nested
+  @DisplayName("getFeed — book cover signing")
+  class GetFeedCoverSigningTests {
+
+    @Test
+    @DisplayName("should sign the cached cover key when the feed is served")
+    void shouldSignCoverKey_onRead() throws Exception {
+      // Given — the cache holds the key, never a URL (B4): a signature lives 24h and a cache
+      // entry lives 7 days, so a URL signed at fan-out time is dead for most of its life
+      FeedPostDataDto cached = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      cached.setBook(
+          FeedBookSummaryDto.builder().bookId(5).coverImageKey("covers/1/a.jpg").build());
+
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange(anyString(), anyLong(), anyLong()))
+          .thenReturn(Set.of(String.valueOf(POST_ID)));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(any())).thenReturn(List.of("{}"));
+      when(objectMapper.readValue("{}", FeedPostDataDto.class)).thenReturn(cached);
+      when(bookStorageService.getCoverUrl("covers/1/a.jpg")).thenReturn("https://cdn/signed");
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10);
+
+      // Then
+      assertThat(result.getPosts().get(0).getBook().getCoverImageUrl())
+          .isEqualTo("https://cdn/signed");
+    }
+
+    @Test
+    @DisplayName("should leave posts without a book alone")
+    void shouldSkipPostsWithoutBook() throws Exception {
+      // Given
+      FeedPostDataDto cached = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange(anyString(), anyLong(), anyLong()))
+          .thenReturn(Set.of(String.valueOf(POST_ID)));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(any())).thenReturn(List.of("{}"));
+      when(objectMapper.readValue("{}", FeedPostDataDto.class)).thenReturn(cached);
+
+      // When / Then — most posts are not book posts
+      assertThatCode(() -> newsfeedService.getFeed(AUTHOR_ID, 1, 10)).doesNotThrowAnyException();
+      verify(bookStorageService, never()).getCoverUrl(any());
+    }
+  }
 
   @Nested
   @DisplayName("getFeed")

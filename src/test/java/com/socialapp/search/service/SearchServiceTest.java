@@ -23,6 +23,7 @@ import org.springframework.data.domain.PageRequest;
 
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.EventDetails;
@@ -56,6 +57,7 @@ class SearchServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private PostRepository postRepository;
   @Mock private BookRepository bookRepository;
+  @Mock private BookStorageService bookStorageService;
 
   @InjectMocks private SearchService searchService;
 
