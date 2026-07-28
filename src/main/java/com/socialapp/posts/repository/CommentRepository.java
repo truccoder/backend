@@ -16,4 +16,7 @@ public interface CommentRepository extends JpaRepository<CommentEntity, Integer>
   List<CommentEntity> findByParentIdOrderByCreatedAtAsc(Integer parentId);
 
   boolean existsByIdAndParentIdIsNull(Integer id);
+
+  // Counts replies as well as top-level comments, matching what the feed card claims to show.
+  long countByPostId(Integer postId);
 }

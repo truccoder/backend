@@ -23,8 +23,14 @@ import org.springframework.data.domain.PageRequest;
 
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.posts.entity.ArticleDetails;
+import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.EventDetails;
+import com.socialapp.posts.entity.LinkDetails;
+import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
@@ -311,6 +317,39 @@ class SearchServiceTest {
       assertThat(dto.getVisibility()).isEqualTo("PUBLIC");
       assertThat(dto.getCreatedAt()).isNotNull();
       assertThat(dto.getBook()).isNull();
+    }
+
+    @Test
+    @DisplayName("should map all six detail blocks so non-text posts are not reduced to text")
+    void shouldMapAllDetailBlocks() {
+      // Given — PostDto declared these six all along and toPostDtos never set any of them, so a
+      // quiz/poll/code post came back from search as content-only (B8, the same omission as
+      // NewsfeedService.fanOutPost)
+      PostEntity qnaPost = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.QNA);
+      qnaPost.setQuizDetails(new QuizDetails());
+      qnaPost.setCodeSnippetDetails(new CodeSnippetDetails());
+      qnaPost.setArticleDetails(new ArticleDetails());
+      qnaPost.setQnaDetails(new QnaDetails());
+      qnaPost.setPollDetails(new PollDetails());
+      qnaPost.setLinkDetails(new LinkDetails());
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(qnaPost)));
+      stubEmptyBookSearch();
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
+          .thenReturn(List.of(user(CURRENT_USER_ID, "Me")));
+
+      // When
+      List<PostDto> result =
+          searchService.searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      PostDto dto = result.get(0);
+      assertThat(dto.getQuizDetails()).isNotNull();
+      assertThat(dto.getCodeSnippetDetails()).isNotNull();
+      assertThat(dto.getArticleDetails()).isNotNull();
+      assertThat(dto.getQnaDetails()).isNotNull();
+      assertThat(dto.getPollDetails()).isNotNull();
+      assertThat(dto.getLinkDetails()).isNotNull();
     }
 
     @Test

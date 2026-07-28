@@ -5,6 +5,7 @@ import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_P
 
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Consumer;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,8 @@ import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
+import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
@@ -52,6 +55,8 @@ public class NewsfeedService {
   private final NotificationService notificationService;
   private final BookRepository bookRepository;
   private final BookReviewService bookReviewService;
+  private final PostReactionRepository postReactionRepository;
+  private final CommentRepository commentRepository;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
@@ -92,11 +97,31 @@ public class NewsfeedService {
                     : null)
             .postType(post.getPostType())
             .eventDetails(post.getEventDetails())
+            // Every publish path runs through here (createPost, updatePost,
+            // ModerationEventListener, AdminModerationService.reviewPost), so a block missing
+            // from this builder is a block that no post in the feed can ever have. That is not
+            // only a display bug: updatePost applies UpdatePostRequest with
+            // BeanUtils.copyProperties, which copies nulls, and a client can only send back what
+            // the feed handed it — so a block absent here gets wiped from Postgres on the first
+            // edit. Keep this list in step with PostEntity's detail columns.
+            .quizDetails(post.getQuizDetails())
+            .codeSnippetDetails(post.getCodeSnippetDetails())
+            .articleDetails(post.getArticleDetails())
+            .qnaDetails(post.getQnaDetails())
+            .pollDetails(post.getPollDetails())
+            .linkDetails(post.getLinkDetails())
+            .images(post.getImages())
+            .taggedUserIds(taggedUserIds)
             .book(loadBookSummary(post))
             .hashtags(
                 post.getHashtags() != null
                     ? post.getHashtags().stream().map(HashtagEntity::getName).toList()
                     : null)
+            // Re-read on every fan-out rather than assumed zero: this method also runs for an
+            // edit and for a moderation approval that lands long after the post was written, by
+            // which time it can already carry reactions and comments.
+            .likeCount((int) postReactionRepository.countByIdPostId(post.getId()))
+            .commentCount((int) commentRepository.countByPostId(post.getId()))
             .createdAt(post.getCreatedAt())
             .build();
 
@@ -196,6 +221,43 @@ public class NewsfeedService {
 
   public void updatePostCache(FeedPostDataDto postData) {
     cachePostData(String.valueOf(postData.getPostId()), postData);
+  }
+
+  /**
+   * Rewrites the cached like count for one post.
+   *
+   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database
+   * is a counter the user never sees. Callers pass a count they have just read from their own
+   * repository rather than a delta: read-modify-write against Redis is not atomic, and under
+   * concurrent reactions a delta would drift permanently, whereas an absolute value taken from
+   * the authoritative table self-corrects on the very next interaction.
+   */
+  public void updateCachedLikeCount(Integer postId, int likeCount) {
+    mutateCachedPost(postId, post -> post.setLikeCount(likeCount));
+  }
+
+  /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
+  public void updateCachedCommentCount(Integer postId, int commentCount) {
+    mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
+  }
+
+  private void mutateCachedPost(Integer postId, Consumer<FeedPostDataDto> mutation) {
+    String key = POST_CACHE_KEY_PREFIX + postId;
+    String json = redisTemplate.opsForValue().get(key);
+
+    // A miss is normal, not an error: private posts and posts still in moderation never reach
+    // the cache, and reacting to one of those must not resurrect it into anybody's feed.
+    if (Objects.isNull(json)) {
+      return;
+    }
+
+    try {
+      FeedPostDataDto postData = objectMapper.readValue(json, FeedPostDataDto.class);
+      mutation.accept(postData);
+      cachePostData(String.valueOf(postId), postData);
+    } catch (Exception e) {
+      log.warn("Failed to update cached counters for post {}", postId, e);
+    }
   }
 
   public void removePost(Integer postId, Integer authorId, List<Integer> taggedUserIds) {

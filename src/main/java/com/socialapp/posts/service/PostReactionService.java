@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -32,6 +33,7 @@ public class PostReactionService {
   private final UserRepository userRepository;
   private final NotificationService notificationService;
   private final ReputationEventPublisher reputationEventPublisher;
+  private final NewsfeedService newsfeedService;
 
   @Transactional(readOnly = true)
   public MyReactionResponseDto getMyReaction(Integer userId, Integer postId) {
@@ -58,6 +60,7 @@ public class PostReactionService {
     reaction.setReactionType(request.getReactionType());
 
     postReactionRepository.save(reaction);
+    refreshCachedLikeCount(postId);
 
     if (isNewReaction) {
       notifyPostAuthor(post, userId);
@@ -73,7 +76,20 @@ public class PostReactionService {
       throw new NotFoundException("Reaction not found for this post");
     }
     postReactionRepository.deleteById(reactionId);
+    refreshCachedLikeCount(postId);
     revokeReactionRep(post, userId);
+  }
+
+  /**
+   * Pushes the new like total into the feed cache.
+   *
+   * <p>The feed reads only from Redis and never falls back to Postgres, so without this the
+   * counter stays at whatever it was when the post was fanned out — which is why it read 0
+   * forever. {@code updatePostCache} existed for this and simply had no caller.
+   */
+  private void refreshCachedLikeCount(Integer postId) {
+    newsfeedService.updateCachedLikeCount(
+        postId, (int) postReactionRepository.countByIdPostId(postId));
   }
 
   private void verifyPostExists(Integer postId) {

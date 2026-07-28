@@ -15,6 +15,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -38,6 +39,7 @@ public class CommentService {
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
+  private final NewsfeedService newsfeedService;
 
   @Transactional(readOnly = true)
   public List<CommentResponseDto> getComments(Integer postId) {
@@ -85,6 +87,7 @@ public class CommentService {
     comment.setContent(request.getContent());
     comment.setParentId(request.getParentId());
     commentRepository.save(comment);
+    refreshCachedCommentCount(postId);
 
     notifyPostAuthor(post, authorId);
   }
@@ -113,6 +116,17 @@ public class CommentService {
     verifyAuthor(actorId, comment);
 
     commentRepository.delete(comment);
+    refreshCachedCommentCount(postId);
+  }
+
+  /**
+   * Pushes the new comment total into the feed cache.
+   *
+   * <p>The feed reads only from Redis and never falls back to Postgres, so a count left alone
+   * here is a count the user never sees change — it sat at 0 for every post in the app.
+   */
+  private void refreshCachedCommentCount(Integer postId) {
+    newsfeedService.updateCachedCommentCount(postId, (int) commentRepository.countByPostId(postId));
   }
 
   private void validateParentComment(Integer parentId, Integer postId) {

@@ -27,6 +27,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
@@ -55,6 +56,7 @@ class CommentServiceTest {
   @Mock private UserBanService userBanService;
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
+  @Mock private NewsfeedService newsfeedService;
 
   @InjectMocks private CommentService commentService;
 
@@ -85,6 +87,25 @@ class CommentServiceTest {
   @Nested
   @DisplayName("createComment")
   class CreateCommentTests {
+
+    @Test
+    @DisplayName("should push the new comment total into the feed cache")
+    void shouldRefreshCachedCommentCount_whenCommentIsCreated() {
+      // Given — the feed never falls back to Postgres, so posting a comment used to leave the
+      // card reading "0 comments" no matter how many times it was refetched (B7)
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(6L);
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("Nice post!");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService).updateCachedCommentCount(POST_ID, 6);
+    }
 
     @Test
     @DisplayName("should save a top-level comment and notify the post author")
@@ -385,6 +406,22 @@ class CommentServiceTest {
   @Nested
   @DisplayName("deleteComment")
   class DeleteCommentTests {
+
+    @Test
+    @DisplayName("should push the decremented comment total into the feed cache")
+    void shouldRefreshCachedCommentCount_whenCommentIsDeleted() {
+      // Given
+      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(commentRepository.findById(COMMENT_ID))
+          .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(5L);
+
+      // When
+      commentService.deleteComment(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then — deleting has to move the number too, not just creating
+      verify(newsfeedService).updateCachedCommentCount(POST_ID, 5);
+    }
 
     @Test
     @DisplayName("should delete the comment when the actor is its author")

@@ -24,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
@@ -55,6 +56,7 @@ class PostReactionServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
   @Mock private ReputationEventPublisher reputationEventPublisher;
+  @Mock private NewsfeedService newsfeedService;
 
   @InjectMocks private PostReactionService postReactionService;
 
@@ -81,6 +83,26 @@ class PostReactionServiceTest {
   @Nested
   @DisplayName("upsertReaction")
   class UpsertReactionTests {
+
+    @Test
+    @DisplayName("should push the new like total into the feed cache")
+    void shouldRefreshCachedLikeCount_whenReactionIsSaved() {
+      // Given — the feed reads only from Redis, so a count left in Postgres is a count nobody
+      // sees; before this, every post in the app showed 0 likes forever (B7)
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postReactionRepository.existsById(id)).thenReturn(false);
+      when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(4L);
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+
+      // When
+      postReactionService.upsertReaction(USER_ID, POST_ID, sampleRequest(ReactionType.LIKE));
+
+      // Then
+      verify(newsfeedService).updateCachedLikeCount(POST_ID, 4);
+    }
 
     @Test
     @DisplayName("should save a new reaction and notify the post author")
@@ -229,6 +251,22 @@ class PostReactionServiceTest {
   @Nested
   @DisplayName("removeReaction")
   class RemoveReactionTests {
+
+    @Test
+    @DisplayName("should push the decremented like total into the feed cache")
+    void shouldRefreshCachedLikeCount_whenReactionIsRemoved() {
+      // Given
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postReactionRepository.existsById(id)).thenReturn(true);
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(3L);
+
+      // When
+      postReactionService.removeReaction(USER_ID, POST_ID);
+
+      // Then — un-liking has to move the number too, not just liking
+      verify(newsfeedService).updateCachedLikeCount(POST_ID, 3);
+    }
 
     @Test
     @DisplayName("should delete the reaction and revoke reputation when it exists")

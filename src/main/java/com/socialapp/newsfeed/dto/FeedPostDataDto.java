@@ -47,6 +47,21 @@ public class FeedPostDataDto {
   private LinkDetails linkDetails;
   private OffsetDateTime createdAt;
   private List<String> hashtags;
+
+  /**
+   * Echoed back so an edit does not destroy them.
+   *
+   * <p>{@code images} and {@code taggedUserIds} are both accepted by {@code UpdatePostRequest},
+   * and {@code PostService.updatePost} applies that request with {@code
+   * BeanUtils.copyProperties}, which copies nulls. A client can only send back what the feed gave
+   * it, so while these two were missing here every edit silently cleared the post's images and
+   * un-tagged everyone. Any field {@code UpdatePostRequest} accepts has to be readable from the
+   * feed, or editing becomes a data-loss operation.
+   */
+  private List<String> images;
+
+  private List<Integer> taggedUserIds;
+
   private int likeCount;
   private int commentCount;
   private int shareCount;

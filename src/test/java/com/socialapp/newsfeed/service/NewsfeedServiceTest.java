@@ -43,12 +43,20 @@ import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.entity.ArticleDetails;
+import com.socialapp.posts.entity.CodeSnippetDetails;
+import com.socialapp.posts.entity.LinkDetails;
 import com.socialapp.posts.entity.LocationDetails;
+import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
+import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
@@ -78,6 +86,8 @@ class NewsfeedServiceTest {
   @Mock private NotificationService notificationService;
   @Mock private BookRepository bookRepository;
   @Mock private BookReviewService bookReviewService;
+  @Mock private PostReactionRepository postReactionRepository;
+  @Mock private CommentRepository commentRepository;
 
   @Mock private ZSetOperations<String, String> zSetOperations;
   @Mock private ValueOperations<String, String> valueOperations;
@@ -353,6 +363,150 @@ class NewsfeedServiceTest {
 
       // Then
       verify(friendshipQueryService, never()).getFriendIds(any());
+    }
+
+    @Test
+    @DisplayName("should copy all six detail blocks, images and tagged users into the feed entry")
+    void shouldCopyAllDetailBlocks_intoFeedEntry() throws Exception {
+      // Given — a post carrying every optional block at once. Only one of these can really be
+      // set on a single post in practice, but the point of the test is that no block is dropped.
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.QNA);
+      post.setQuizDetails(new QuizDetails());
+      post.setCodeSnippetDetails(new CodeSnippetDetails());
+      post.setArticleDetails(new ArticleDetails());
+      post.setQnaDetails(new QnaDetails());
+      post.setPollDetails(new PollDetails());
+      post.setLinkDetails(new LinkDetails());
+      post.setImages(List.of("img-1.png", "img-2.png"));
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
+
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then — a null here is data loss, not a display gap: updatePost copies nulls back over
+      // the row, so whatever the feed omits gets erased on the author's first edit (B2)
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      FeedPostDataDto data = cached.getValue();
+
+      assertThat(data.getQuizDetails()).isNotNull();
+      assertThat(data.getCodeSnippetDetails()).isNotNull();
+      assertThat(data.getArticleDetails()).isNotNull();
+      assertThat(data.getQnaDetails()).isNotNull();
+      assertThat(data.getPollDetails()).isNotNull();
+      assertThat(data.getLinkDetails()).isNotNull();
+      assertThat(data.getImages()).containsExactly("img-1.png", "img-2.png");
+      assertThat(data.getTaggedUserIds()).containsExactly(TAGGED_ID);
+    }
+
+    @Test
+    @DisplayName("should read like and comment counts from the database, not assume zero")
+    void shouldReadCounters_fromDatabase() throws Exception {
+      // Given — fan-out also runs on edit and on a late moderation approval, by which time the
+      // post can already carry reactions and comments (B7)
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(7L);
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(3L);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      assertThat(cached.getValue().getLikeCount()).isEqualTo(7);
+      assertThat(cached.getValue().getCommentCount()).isEqualTo(3);
+    }
+  }
+
+  // =====================================================================
+  // updateCachedLikeCount / updateCachedCommentCount
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updateCachedLikeCount / updateCachedCommentCount")
+  class UpdateCachedCountersTests {
+
+    @Test
+    @DisplayName("should rewrite the cached like count in place")
+    void shouldRewriteCachedLikeCount() throws Exception {
+      // Given
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"likeCount\":5}");
+
+      // When
+      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+
+      // Then
+      assertThat(cachedPost.getLikeCount()).isEqualTo(5);
+      verify(valueOperations)
+          .set(eq("feedpost:" + POST_ID), eq("{\"likeCount\":5}"), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should rewrite the cached comment count in place")
+    void shouldRewriteCachedCommentCount() throws Exception {
+      // Given
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"commentCount\":2}");
+
+      // When
+      newsfeedService.updateCachedCommentCount(POST_ID, 2);
+
+      // Then
+      assertThat(cachedPost.getCommentCount()).isEqualTo(2);
+      verify(valueOperations).set(eq("feedpost:" + POST_ID), anyString(), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should do nothing when the post is not cached")
+    void shouldDoNothing_whenPostIsNotCached() {
+      // Given — private posts and posts awaiting moderation are never cached; reacting to one
+      // must not write it into the feed
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn(null);
+
+      // When
+      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+
+      // Then
+      verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("should swallow the error when the cached entry cannot be deserialized")
+    void shouldSwallowError_whenCachedEntryIsCorrupt() throws Exception {
+      // Given
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("not-json");
+      when(objectMapper.readValue("not-json", FeedPostDataDto.class))
+          .thenThrow(new RuntimeException("boom"));
+
+      // When / Then — a broken cache entry must not fail the user's like
+      assertThatCode(() -> newsfeedService.updateCachedLikeCount(POST_ID, 5))
+          .doesNotThrowAnyException();
+      verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
     }
   }
 

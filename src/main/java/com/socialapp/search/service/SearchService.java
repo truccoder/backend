@@ -150,6 +150,16 @@ public class SearchService {
                   .visibility(post.getVisibility() != null ? post.getVisibility().name() : null)
                   .createdAt(
                       post.getCreatedAt() != null ? post.getCreatedAt().toLocalDateTime() : null)
+                  // PostDto has declared these six all along and nothing ever set them, so every
+                  // quiz/poll/code post in a search result came back as text only. This is the
+                  // same omission as NewsfeedService.fanOutPost, in the second service that
+                  // renders posts — fixing one without the other leaves half the bug alive.
+                  .quizDetails(post.getQuizDetails())
+                  .codeSnippetDetails(post.getCodeSnippetDetails())
+                  .articleDetails(post.getArticleDetails())
+                  .qnaDetails(post.getQnaDetails())
+                  .pollDetails(post.getPollDetails())
+                  .linkDetails(post.getLinkDetails())
                   .book(book != null ? toBookDto(book) : null)
                   .build();
             })
