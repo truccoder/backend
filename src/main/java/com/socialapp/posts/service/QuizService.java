@@ -49,11 +49,17 @@ public class QuizService {
           "You must provide exactly " + quiz.getQuestions().size() + " answers");
     }
 
+    // Scoring has always happened here, against the row rather than against anything the client
+    // sent — that part was never the problem. What changed is that the answers no longer travel
+    // out with the question (see PublicQuizDetailsDto), so this response is the first and only
+    // time the reader learns them, explanations included.
     int score = 0;
     List<Integer> correctAnswers = new ArrayList<>();
+    List<String> explanations = new ArrayList<>();
     for (int i = 0; i < quiz.getQuestions().size(); i++) {
       QuizQuestion q = quiz.getQuestions().get(i);
       correctAnswers.add(q.getCorrectOptionIndex());
+      explanations.add(q.getExplanation());
       if (userAnswers.get(i).equals(q.getCorrectOptionIndex())) {
         score++;
       }
@@ -66,6 +72,7 @@ public class QuizService {
     answerEntity.setScore(score);
     quizAnswerRepository.save(answerEntity);
 
-    return new QuizResultResponseDto(score, quiz.getQuestions().size(), correctAnswers);
+    return new QuizResultResponseDto(
+        score, quiz.getQuestions().size(), correctAnswers, explanations);
   }
 }

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
@@ -154,7 +155,7 @@ public class SearchService {
                   // quiz/poll/code post in a search result came back as text only. This is the
                   // same omission as NewsfeedService.fanOutPost, in the second service that
                   // renders posts — fixing one without the other leaves half the bug alive.
-                  .quizDetails(post.getQuizDetails())
+                  .quizDetails(PublicQuizDetailsDto.from(post.getQuizDetails()))
                   .codeSnippetDetails(post.getCodeSnippetDetails())
                   .articleDetails(post.getArticleDetails())
                   .qnaDetails(post.getQnaDetails())

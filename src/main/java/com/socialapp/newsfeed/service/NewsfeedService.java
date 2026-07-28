@@ -27,6 +27,7 @@ import com.socialapp.newsfeed.repository.UserInteractionRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
@@ -104,7 +105,7 @@ public class NewsfeedService {
             // BeanUtils.copyProperties, which copies nulls, and a client can only send back what
             // the feed handed it — so a block absent here gets wiped from Postgres on the first
             // edit. Keep this list in step with PostEntity's detail columns.
-            .quizDetails(post.getQuizDetails())
+            .quizDetails(PublicQuizDetailsDto.from(post.getQuizDetails()))
             .codeSnippetDetails(post.getCodeSnippetDetails())
             .articleDetails(post.getArticleDetails())
             .qnaDetails(post.getQnaDetails())

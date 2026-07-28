@@ -3,6 +3,7 @@ package com.socialapp.newsfeed.dto;
 import java.time.OffsetDateTime;
 import java.util.List;
 
+import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.EventDetails;
@@ -10,7 +11,6 @@ import com.socialapp.posts.entity.LinkDetails;
 import com.socialapp.posts.entity.LocationDetails;
 import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.QnaDetails;
-import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.enums.LocationType;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
@@ -39,7 +39,14 @@ public class FeedPostDataDto {
   private PostType postType;
   private EventDetails eventDetails;
   private FeedBookSummaryDto book;
-  private QuizDetails quizDetails;
+
+  /**
+   * The quiz without its answers — see {@link PublicQuizDetailsDto}. This is deliberately not
+   * the {@code QuizDetails} entity: that type carries {@code correctOptionIndex}, and this
+   * payload is handed to readers who have not answered yet.
+   */
+  private PublicQuizDetailsDto quizDetails;
+
   private CodeSnippetDetails codeSnippetDetails;
   private ArticleDetails articleDetails;
   private QnaDetails qnaDetails;

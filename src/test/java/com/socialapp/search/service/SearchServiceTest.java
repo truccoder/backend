@@ -31,6 +31,7 @@ import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.QuizDetails;
+import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
@@ -326,7 +327,13 @@ class SearchServiceTest {
       // quiz/poll/code post came back from search as content-only (B8, the same omission as
       // NewsfeedService.fanOutPost)
       PostEntity qnaPost = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.QNA);
-      qnaPost.setQuizDetails(new QuizDetails());
+      QuizQuestion quizQuestion = new QuizQuestion();
+      quizQuestion.setQuestion("2 + 2?");
+      quizQuestion.setOptions(List.of("3", "4"));
+      quizQuestion.setCorrectOptionIndex(1);
+      QuizDetails quiz = new QuizDetails();
+      quiz.setQuestions(List.of(quizQuestion));
+      qnaPost.setQuizDetails(quiz);
       qnaPost.setCodeSnippetDetails(new CodeSnippetDetails());
       qnaPost.setArticleDetails(new ArticleDetails());
       qnaPost.setQnaDetails(new QnaDetails());
@@ -345,6 +352,8 @@ class SearchServiceTest {
       // Then
       PostDto dto = result.get(0);
       assertThat(dto.getQuizDetails()).isNotNull();
+      // B5: search renders the quiz too, so it must strip the answers just like the feed does
+      assertThat(dto.getQuizDetails().getQuestions().get(0).getQuestion()).isEqualTo("2 + 2?");
       assertThat(dto.getCodeSnippetDetails()).isNotNull();
       assertThat(dto.getArticleDetails()).isNotNull();
       assertThat(dto.getQnaDetails()).isNotNull();

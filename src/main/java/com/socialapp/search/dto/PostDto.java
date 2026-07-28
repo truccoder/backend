@@ -2,12 +2,12 @@ package com.socialapp.search.dto;
 
 import java.time.LocalDateTime;
 
+import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.LinkDetails;
 import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.QnaDetails;
-import com.socialapp.posts.entity.QuizDetails;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -35,7 +35,9 @@ public class PostDto {
    */
   private BookDto book;
 
-  private QuizDetails quizDetails;
+  /** Answer-free quiz, same reasoning as the feed payload — see {@link PublicQuizDetailsDto}. */
+  private PublicQuizDetailsDto quizDetails;
+
   private CodeSnippetDetails codeSnippetDetails;
   private ArticleDetails articleDetails;
   private QnaDetails qnaDetails;

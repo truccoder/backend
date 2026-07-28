@@ -53,6 +53,7 @@ import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
 import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.QuizDetails;
+import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.CommentRepository;
@@ -113,6 +114,18 @@ class NewsfeedServiceTest {
     user.setId(id);
     user.setFullName(fullName);
     return user;
+  }
+
+  private static QuizDetails quizWithAnswers() {
+    QuizQuestion question = new QuizQuestion();
+    question.setQuestion("2 + 2?");
+    question.setOptions(List.of("3", "4"));
+    question.setCorrectOptionIndex(1);
+    question.setExplanation("Two plus two is four");
+
+    QuizDetails quiz = new QuizDetails();
+    quiz.setQuestions(List.of(question));
+    return quiz;
   }
 
   private static FeedPostDataDto feedPost(
@@ -371,7 +384,7 @@ class NewsfeedServiceTest {
       // Given — a post carrying every optional block at once. Only one of these can really be
       // set on a single post in practice, but the point of the test is that no block is dropped.
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.QNA);
-      post.setQuizDetails(new QuizDetails());
+      post.setQuizDetails(quizWithAnswers());
       post.setCodeSnippetDetails(new CodeSnippetDetails());
       post.setArticleDetails(new ArticleDetails());
       post.setQnaDetails(new QnaDetails());
@@ -397,6 +410,8 @@ class NewsfeedServiceTest {
       FeedPostDataDto data = cached.getValue();
 
       assertThat(data.getQuizDetails()).isNotNull();
+      // B5: the feed carries the quiz, but never its answers — see PublicQuizDetailsDto
+      assertThat(data.getQuizDetails().getQuestions().get(0).getQuestion()).isEqualTo("2 + 2?");
       assertThat(data.getCodeSnippetDetails()).isNotNull();
       assertThat(data.getArticleDetails()).isNotNull();
       assertThat(data.getQnaDetails()).isNotNull();
