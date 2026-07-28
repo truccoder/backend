@@ -156,7 +156,12 @@ public class PostService {
     // post has been saved and assigned an id.
     setTags(post, request.getTaggedUserIds());
     processHashtags(post);
-    postRepository.save(post);
+    // Flushed, not just saved: @CreationTimestamp fills createdAt when the INSERT actually runs,
+    // and save() only schedules it. Without the flush the fan-out below re-reads this very entity
+    // out of the persistence context with createdAt still null and caches a post the feed renders
+    // with no date. Only bites when moderation is off — with it on, fan-out happens later, in
+    // another transaction, off a row that has already been written.
+    postRepository.saveAndFlush(post);
 
     if (moderationEnabled) {
       log.info(
@@ -285,6 +290,47 @@ public class PostService {
       reputationEventPublisher.award(
           comment.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, commentId.toString());
     }
+  }
+
+  /**
+   * Takes back the accepted answer on a QNA post — author-only, the counterpart of {@link
+   * #acceptAnswer}. Without it the first pick was permanent: {@code acceptAnswer} refuses to run a
+   * second time, so a misclick left the wrong comment crowned forever.
+   *
+   * <p>Reputation awarded for the pick is revoked with the same {@code sourceId} it was granted
+   * under, otherwise accepting and un-accepting in a loop would mint points. The post returns to
+   * unresolved, which is the honest state: no answer is accepted any more.
+   */
+  @Transactional
+  public void unacceptAnswer(Integer actorId, Integer postId) {
+    PostEntity post = findPostOrThrow(postId);
+    verifyAuthor(actorId, post);
+
+    if (post.getPostType() != PostType.QNA || post.getQnaDetails() == null) {
+      throw new ValidationException("Only QNA posts can have an accepted answer");
+    }
+    QnaDetails qnaDetails = post.getQnaDetails();
+    Integer acceptedAnswerId = qnaDetails.getAcceptedAnswerId();
+    if (acceptedAnswerId == null) {
+      throw new ValidationException("No answer has been accepted for this post");
+    }
+
+    qnaDetails.setAcceptedAnswerId(null);
+    qnaDetails.setIsResolved(false);
+    postRepository.save(post);
+    newsfeedService.updateCachedQnaDetails(postId, qnaDetails);
+
+    // Mirrors the award in acceptAnswer, including the "not for your own answer" rule — revoking
+    // points that were never granted would push the answerer's score below what they earned.
+    commentRepository
+        .findById(acceptedAnswerId)
+        .filter(comment -> !comment.getAuthorId().equals(actorId))
+        .ifPresent(
+            comment ->
+                reputationEventPublisher.revoke(
+                    comment.getAuthorId(),
+                    RepSourceType.ACCEPTED_ANSWER,
+                    acceptedAnswerId.toString()));
   }
 
   @Transactional

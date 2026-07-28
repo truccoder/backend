@@ -44,4 +44,15 @@ public class PostController {
   public void acceptAnswer(@PathVariable Integer postId, @PathVariable Integer commentId) {
     postService.acceptAnswer(SecurityUtils.getCurrentUserId(), postId, commentId);
   }
+
+  /**
+   * Takes back the accepted answer. No comment id in the path: a post has at most one accepted
+   * answer, so the post alone identifies what is being undone. Switching answers is this call
+   * followed by {@link #acceptAnswer} — {@code acceptAnswer} refuses to overwrite a pick that is
+   * still standing.
+   */
+  @DeleteMapping("/{postId}/qna/accept-answer")
+  public void unacceptAnswer(@PathVariable Integer postId) {
+    postService.unacceptAnswer(SecurityUtils.getCurrentUserId(), postId);
+  }
 }

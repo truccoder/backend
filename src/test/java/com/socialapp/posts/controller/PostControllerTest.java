@@ -362,6 +362,74 @@ class PostControllerTest {
   }
 
   // =====================================================================
+  // DELETE /v1/api/posts/{postId}/qna/accept-answer
+  // =====================================================================
+
+  @Nested
+  @DisplayName("DELETE /v1/api/posts/{postId}/qna/accept-answer")
+  class UnacceptAnswerTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenCallerIsTheAuthor_happyPath")
+    void shouldReturn200_whenCallerIsTheAuthor_happyPath() throws Exception {
+      // When / Then — no comment id in the path: a post has at most one accepted answer
+      mockMvc
+          .perform(authed(delete(POSTS_URL + "/1/qna/accept-answer")))
+          .andExpect(status().isOk());
+
+      verify(postService).unacceptAnswer(eq(currentUser.getId()), eq(1));
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotTheAuthor")
+    void shouldReturn403_whenCallerIsNotTheAuthor() throws Exception {
+      // Given
+      doThrow(new ForbiddenException("Only the author can modify this post"))
+          .when(postService)
+          .unacceptAnswer(anyInt(), anyInt());
+
+      // When / Then
+      mockMvc
+          .perform(authed(delete(POSTS_URL + "/1/qna/accept-answer")))
+          .andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.message").value("Only the author can modify this post"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenNoAnswerHasBeenAccepted")
+    void shouldReturn400_whenNoAnswerHasBeenAccepted() throws Exception {
+      // Given
+      doThrow(new ValidationException("No answer has been accepted for this post"))
+          .when(postService)
+          .unacceptAnswer(anyInt(), anyInt());
+
+      // When / Then
+      mockMvc
+          .perform(authed(delete(POSTS_URL + "/1/qna/accept-answer")))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.message").value("No answer has been accepted for this post"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenPostIdPathVariableIsNotANumber")
+    void shouldReturn400_whenPostIdPathVariableIsNotANumber() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(delete(POSTS_URL + "/not-a-number/qna/accept-answer")))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(delete(POSTS_URL + "/1/qna/accept-answer"))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
   // Exception mapping (Service -> GlobalExceptionHandler)
   // =====================================================================
 
