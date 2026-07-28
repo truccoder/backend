@@ -90,6 +90,7 @@ public class ExplanationService {
             .explanationContent(request.getExplanationContent())
             .concepts(request.getConcepts())
             .prerequisites(request.getPrerequisites())
+            .externalLinks(request.getExternalLinks())
             .complexityScore(request.getComplexityScore())
             .version(nextVersion)
             .build();
@@ -261,6 +262,9 @@ public class ExplanationService {
         .explanationContent(entity.getExplanationContent())
         .concepts(entity.getConcepts())
         .prerequisites(entity.getPrerequisites())
+        // Echoed on the read path too, not only right after saving: /my-library was the place
+        // the loss actually showed up, since that is where the user goes back to find them.
+        .externalLinks(entity.getExternalLinks())
         .complexityScore(entity.getComplexityScore())
         .version(entity.getVersion())
         .createdAt(entity.getCreatedAt())

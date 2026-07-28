@@ -9,6 +9,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
+import com.socialapp.knowledge.dto.ExplanationResponseDto;
+
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -52,6 +54,19 @@ public class ExplanationEntity {
   @Setter(AccessLevel.NONE)
   private List<String> prerequisites;
 
+  /**
+   * The "Read more" list Gemini returns with every explanation.
+   *
+   * <p>Stored as jsonb rather than flattened to a list of URLs because the title and the reason
+   * are what make the list worth showing — a bare URL is not what the model was paid to produce.
+   * Defensive copies on the accessors match {@code concepts}/{@code prerequisites} above.
+   */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  @Getter(AccessLevel.NONE)
+  @Setter(AccessLevel.NONE)
+  private List<ExplanationResponseDto.ExternalLink> externalLinks;
+
   private Integer complexityScore;
 
   @Column(columnDefinition = "TEXT")
@@ -72,6 +87,7 @@ public class ExplanationEntity {
       String explanationContent,
       List<String> concepts,
       List<String> prerequisites,
+      List<ExplanationResponseDto.ExternalLink> externalLinks,
       Integer complexityScore,
       String feedbackNote,
       Integer version,
@@ -84,6 +100,7 @@ public class ExplanationEntity {
     this.explanationContent = explanationContent;
     this.concepts = concepts == null ? null : new ArrayList<>(concepts);
     this.prerequisites = prerequisites == null ? null : new ArrayList<>(prerequisites);
+    this.externalLinks = externalLinks == null ? null : new ArrayList<>(externalLinks);
     this.complexityScore = complexityScore;
     this.feedbackNote = feedbackNote;
     // No @Builder.Default here: it's incompatible with a constructor-level @Builder (Lombok
@@ -110,5 +127,13 @@ public class ExplanationEntity {
 
   public void setPrerequisites(List<String> prerequisites) {
     this.prerequisites = prerequisites == null ? null : new ArrayList<>(prerequisites);
+  }
+
+  public List<ExplanationResponseDto.ExternalLink> getExternalLinks() {
+    return externalLinks == null ? List.of() : List.copyOf(externalLinks);
+  }
+
+  public void setExternalLinks(List<ExplanationResponseDto.ExternalLink> externalLinks) {
+    this.externalLinks = externalLinks == null ? null : new ArrayList<>(externalLinks);
   }
 }
