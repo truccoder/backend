@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.ValidationException;
-import com.socialapp.posts.entity.EventRsvpEntity;
+import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.enums.RsvpStatus;
 import com.socialapp.posts.service.EventService;
 import com.socialapp.posts.service.GoogleCalendarService;
@@ -182,18 +182,46 @@ class EventControllerTest {
     @DisplayName("shouldReturn200AndAttendeeList_happyPath")
     void shouldReturn200AndAttendeeList_happyPath() throws Exception {
       // Given
-      EventRsvpEntity rsvp = new EventRsvpEntity();
-      rsvp.setPostId(1);
-      rsvp.setUserId(2);
-      rsvp.setStatus(RsvpStatus.GOING);
-      when(eventService.getAttendees(1)).thenReturn(List.of(rsvp));
+      EventAttendeeDto attendee =
+          EventAttendeeDto.builder()
+              .userId(2)
+              .fullName("Nguyen Truc")
+              .profilePictureUrl("https://cdn/avatar.png")
+              .status(RsvpStatus.GOING)
+              .build();
+      when(eventService.getAttendees(1, null)).thenReturn(List.of(attendee));
 
-      // When / Then
+      // When / Then — the identity fields are the point of the DTO: with the bare JPA entity the
+      // caller got a userId it had no endpoint to resolve.
       mockMvc
           .perform(authed(get(EVENTS_URL + "/1/attendees")))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$[0].userId").value(2))
+          .andExpect(jsonPath("$[0].fullName").value("Nguyen Truc"))
+          .andExpect(jsonPath("$[0].profilePictureUrl").value("https://cdn/avatar.png"))
           .andExpect(jsonPath("$[0].status").value("GOING"));
+    }
+
+    @Test
+    @DisplayName("shouldPassStatusFilterToService_whenStatusParamIsSupplied")
+    void shouldPassStatusFilterToService_whenStatusParamIsSupplied() throws Exception {
+      // Given
+      when(eventService.getAttendees(1, RsvpStatus.NOT_GOING)).thenReturn(List.of());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(EVENTS_URL + "/1/attendees").param("status", "NOT_GOING")))
+          .andExpect(status().isOk());
+      verify(eventService).getAttendees(1, RsvpStatus.NOT_GOING);
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenStatusParamIsNotAValidRsvpStatus")
+    void shouldReturn400_whenStatusParamIsNotAValidRsvpStatus() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(get(EVENTS_URL + "/1/attendees").param("status", "MAYBE")))
+          .andExpect(status().isBadRequest());
     }
 
     @Test

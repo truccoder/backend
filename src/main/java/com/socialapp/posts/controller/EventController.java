@@ -7,7 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import com.socialapp.posts.entity.EventRsvpEntity;
+import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.enums.RsvpStatus;
 import com.socialapp.posts.service.EventService;
 import com.socialapp.posts.service.GoogleCalendarService;
@@ -27,9 +27,13 @@ public class EventController {
     eventService.rsvp(SecurityUtils.getCurrentUserId(), postId, status);
   }
 
+  /**
+   * @param status optional filter; omit it to get every RSVP regardless of answer.
+   */
   @GetMapping("/{postId}/attendees")
-  public List<EventRsvpEntity> getAttendees(@PathVariable Integer postId) {
-    return eventService.getAttendees(postId);
+  public List<EventAttendeeDto> getAttendees(
+      @PathVariable Integer postId, @RequestParam(required = false) RsvpStatus status) {
+    return eventService.getAttendees(postId, status);
   }
 
   @GetMapping("/{postId}/attendees/count")

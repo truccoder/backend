@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.EventRsvpEntity;
 import com.socialapp.posts.entity.PostEntity;
@@ -30,6 +31,8 @@ import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.RsvpStatus;
 import com.socialapp.posts.repository.EventRsvpRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.UserRepository;
 
 /**
  * Component (unit) tests for {@link EventService}, per ISTQB CTFL v4.0.1 Section 2.2.1
@@ -44,6 +47,7 @@ class EventServiceTest {
 
   @Mock private PostRepository postRepository;
   @Mock private EventRsvpRepository rsvpRepository;
+  @Mock private UserRepository userRepository;
   @Mock private GoogleCalendarService googleCalendarService;
 
   @InjectMocks private EventService eventService;
@@ -64,6 +68,14 @@ class EventServiceTest {
     post.setPostType(PostType.EVENT);
     post.setEventDetails(details);
     return post;
+  }
+
+  private static UserEntity sampleUser() {
+    UserEntity user = new UserEntity();
+    user.setId(USER_ID);
+    user.setFullName("Nguyen Truc");
+    user.setProfilePictureUrl("https://cdn/avatar.png");
+    return user;
   }
 
   private static PostEntity sampleRegularPost() {
@@ -197,7 +209,7 @@ class EventServiceTest {
   class QueryTests {
 
     @Test
-    @DisplayName("should return every RSVP for the event")
+    @DisplayName("should return every RSVP for the event, resolved to a named attendee")
     void shouldReturnAttendees_whenPostIsAnEvent() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
@@ -206,14 +218,80 @@ class EventServiceTest {
               .postId(POST_ID)
               .userId(USER_ID)
               .status(RsvpStatus.GOING)
+              .createdAt(OffsetDateTime.parse("2026-07-20T09:00:00Z"))
               .build();
       when(rsvpRepository.findByPostId(POST_ID)).thenReturn(List.of(rsvp));
+      when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of(sampleUser()));
 
       // When
-      List<EventRsvpEntity> attendees = eventService.getAttendees(POST_ID);
+      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, null);
 
       // Then
-      assertThat(attendees).containsExactly(rsvp);
+      assertThat(attendees)
+          .singleElement()
+          .satisfies(
+              a -> {
+                assertThat(a.getUserId()).isEqualTo(USER_ID);
+                assertThat(a.getFullName()).isEqualTo("Nguyen Truc");
+                assertThat(a.getProfilePictureUrl()).isEqualTo("https://cdn/avatar.png");
+                assertThat(a.getStatus()).isEqualTo(RsvpStatus.GOING);
+                assertThat(a.getRespondedAt())
+                    .isEqualTo(OffsetDateTime.parse("2026-07-20T09:00:00Z"));
+              });
+    }
+
+    @Test
+    @DisplayName("should query only the requested status when a filter is supplied")
+    void shouldFilterByStatus_whenStatusIsSupplied() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      EventRsvpEntity going =
+          EventRsvpEntity.builder()
+              .postId(POST_ID)
+              .userId(USER_ID)
+              .status(RsvpStatus.GOING)
+              .build();
+      when(rsvpRepository.findByPostIdAndStatus(POST_ID, RsvpStatus.GOING))
+          .thenReturn(List.of(going));
+      when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of(sampleUser()));
+
+      // When
+      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, RsvpStatus.GOING);
+
+      // Then
+      assertThat(attendees)
+          .extracting(EventAttendeeDto::getStatus)
+          .containsExactly(RsvpStatus.GOING);
+      verify(rsvpRepository, never()).findByPostId(POST_ID);
+    }
+
+    @Test
+    @DisplayName("should leave identity null when the RSVP points at a missing user")
+    void shouldLeaveIdentityNull_whenUserIsMissing() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(rsvpRepository.findByPostId(POST_ID))
+          .thenReturn(
+              List.of(
+                  EventRsvpEntity.builder()
+                      .postId(POST_ID)
+                      .userId(USER_ID)
+                      .status(RsvpStatus.INTERESTED)
+                      .build()));
+      when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of());
+
+      // When
+      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, null);
+
+      // Then
+      assertThat(attendees)
+          .singleElement()
+          .satisfies(
+              a -> {
+                assertThat(a.getUserId()).isEqualTo(USER_ID);
+                assertThat(a.getFullName()).isNull();
+                assertThat(a.getProfilePictureUrl()).isNull();
+              });
     }
 
     @Test
@@ -223,7 +301,7 @@ class EventServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> eventService.getAttendees(POST_ID))
+      assertThatThrownBy(() -> eventService.getAttendees(POST_ID, null))
           .isInstanceOf(NotFoundException.class);
     }
 
@@ -300,6 +378,21 @@ class EventServiceTest {
           .contains("SUMMARY:Tech Meetup")
           .contains("LOCATION:Hanoi")
           .endsWith("END:VCALENDAR\r\n");
+    }
+
+    @Test
+    @DisplayName("should carry the UID and DTSTAMP that RFC 5545 makes mandatory")
+    void shouldIncludeUidAndDtstamp() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+
+      // When
+      String ics = eventService.generateIcsFile(POST_ID);
+
+      // Then — UID is derived from the post id so a re-import updates rather than duplicates,
+      // and DTSTAMP is the generation time in the same UTC basic format as DTSTART.
+      assertThat(ics).contains("UID:event-" + POST_ID + "@socialapp\r\n");
+      assertThat(ics).containsPattern("DTSTAMP:\\d{8}T\\d{6}Z\r\n");
     }
 
     @Test
