@@ -78,7 +78,23 @@ public class FeedPostDataDto {
 
   private List<Integer> taggedUserIds;
 
+  /**
+   * Both are written at fan-out and kept current by {@code updateCachedLikeCount} / {@code
+   * updateCachedCommentCount}.
+   *
+   * <p>{@code shareCount} used to sit beside them and was never written by anything — no share or
+   * repost endpoint exists — so every post reported zero shares as if that were a measurement. It
+   * was removed rather than left at zero: a field the client cannot distinguish from a real count
+   * is worse than an absent one, and the feed card was already refusing to render it. Adding the
+   * share feature means bringing it back here, writing it at fan-out the way these two are, and
+   * restoring {@code NotificationType.POST_SHARED}.
+   *
+   * <p>Removing it from a cached DTO is only safe because {@code RedisConfig#cacheObjectMapper}
+   * disables {@code FAIL_ON_UNKNOWN_PROPERTIES}: entries written before this change still carry
+   * {@code "shareCount"} and would otherwise fail to deserialise for the whole 7-day cache life,
+   * dropping those posts out of the feed with nothing but a WARN to show for it.
+   */
   private int likeCount;
+
   private int commentCount;
-  private int shareCount;
 }

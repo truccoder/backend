@@ -94,11 +94,17 @@ public class PostScoringService {
     return base + engagement * ENGAGEMENT_BOOST_MILLIS + affinity * AFFINITY_BOOST_MILLIS;
   }
 
-  /** log scale — diminishing returns on high engagement, normalized to [0, 1] */
+  /**
+   * log scale — diminishing returns on high engagement, normalized to [0, 1]
+   *
+   * <p>A {@code 3.0 * shareCount} term used to sit here. It contributed exactly nothing on every
+   * post ever scored, because nothing in this backend writes a share count — the field was dropped
+   * from {@link FeedPostDataDto} for that reason, and this term went with it. Removing it leaves
+   * every score identical, so {@code MAX_ENGAGEMENT_LOG} stays as it is; a share feature would
+   * bring both the field and this term back, and only then would the constant need revisiting.
+   */
   private double engagementFactor(FeedPostDataDto post) {
-    double raw =
-        Math.log(
-            1 + post.getLikeCount() + 2.0 * post.getCommentCount() + 3.0 * post.getShareCount());
+    double raw = Math.log(1 + post.getLikeCount() + 2.0 * post.getCommentCount());
     return Math.min(1.0, raw / MAX_ENGAGEMENT_LOG);
   }
 
