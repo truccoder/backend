@@ -292,6 +292,44 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("should not send an email when the recipient asked for NONE")
+    void shouldNotSendEmail_whenFrequencyIsNone() {
+      // Given — everything else says "send": channel EMAIL and emailEnabled true. Only the
+      // frequency objects. This is the case that used to send anyway, because shouldSendEmail
+      // never read emailFrequency.
+      NotificationPreferenceEntity prefs = preference(false, true, null, null);
+      prefs.setEmailFrequency(EmailFrequency.NONE);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.EMAIL).build());
+
+      // Then
+      verify(mailService, never()).sendNotificationEmail(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should send an email when the stored frequency is null")
+    void shouldSendEmail_whenFrequencyIsNull() {
+      // Given — rows written before email_frequency had a value read back as null. The check is
+      // deliberately NONE.equals(stored) rather than !INSTANT.equals(stored) so null keeps the
+      // old behaviour of sending instead of silently muting someone.
+      NotificationPreferenceEntity prefs = preference(false, true, null, null);
+      prefs.setEmailFrequency(null);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(userRepository.findById(RECIPIENT_ID))
+          .thenReturn(Optional.of(user(RECIPIENT_ID, "user@example.com", "Alice")));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.EMAIL).build());
+
+      // Then
+      verify(mailService).sendNotificationEmail(any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("should default to \"User\" when the recipient's full name is null")
     void shouldDefaultToUser_whenRecipientFullNameIsNull() {
       // Given
@@ -536,7 +574,7 @@ class NotificationServiceTest {
       request.setPushEnabled(false);
       request.setEmailEnabled(false);
       request.setOnesignalPlayerId("new-player");
-      request.setEmailFrequency(EmailFrequency.DAILY_DIGEST);
+      request.setEmailFrequency(EmailFrequency.NONE);
       request.setMutedTypes(List.of("SYSTEM"));
 
       // When
@@ -546,7 +584,7 @@ class NotificationServiceTest {
       // Then
       assertThat(result.getPushEnabled()).isFalse();
       assertThat(result.getEmailEnabled()).isFalse();
-      assertThat(result.getEmailFrequency()).isEqualTo(EmailFrequency.DAILY_DIGEST);
+      assertThat(result.getEmailFrequency()).isEqualTo(EmailFrequency.NONE);
       assertThat(result.getMutedTypes()).containsExactly("SYSTEM");
       // The device token is persisted but deliberately kept out of the response DTO.
       assertThat(existing.getOnesignalPlayerId()).isEqualTo("new-player");

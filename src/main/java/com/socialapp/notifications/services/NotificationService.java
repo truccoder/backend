@@ -16,6 +16,7 @@ import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationEntity;
 import com.socialapp.notifications.entity.NotificationPreferenceEntity;
+import com.socialapp.notifications.entity.enums.EmailFrequency;
 import com.socialapp.notifications.entity.enums.NotificationChannel;
 import com.socialapp.notifications.repository.NotificationPreferenceRepository;
 import com.socialapp.notifications.repository.NotificationRepository;
@@ -163,9 +164,14 @@ public class NotificationService {
         && Objects.nonNull(prefs.getOnesignalPlayerId());
   }
 
+  // emailFrequency used to be write-only: stored here and echoed back in the response, but never
+  // consulted when deciding to send, so NONE still produced an email per like. It is read now.
+  // The digest values that used to live alongside it were removed rather than implemented — see
+  // EmailFrequency.
   private boolean shouldSendEmail(NotificationChannel channel, NotificationPreferenceEntity prefs) {
     return (NotificationChannel.EMAIL.equals(channel) || NotificationChannel.BOTH.equals(channel))
-        && Boolean.TRUE.equals(prefs.getEmailEnabled());
+        && Boolean.TRUE.equals(prefs.getEmailEnabled())
+        && !EmailFrequency.NONE.equals(prefs.getEmailFrequency());
   }
 
   private boolean isTypeMuted(NotificationPreferenceEntity prefs, String type) {

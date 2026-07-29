@@ -312,11 +312,11 @@ class NotificationControllerTest {
               NotificationPreferenceResponseDto.builder()
                   .userId(currentUser.getId())
                   .pushEnabled(false)
-                  .emailFrequency(EmailFrequency.WEEKLY_DIGEST)
+                  .emailFrequency(EmailFrequency.NONE)
                   .build());
       String requestJson =
           """
-          { "pushEnabled": false, "emailFrequency": "WEEKLY_DIGEST" }
+          { "pushEnabled": false, "emailFrequency": "NONE" }
           """;
 
       // When / Then
@@ -327,7 +327,7 @@ class NotificationControllerTest {
                   .content(requestJson))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.pushEnabled").value(false))
-          .andExpect(jsonPath("$.emailFrequency").value("WEEKLY_DIGEST"));
+          .andExpect(jsonPath("$.emailFrequency").value("NONE"));
     }
 
     @Test
