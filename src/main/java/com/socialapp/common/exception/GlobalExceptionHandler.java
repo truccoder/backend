@@ -4,9 +4,11 @@ import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
 import static org.springframework.http.HttpStatus.*;
 
+import java.util.LinkedHashSet;
 import java.util.Objects;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -15,6 +17,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -322,6 +325,31 @@ public class GlobalExceptionHandler {
         .message("Content-Type must be application/json")
         .path(request.getRequestURI())
         .build();
+  }
+
+  // Wrong verb on a path that exists — e.g. a client still on PATCH after /qna/accept-answer moved
+  // to POST. Fell through to the generic Exception handler and came back 500, which reads like the
+  // server broke rather than "you called it with the wrong method".
+  // Returns ResponseEntity, unlike every other handler here, because RFC 9110 §15.5.6 makes the
+  // Allow header mandatory on a 405 and @ResponseStatus alone cannot set it.
+  @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+  public ResponseEntity<ErrorResponseDto> handle(
+      HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    HttpHeaders headers = new HttpHeaders();
+    if (ex.getSupportedHttpMethods() != null) {
+      headers.setAllow(new LinkedHashSet<>(ex.getSupportedHttpMethods()));
+    }
+    return ResponseEntity.status(METHOD_NOT_ALLOWED)
+        .headers(headers)
+        .body(
+            ErrorResponseDto.builder()
+                .code(METHOD_NOT_ALLOWED.value())
+                .error(METHOD_NOT_ALLOWED.getReasonPhrase())
+                .message("Method " + ex.getMethod() + " is not supported for this endpoint")
+                .path(request.getRequestURI())
+                .build());
   }
 
   // Covers service-layer "wrong current state for this action" checks (e.g. reviewing a post

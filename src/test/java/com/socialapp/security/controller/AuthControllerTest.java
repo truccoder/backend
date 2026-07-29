@@ -4,8 +4,10 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -263,6 +265,21 @@ class AuthControllerTest {
           .perform(post(LOGIN_URL).content(requestJson))
           .andExpect(status().isUnsupportedMediaType())
           .andExpect(jsonPath("$.message").value("Content-Type must be application/json"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn405_whenMethodIsNotSupported")
+    void shouldReturn405_whenMethodIsNotSupported() throws Exception {
+      // Given — /auth/login exists but only answers POST
+
+      // When / Then — HttpRequestMethodNotSupportedException now has its own @ExceptionHandler
+      // (previously fell through to the generic Exception handler and was misreported as 500).
+      // RFC 9110 §15.5.6 makes the Allow header mandatory on a 405, hence the header assertion.
+      mockMvc
+          .perform(delete(LOGIN_URL))
+          .andExpect(status().isMethodNotAllowed())
+          .andExpect(jsonPath("$.message").value(containsString("DELETE")))
+          .andExpect(header().string("Allow", containsString("POST")));
     }
   }
 

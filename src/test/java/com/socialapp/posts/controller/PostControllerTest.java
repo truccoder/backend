@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -357,6 +358,19 @@ class PostControllerTest {
       mockMvc
           .perform(post(POSTS_URL + "/1/qna/accept-answer/5"))
           .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("shouldReturn405_whenCalledWithPatch")
+    void shouldReturn405_whenCalledWithPatch() throws Exception {
+      // Given — this endpoint was PATCH until 39b5666 standardised the API layer onto POST.
+      // Clients still on the old verb must get 405, not the 500 the generic handler used to
+      // produce; this test pins that verb change so it cannot regress silently again.
+
+      // When / Then
+      mockMvc
+          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .andExpect(status().isMethodNotAllowed());
     }
   }
 
