@@ -236,7 +236,44 @@ public class BookService {
     if (!book.getAuthorId().equals(authorId)) {
       throw new ForbiddenException("Only the author can delete this book");
     }
+    deleteBookAndAssets(book);
+  }
+
+  /**
+   * Removes the book(s) attached to a post, for {@code PostService.deletePost}.
+   *
+   * <p>Without this the post went away and the book row stayed behind with {@code post_id} nulled
+   * by the FK's ON DELETE SET NULL — reachable through no post, listed by nothing, with its files
+   * kept in MinIO forever. Refusing the delete for a sold book (below) means deleting such a post
+   * now fails as a whole, which is the point: the post is the only page the book has.
+   */
+  @Transactional
+  public void deleteBooksForPost(Integer postId) {
+    bookRepository.findByPostId(postId).forEach(this::deleteBookAndAssets);
+  }
+
+  /**
+   * The single delete path for a book: refuse if it has been sold, otherwise drop the row and the
+   * files behind it.
+   */
+  private void deleteBookAndAssets(BookEntity book) {
+    // t_book_purchases.book_id is ON DELETE CASCADE, so deleting a sold book would erase the
+    // buyers' payment records along with the only copy of what they paid for — silently, with no
+    // refund and no trace of the transaction. An author who wants a sold book gone has to go
+    // through support, not through this endpoint.
+    if (purchaseRepository.existsByBookIdAndPaymentStatus(book.getId(), PaymentStatus.COMPLETED)) {
+      throw new ValidationException("This book has been purchased and can no longer be deleted");
+    }
+
     bookRepository.delete(book);
+
+    // Storage last, and quietly: MinIO is not in the transaction, so a failure here must not undo
+    // a valid delete. The residual risk is the opposite order — a rollback after this point would
+    // leave a row pointing at deleted objects — but nothing runs after this in the delete paths,
+    // and leaking a file on every failed delete (the old behaviour) is the worse of the two.
+    bookStorageService.deleteQuietly(bookStorageService.booksBucket(), book.getFileKey());
+    bookStorageService.deleteQuietly(bookStorageService.booksBucket(), book.getPreviewFileKey());
+    bookStorageService.deleteQuietly(bookStorageService.coversBucket(), book.getCoverImageKey());
   }
 
   BookEntity findBookOrThrow(Integer bookId) {

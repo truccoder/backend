@@ -780,5 +780,100 @@ class BookServiceTest {
       // Then
       verify(bookRepository).delete(ownBook);
     }
+
+    @Test
+    @DisplayName("should refuse to delete a book somebody has paid for")
+    void shouldThrowValidationException_whenBookHasCompletedPurchase() {
+      // Given — t_book_purchases cascades on book_id, so this delete would erase the buyer's
+      // payment record along with the book they paid for.
+      BookEntity soldBook = book(BOOK_ID, AUTHOR_ID, false, "file-key", "preview-key");
+      when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(soldBook));
+      when(purchaseRepository.existsByBookIdAndPaymentStatus(BOOK_ID, PaymentStatus.COMPLETED))
+          .thenReturn(true);
+
+      // When / Then
+      assertThatThrownBy(() -> bookService.deleteBook(AUTHOR_ID, BOOK_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("has been purchased");
+      verify(bookRepository, never()).delete(any());
+      verify(bookStorageService, never()).deleteQuietly(any(), any());
+    }
+
+    @Test
+    @DisplayName("should remove the book's file, preview and cover from storage")
+    void shouldDeleteStorageObjects_whenBookIsDeleted() {
+      // Given
+      BookEntity ownBook =
+          BookEntity.builder()
+              .id(BOOK_ID)
+              .authorId(AUTHOR_ID)
+              .isFree(false)
+              .fileKey("file-key")
+              .previewFileKey("preview-key")
+              .coverImageKey("cover-key")
+              .build();
+      when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(ownBook));
+      when(bookStorageService.booksBucket()).thenReturn("books");
+      when(bookStorageService.coversBucket()).thenReturn("book-covers");
+
+      // When
+      bookService.deleteBook(AUTHOR_ID, BOOK_ID);
+
+      // Then — leaving these behind is how the bucket filled up with files no row points at.
+      verify(bookStorageService).deleteQuietly("books", "file-key");
+      verify(bookStorageService).deleteQuietly("books", "preview-key");
+      verify(bookStorageService).deleteQuietly("book-covers", "cover-key");
+    }
+  }
+
+  // =====================================================================
+  // deleteBooksForPost
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deleteBooksForPost")
+  class DeleteBooksForPostTests {
+
+    @Test
+    @DisplayName("should delete the book attached to the post")
+    void shouldDeleteAttachedBook() {
+      // Given
+      BookEntity attached = book(BOOK_ID, AUTHOR_ID, true, "file-key", null);
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of(attached));
+
+      // When
+      bookService.deleteBooksForPost(POST_ID);
+
+      // Then — otherwise the FK's ON DELETE SET NULL leaves it orphaned once the post goes.
+      verify(bookRepository).delete(attached);
+    }
+
+    @Test
+    @DisplayName("should do nothing when the post has no book")
+    void shouldDoNothing_whenPostHasNoBook() {
+      // Given
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of());
+
+      // When
+      bookService.deleteBooksForPost(POST_ID);
+
+      // Then
+      verify(bookRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should refuse when the attached book has been sold")
+    void shouldThrowValidationException_whenAttachedBookIsSold() {
+      // Given
+      BookEntity sold = book(BOOK_ID, AUTHOR_ID, false, "file-key", "preview-key");
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of(sold));
+      when(purchaseRepository.existsByBookIdAndPaymentStatus(BOOK_ID, PaymentStatus.COMPLETED))
+          .thenReturn(true);
+
+      // When / Then — this is what stops the enclosing deletePost from going through.
+      assertThatThrownBy(() -> bookService.deleteBooksForPost(POST_ID))
+          .isInstanceOf(ValidationException.class);
+      verify(bookRepository, never()).delete(any());
+    }
   }
 }

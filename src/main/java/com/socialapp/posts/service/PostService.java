@@ -384,6 +384,15 @@ public class PostService {
     verifyAuthor(actorId, post);
 
     List<Integer> taggedUserIds = extractTaggedUserIds(post);
+
+    // Before the post, not after: the book is what the post is for, and BookService refuses to
+    // delete one that has been sold. Running it first means such a delete fails with the book's
+    // own message and the post survives, instead of the post vanishing and the row surviving with
+    // post_id nulled. Guarded by the type check so ordinary posts don't pay for an extra query.
+    if (PostType.BOOK.equals(post.getPostType())) {
+      bookService.deleteBooksForPost(postId);
+    }
+
     postRepository.delete(post);
 
     try {

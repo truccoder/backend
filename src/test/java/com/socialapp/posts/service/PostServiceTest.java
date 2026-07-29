@@ -1084,6 +1084,56 @@ class PostServiceTest {
       assertThatCode(() -> postService.deletePost(AUTHOR_ID, POST_ID)).doesNotThrowAnyException();
       verify(postRepository).delete(post);
     }
+
+    @Test
+    @DisplayName("should delete the attached book before the post when the post is a BOOK post")
+    void shouldDeleteAttachedBook_whenPostIsBookPost() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.BOOK);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then — the book must go first, so a refusal from BookService stops the post delete too.
+      InOrder ordered = inOrder(bookService, postRepository);
+      ordered.verify(bookService).deleteBooksForPost(POST_ID);
+      ordered.verify(postRepository).delete(post);
+    }
+
+    @Test
+    @DisplayName("should not look for a book when the post is not a BOOK post")
+    void shouldNotTouchBookService_whenPostIsNotBookPost() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then
+      verifyNoInteractions(bookService);
+    }
+
+    @Test
+    @DisplayName("should keep the post when the attached book refuses to be deleted")
+    void shouldNotDeletePost_whenBookDeletionIsRefused() {
+      // Given — a sold book cannot be deleted, and the post is the only page it has.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.BOOK);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      doThrow(new ValidationException("This book has been purchased and can no longer be deleted"))
+          .when(bookService)
+          .deleteBooksForPost(POST_ID);
+
+      // When / Then
+      assertThatThrownBy(() -> postService.deletePost(AUTHOR_ID, POST_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("has been purchased");
+      verify(postRepository, never()).delete(any());
+      verifyNoInteractions(newsfeedService);
+    }
   }
 
   // =====================================================================
