@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -15,6 +17,17 @@ public interface UserRoadmapProgressRepository
   List<UserRoadmapProgressEntity> findByUserId(Integer userId);
 
   List<UserRoadmapProgressEntity> findByStatus(VerificationStatus status);
+
+  /**
+   * Same rows as {@link #findByStatus}, but with {@code user} and {@code node} joined in — the
+   * moderation queue reads both for every row, which was two extra queries apiece without this.
+   */
+  @Query(
+      "SELECT p FROM UserRoadmapProgressEntity p "
+          + "JOIN FETCH p.user JOIN FETCH p.node "
+          + "WHERE p.status = :status")
+  List<UserRoadmapProgressEntity> findByStatusWithUserAndNode(
+      @Param("status") VerificationStatus status);
 
   Optional<UserRoadmapProgressEntity> findByUserIdAndNodeId(Integer userId, Integer nodeId);
 

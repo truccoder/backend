@@ -23,7 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 import com.socialapp.knowledge.service.ProfessionalProfileService;
@@ -81,14 +81,14 @@ class ProfessionalProfileControllerTest {
     return builder.header("Authorization", "Bearer " + VALID_TOKEN);
   }
 
-  private static UserProfessionalProfileEntity sampleProfile() {
-    UserProfessionalProfileEntity profile = new UserProfessionalProfileEntity();
-    profile.setUserId(1);
-    profile.setJobTitle("Backend Engineer");
-    profile.setSeniorityLevel(SeniorityLevel.SENIOR);
-    profile.setYearsOfExperience(5);
-    profile.setPrimaryRole(PrimaryRole.BACKEND);
-    return profile;
+  private static ProfessionalProfileResponseDto sampleProfile() {
+    return ProfessionalProfileResponseDto.builder()
+        .userId(1)
+        .jobTitle("Backend Engineer")
+        .seniorityLevel(SeniorityLevel.SENIOR)
+        .yearsOfExperience(5)
+        .primaryRole(PrimaryRole.BACKEND)
+        .build();
   }
 
   // =====================================================================

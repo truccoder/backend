@@ -341,16 +341,15 @@ class GithubServiceTest {
     }
 
     @Test
-    @DisplayName("should return null when no GitHub account is linked")
-    void shouldReturnNull_whenNotLinked() {
+    @DisplayName("should throw NotFound when no GitHub account is linked")
+    void shouldThrowNotFound_whenNotLinked() {
       // Given
       when(githubStatsRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
 
-      // When
-      GithubStatsResponse response = githubService.getGithubStats(USER_ID);
-
-      // Then
-      assertThat(response).isNull();
+      // When / Then
+      assertThatThrownBy(() -> githubService.getGithubStats(USER_ID))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("not linked");
     }
   }
 

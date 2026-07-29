@@ -1,6 +1,5 @@
 package com.socialapp.posts.controller;
 
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.posts.dto.QuizResultResponseDto;
@@ -18,10 +17,9 @@ public class QuizController {
   private final QuizService quizService;
 
   @PostMapping("/submit")
-  public ResponseEntity<QuizResultResponseDto> submitQuiz(
+  public QuizResultResponseDto submitQuiz(
       @PathVariable Integer postId, @Valid @RequestBody SubmitQuizRequestDto request) {
     Integer userId = SecurityUtils.getCurrentUserId();
-    QuizResultResponseDto response = quizService.submitQuiz(userId, postId, request);
-    return ResponseEntity.ok(response);
+    return quizService.submitQuiz(userId, postId, request);
   }
 }

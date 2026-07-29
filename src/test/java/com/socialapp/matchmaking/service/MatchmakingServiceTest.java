@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 
@@ -65,8 +66,7 @@ class MatchmakingServiceTest {
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position(null)));
 
       // When
-      List<UserProfessionalProfileEntity> result =
-          matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
 
       // Then
       assertThat(result).isEmpty();
@@ -79,8 +79,7 @@ class MatchmakingServiceTest {
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position(List.of())));
 
       // When
-      List<UserProfessionalProfileEntity> result =
-          matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
 
       // Then
       assertThat(result).isEmpty();
@@ -93,14 +92,21 @@ class MatchmakingServiceTest {
       List<String> skills = List.of("Java", "Spring");
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position(skills)));
       UserProfessionalProfileEntity candidate = new UserProfessionalProfileEntity();
+      candidate.setUserId(77);
+      candidate.setJobTitle("Backend Engineer");
       when(profileRepository.findBySkillsMatch(skills)).thenReturn(List.of(candidate));
 
       // When
-      List<UserProfessionalProfileEntity> result =
-          matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
 
       // Then
-      assertThat(result).containsExactly(candidate);
+      assertThat(result)
+          .singleElement()
+          .satisfies(
+              dto -> {
+                assertThat(dto.getUserId()).isEqualTo(77);
+                assertThat(dto.getJobTitle()).isEqualTo("Backend Engineer");
+              });
     }
   }
 }

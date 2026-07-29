@@ -20,7 +20,8 @@ public class ExplanationController {
 
   @PostMapping("/posts/{postId}/explain")
   public ExplanationResponseDto explainPost(
-      @PathVariable Integer postId, @RequestBody(required = false) ExplainRequestDto request) {
+      @PathVariable Integer postId,
+      @Valid @RequestBody(required = false) ExplainRequestDto request) {
     String feedbackNote = request != null ? request.getFeedbackNote() : null;
     return explanationService.explainPost(SecurityUtils.getCurrentUserId(), postId, feedbackNote);
   }

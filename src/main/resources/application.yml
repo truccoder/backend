@@ -45,6 +45,11 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+    # Spring Boot defaults this to true, which keeps the Hibernate session open through view
+    # rendering — lazy associations then resolve silently during JSON serialization, hiding
+    # missing fetch joins and turning list endpoints into N+1 query storms. Off, so an
+    # un-fetched association fails loudly in tests instead of quietly in production.
+    open-in-view: false
     show-sql: true
     properties:
       hibernate:

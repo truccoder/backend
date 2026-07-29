@@ -25,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationEntity;
@@ -539,15 +540,16 @@ class NotificationServiceTest {
       request.setMutedTypes(List.of("SYSTEM"));
 
       // When
-      NotificationPreferenceEntity result =
+      NotificationPreferenceResponseDto result =
           notificationService.updatePreference(RECIPIENT_ID, request);
 
       // Then
       assertThat(result.getPushEnabled()).isFalse();
       assertThat(result.getEmailEnabled()).isFalse();
-      assertThat(result.getOnesignalPlayerId()).isEqualTo("new-player");
       assertThat(result.getEmailFrequency()).isEqualTo(EmailFrequency.DAILY_DIGEST);
       assertThat(result.getMutedTypes()).containsExactly("SYSTEM");
+      // The device token is persisted but deliberately kept out of the response DTO.
+      assertThat(existing.getOnesignalPlayerId()).isEqualTo("new-player");
     }
 
     @Test
@@ -561,13 +563,13 @@ class NotificationServiceTest {
       UpdatePreferenceRequestDto request = new UpdatePreferenceRequestDto();
 
       // When
-      NotificationPreferenceEntity result =
+      NotificationPreferenceResponseDto result =
           notificationService.updatePreference(RECIPIENT_ID, request);
 
       // Then
       assertThat(result.getPushEnabled()).isTrue();
       assertThat(result.getEmailEnabled()).isTrue();
-      assertThat(result.getOnesignalPlayerId()).isEqualTo("old-player");
+      assertThat(existing.getOnesignalPlayerId()).isEqualTo("old-player");
     }
   }
 
@@ -586,8 +588,13 @@ class NotificationServiceTest {
       NotificationPreferenceEntity existing = preference(true, true, null, null);
       when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(existing));
 
-      // When / Then
-      assertThat(notificationService.getPreference(RECIPIENT_ID)).isSameAs(existing);
+      // When
+      NotificationPreferenceResponseDto result = notificationService.getPreference(RECIPIENT_ID);
+
+      // Then
+      assertThat(result.getUserId()).isEqualTo(RECIPIENT_ID);
+      assertThat(result.getPushEnabled()).isTrue();
+      assertThat(result.getEmailEnabled()).isTrue();
     }
 
     @Test
@@ -598,7 +605,7 @@ class NotificationServiceTest {
       when(preferenceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
       // When
-      NotificationPreferenceEntity result = notificationService.getPreference(RECIPIENT_ID);
+      NotificationPreferenceResponseDto result = notificationService.getPreference(RECIPIENT_ID);
 
       // Then
       assertThat(result.getUserId()).isEqualTo(RECIPIENT_ID);

@@ -25,6 +25,7 @@ import com.socialapp.github.entity.GithubStatsEntity;
 import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
+import com.socialapp.roadmap.dto.PendingVerificationDto;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -478,15 +479,42 @@ class SkillVerificationServiceTest {
     @DisplayName("should return every progress row awaiting moderator approval")
     void shouldReturnPendingProgressList() {
       // Given
-      List<UserRoadmapProgressEntity> pending = List.of(pendingProgress());
-      when(progressRepository.findByStatus(VerificationStatus.PENDING_APPROVAL))
-          .thenReturn(pending);
+      when(progressRepository.findByStatusWithUserAndNode(VerificationStatus.PENDING_APPROVAL))
+          .thenReturn(List.of(pendingProgress()));
 
       // When
-      List<UserRoadmapProgressEntity> result = skillVerificationService.getPendingRequests();
+      List<PendingVerificationDto> result = skillVerificationService.getPendingRequests();
 
       // Then
-      assertThat(result).isEqualTo(pending);
+      assertThat(result)
+          .singleElement()
+          .satisfies(
+              dto -> {
+                assertThat(dto.getProgressId()).isEqualTo(PROGRESS_ID);
+                assertThat(dto.getUserId()).isEqualTo(USER_ID);
+                assertThat(dto.getNodeId()).isEqualTo(NODE_ID);
+                assertThat(dto.getTier()).isEqualTo(VerificationTier.MOD_VERIFIED);
+              });
+    }
+
+    @Test
+    @DisplayName("should not expose the requester's password hash")
+    void shouldNotExposePasswordHash() {
+      // Given
+      UserRoadmapProgressEntity progress = pendingProgress();
+      progress.getUser().setPassword("$2a$10$hashed");
+      when(progressRepository.findByStatusWithUserAndNode(VerificationStatus.PENDING_APPROVAL))
+          .thenReturn(List.of(progress));
+
+      // When
+      List<PendingVerificationDto> result = skillVerificationService.getPendingRequests();
+
+      // Then — the DTO has no field that could carry it at all.
+      assertThat(result)
+          .singleElement()
+          .extracting(Object::toString)
+          .asString()
+          .doesNotContain("hashed");
     }
   }
 }

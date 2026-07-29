@@ -2,7 +2,6 @@ package com.socialapp.roadmap.controller;
 
 import java.util.List;
 
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,24 +21,24 @@ public class RoadmapController {
 
   @PostMapping
   @PreAuthorize("hasRole('ADMIN')")
-  public ResponseEntity<RoadmapDto> createRoadmap(@Valid @RequestBody RoadmapDto request) {
-    return ResponseEntity.ok(roadmapService.createRoadmap(request));
+  public RoadmapDto createRoadmap(@Valid @RequestBody RoadmapDto request) {
+    return roadmapService.createRoadmap(request);
   }
 
   @GetMapping
-  public ResponseEntity<List<RoadmapDto>> getAllRoadmaps() {
-    return ResponseEntity.ok(roadmapService.getAllRoadmaps());
+  public List<RoadmapDto> getAllRoadmaps() {
+    return roadmapService.getAllRoadmaps();
   }
 
   @PostMapping("/{id}/nodes")
   @PreAuthorize("hasRole('ADMIN')")
-  public ResponseEntity<RoadmapNodeDto> addNode(
+  public RoadmapNodeDto addNode(
       @PathVariable Integer id, @Valid @RequestBody RoadmapNodeDto request) {
-    return ResponseEntity.ok(roadmapService.addNodeToRoadmap(id, request));
+    return roadmapService.addNodeToRoadmap(id, request);
   }
 
   @GetMapping("/{id}/nodes")
-  public ResponseEntity<List<RoadmapNodeDto>> getNodes(@PathVariable Integer id) {
-    return ResponseEntity.ok(roadmapService.getRoadmapNodes(id));
+  public List<RoadmapNodeDto> getNodes(@PathVariable Integer id) {
+    return roadmapService.getRoadmapNodes(id);
   }
 }

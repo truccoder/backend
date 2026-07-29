@@ -75,6 +75,11 @@ public class RoadmapService {
     return dto;
   }
 
+  // Reads e.getRoadmap()/e.getParentNode(), both LAZY. It happens to work without a session
+  // because only the identifier is dereferenced and Hibernate serves that off the proxy without
+  // initializing it — too subtle a property to leave the endpoint resting on. Covered by
+  // RoadmapServiceLazyLoadingIntegrationTest.
+  @Transactional(readOnly = true)
   public List<RoadmapNodeDto> getRoadmapNodes(Integer roadmapId) {
     return roadmapNodeRepository.findByRoadmapId(roadmapId).stream()
         .map(

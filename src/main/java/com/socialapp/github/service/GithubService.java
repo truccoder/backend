@@ -114,7 +114,7 @@ public class GithubService {
                     .contributionGraph(entity.getContributionGraphJson())
                     .lastSyncedAt(entity.getLastSyncedAt())
                     .build())
-        .orElse(null); // Or return 404 in controller
+        .orElseThrow(() -> new NotFoundException("GitHub account not linked"));
   }
 
   @Transactional

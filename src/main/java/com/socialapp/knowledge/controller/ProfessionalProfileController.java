@@ -2,8 +2,8 @@ package com.socialapp.knowledge.controller;
 
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.dto.UpdateProfessionalProfileDto;
-import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.service.ProfessionalProfileService;
 import com.socialapp.security.util.SecurityUtils;
 
@@ -17,12 +17,12 @@ public class ProfessionalProfileController {
   private final ProfessionalProfileService profileService;
 
   @GetMapping
-  public UserProfessionalProfileEntity getProfile() {
+  public ProfessionalProfileResponseDto getProfile() {
     return profileService.getProfile(SecurityUtils.getCurrentUserId());
   }
 
   @PutMapping
-  public UserProfessionalProfileEntity updateProfile(
+  public ProfessionalProfileResponseDto updateProfile(
       @RequestBody @Valid UpdateProfessionalProfileDto request) {
     return profileService.upsertProfile(SecurityUtils.getCurrentUserId(), request);
   }

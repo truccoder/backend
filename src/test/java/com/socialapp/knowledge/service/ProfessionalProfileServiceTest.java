@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.dto.UpdateProfessionalProfileDto;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
@@ -60,10 +61,15 @@ class ProfessionalProfileServiceTest {
       // Given
       UserProfessionalProfileEntity profile = new UserProfessionalProfileEntity();
       profile.setUserId(USER_ID);
+      profile.setJobTitle("Backend Engineer");
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile));
 
-      // When / Then
-      assertThat(professionalProfileService.getProfile(USER_ID)).isSameAs(profile);
+      // When
+      ProfessionalProfileResponseDto result = professionalProfileService.getProfile(USER_ID);
+
+      // Then
+      assertThat(result.getUserId()).isEqualTo(USER_ID);
+      assertThat(result.getJobTitle()).isEqualTo("Backend Engineer");
     }
 
     @Test
@@ -110,7 +116,7 @@ class ProfessionalProfileServiceTest {
       when(profileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
       // When
-      UserProfessionalProfileEntity result =
+      ProfessionalProfileResponseDto result =
           professionalProfileService.upsertProfile(USER_ID, updateDto());
 
       // Then
@@ -127,7 +133,7 @@ class ProfessionalProfileServiceTest {
       when(profileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
       // When
-      UserProfessionalProfileEntity result =
+      ProfessionalProfileResponseDto result =
           professionalProfileService.upsertProfile(USER_ID, updateDto());
 
       // Then

@@ -8,7 +8,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -303,11 +302,11 @@ class PostControllerTest {
   }
 
   // =====================================================================
-  // PATCH /v1/api/posts/{postId}/qna/accept-answer/{commentId}
+  // POST /v1/api/posts/{postId}/qna/accept-answer/{commentId}
   // =====================================================================
 
   @Nested
-  @DisplayName("PATCH /v1/api/posts/{postId}/qna/accept-answer/{commentId}")
+  @DisplayName("POST /v1/api/posts/{postId}/qna/accept-answer/{commentId}")
   class AcceptAnswerTests {
 
     @Test
@@ -315,7 +314,7 @@ class PostControllerTest {
     void shouldReturn200_whenCallerIsTheAuthor_happyPath() throws Exception {
       // When / Then
       mockMvc
-          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .perform(authed(post(POSTS_URL + "/1/qna/accept-answer/5")))
           .andExpect(status().isOk());
 
       verify(postService).acceptAnswer(eq(currentUser.getId()), eq(1), eq(5));
@@ -331,7 +330,7 @@ class PostControllerTest {
 
       // When / Then
       mockMvc
-          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .perform(authed(post(POSTS_URL + "/1/qna/accept-answer/5")))
           .andExpect(status().isForbidden())
           .andExpect(jsonPath("$.message").value("Only the author can modify this post"));
     }
@@ -346,7 +345,7 @@ class PostControllerTest {
 
       // When / Then
       mockMvc
-          .perform(authed(patch(POSTS_URL + "/1/qna/accept-answer/5")))
+          .perform(authed(post(POSTS_URL + "/1/qna/accept-answer/5")))
           .andExpect(status().isBadRequest())
           .andExpect(jsonPath("$.message").value("Only QNA posts can have an accepted answer"));
     }
@@ -356,7 +355,7 @@ class PostControllerTest {
     void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
       // When / Then
       mockMvc
-          .perform(patch(POSTS_URL + "/1/qna/accept-answer/5"))
+          .perform(post(POSTS_URL + "/1/qna/accept-answer/5"))
           .andExpect(status().isUnauthorized());
     }
   }

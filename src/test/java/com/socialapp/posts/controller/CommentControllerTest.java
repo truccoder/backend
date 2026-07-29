@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -31,7 +32,6 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.service.CommentService;
@@ -48,12 +48,10 @@ import com.socialapp.security.repository.UserRepository;
  * System/API integration tests for {@link CommentController}, per ISTQB CTFL v4.0.1 Section
  * 2.2.2, using {@code @WebMvcTest} + {@code MockMvc}. {@link CommentService} is mocked.
  *
- * <p>Same as {@code PostController}: no {@code @Valid}, and neither {@link
- * com.socialapp.posts.dto.CreateCommentRequestDto} nor {@link
- * com.socialapp.posts.dto.UpdateCommentRequestDto} carry any constraint annotations, so there is
- * no 422 Validation section here — content blankness, ban status, and ownership are all
- * enforced in {@code CommentService} and surface only via {@link ExceptionMappingTests} against
- * the mocked service.
+ * <p>Blank content is now caught by {@code @Valid} against the {@code @NotBlank} on both request
+ * DTOs, so it 422s at the controller and never reaches the service. Ban status and ownership have
+ * no DTO-level expression and are still enforced in {@code CommentService}, surfacing via {@link
+ * ExceptionMappingTests} against the mocked service.
  */
 @WebMvcTest(CommentController.class)
 @Import({
@@ -186,25 +184,23 @@ class CommentControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn400_whenContentIsBlank")
-    void shouldReturn400_whenContentIsBlank() throws Exception {
+    @DisplayName("shouldReturn422_whenContentIsBlank")
+    void shouldReturn422_whenContentIsBlank() throws Exception {
       // Given
-      doThrow(new ValidationException("Comment content must not be blank"))
-          .when(commentService)
-          .createComment(anyInt(), anyInt(), any());
       String requestJson =
           """
           { "content": "" }
           """;
 
-      // When / Then
+      // When / Then — @Valid rejects it at the controller; the service is never reached.
       mockMvc
           .perform(
               authed(post(commentsUrl(1)))
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
-          .andExpect(status().isBadRequest())
-          .andExpect(jsonPath("$.message").value("Comment content must not be blank"));
+          .andExpect(status().isUnprocessableEntity());
+
+      verifyNoInteractions(commentService);
     }
 
     @Test

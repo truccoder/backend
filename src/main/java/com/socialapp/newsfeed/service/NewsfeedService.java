@@ -9,6 +9,7 @@ import java.util.function.Consumer;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,6 +67,12 @@ public class NewsfeedService {
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
 
+  // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
+  // post.getHashtags() below are LAZY collections, and with spring.jpa.open-in-view off there is
+  // no session left over from the request to initialize them. Every caller today happens to be
+  // @Transactional, so this only makes an existing unwritten requirement explicit — but it is the
+  // difference between a future non-transactional caller failing here and failing in production.
+  @Transactional
   public void fanOutPost(Integer postId) {
     PostEntity post =
         postRepository

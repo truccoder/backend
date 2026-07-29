@@ -1,12 +1,12 @@
 package com.socialapp.matchmaking.controller;
 
-import java.util.Map;
+import java.util.List;
 
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.matchmaking.dto.ApplicationRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
+import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectService;
 import com.socialapp.security.util.SecurityUtils;
@@ -22,38 +22,32 @@ public class ProjectController {
   private final MatchmakingService matchmakingService;
 
   @PostMapping
-  public ResponseEntity<?> createProject(@Valid @RequestBody ProjectRequestDTO request) {
+  public void createProject(@Valid @RequestBody ProjectRequestDTO request) {
     Integer authorId = SecurityUtils.getCurrentUserId();
     projectService.createProject(authorId, request);
-    return ResponseEntity.ok(Map.of("message", "Project created successfully"));
   }
 
   @PostMapping("/positions/{positionId}/apply")
-  public ResponseEntity<?> applyToPosition(
+  public void applyToPosition(
       @PathVariable Integer positionId, @Valid @RequestBody ApplicationRequestDTO request) {
     Integer applicantId = SecurityUtils.getCurrentUserId();
     projectService.applyToPosition(applicantId, positionId, request.getMessage());
-    return ResponseEntity.ok(Map.of("message", "Applied successfully"));
   }
 
-  @PutMapping("/applications/{applicationId}/accept")
-  public ResponseEntity<?> acceptApplication(@PathVariable Integer applicationId) {
+  @PostMapping("/applications/{applicationId}/accept")
+  public void acceptApplication(@PathVariable Integer applicationId) {
     Integer ownerId = SecurityUtils.getCurrentUserId();
     projectService.acceptApplication(ownerId, applicationId);
-    return ResponseEntity.ok(Map.of("message", "Application accepted"));
   }
 
-  @PutMapping("/applications/{applicationId}/reject")
-  public ResponseEntity<?> rejectApplication(@PathVariable Integer applicationId) {
+  @PostMapping("/applications/{applicationId}/reject")
+  public void rejectApplication(@PathVariable Integer applicationId) {
     Integer ownerId = SecurityUtils.getCurrentUserId();
     projectService.rejectApplication(ownerId, applicationId);
-    return ResponseEntity.ok(Map.of("message", "Application rejected"));
   }
 
   @GetMapping("/positions/{positionId}/suggested-candidates")
-  public ResponseEntity<?> getSuggestedCandidates(@PathVariable Integer positionId) {
-    // Returning entities directly might expose some internal structure,
-    // but for this MVP, it gives the necessary data.
-    return ResponseEntity.ok(matchmakingService.suggestCandidates(positionId));
+  public List<SuggestedCandidateDto> getSuggestedCandidates(@PathVariable Integer positionId) {
+    return matchmakingService.suggestCandidates(positionId);
   }
 }

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 
@@ -18,7 +19,7 @@ public class MatchmakingService {
   private final UserProfessionalProfileRepository profileRepository;
   private final ProjectPositionRepository positionRepository;
 
-  public List<UserProfessionalProfileEntity> suggestCandidates(Integer positionId) {
+  public List<SuggestedCandidateDto> suggestCandidates(Integer positionId) {
     ProjectPositionEntity position =
         positionRepository
             .findById(positionId)
@@ -29,6 +30,17 @@ public class MatchmakingService {
       return List.of();
     }
 
-    return profileRepository.findBySkillsMatch(skills);
+    return profileRepository.findBySkillsMatch(skills).stream().map(this::toCandidateDto).toList();
+  }
+
+  private SuggestedCandidateDto toCandidateDto(UserProfessionalProfileEntity profile) {
+    return SuggestedCandidateDto.builder()
+        .userId(profile.getUserId())
+        .jobTitle(profile.getJobTitle())
+        .seniorityLevel(profile.getSeniorityLevel())
+        .yearsOfExperience(profile.getYearsOfExperience())
+        .primaryRole(profile.getPrimaryRole())
+        .knownTechStack(profile.getKnownTechStack())
+        .build();
   }
 }

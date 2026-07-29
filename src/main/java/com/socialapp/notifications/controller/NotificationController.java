@@ -4,13 +4,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.common.utils.Constants;
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.dto.UnreadCountResponse;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
-import com.socialapp.notifications.entity.NotificationPreferenceEntity;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -44,13 +45,13 @@ public class NotificationController {
   }
 
   @GetMapping("/preferences")
-  public NotificationPreferenceEntity getPreferences() {
+  public NotificationPreferenceResponseDto getPreferences() {
     return notificationService.getPreference(SecurityUtils.getCurrentUserId());
   }
 
   @PutMapping("/preferences")
-  public NotificationPreferenceEntity updatePreferences(
-      @RequestBody UpdatePreferenceRequestDto request) {
+  public NotificationPreferenceResponseDto updatePreferences(
+      @Valid @RequestBody UpdatePreferenceRequestDto request) {
     return notificationService.updatePreference(SecurityUtils.getCurrentUserId(), request);
   }
 }

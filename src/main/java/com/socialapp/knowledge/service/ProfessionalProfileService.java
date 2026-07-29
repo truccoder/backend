@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.dto.UpdateProfessionalProfileDto;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
@@ -18,15 +19,16 @@ public class ProfessionalProfileService {
   private final UserProfessionalProfileRepository profileRepository;
   private final UserRepository userRepository;
 
-  public UserProfessionalProfileEntity getProfile(Integer userId) {
-    return profileRepository
-        .findById(userId)
-        .orElseThrow(
-            () -> new NotFoundException("Professional profile not found for user: " + userId));
+  public ProfessionalProfileResponseDto getProfile(Integer userId) {
+    return toDto(
+        profileRepository
+            .findById(userId)
+            .orElseThrow(
+                () -> new NotFoundException("Professional profile not found for user: " + userId)));
   }
 
   @Transactional
-  public UserProfessionalProfileEntity upsertProfile(
+  public ProfessionalProfileResponseDto upsertProfile(
       Integer userId, UpdateProfessionalProfileDto dto) {
     userRepository
         .findById(userId)
@@ -43,6 +45,22 @@ public class ProfessionalProfileService {
                 });
 
     BeanUtils.copyProperties(dto, profile);
-    return profileRepository.save(profile);
+    return toDto(profileRepository.save(profile));
+  }
+
+  private ProfessionalProfileResponseDto toDto(UserProfessionalProfileEntity profile) {
+    return ProfessionalProfileResponseDto.builder()
+        .userId(profile.getUserId())
+        .jobTitle(profile.getJobTitle())
+        .seniorityLevel(profile.getSeniorityLevel())
+        .yearsOfExperience(profile.getYearsOfExperience())
+        .primaryRole(profile.getPrimaryRole())
+        .explanationStyle(profile.getExplanationStyle())
+        .knownTechStack(profile.getKnownTechStack())
+        .workHistory(profile.getWorkHistory())
+        .interestedDomains(profile.getInterestedDomains())
+        .createdAt(profile.getCreatedAt())
+        .updatedAt(profile.getUpdatedAt())
+        .build();
   }
 }

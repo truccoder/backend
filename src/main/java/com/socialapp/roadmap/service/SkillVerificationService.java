@@ -11,6 +11,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
+import com.socialapp.roadmap.dto.PendingVerificationDto;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -157,7 +158,30 @@ public class SkillVerificationService {
     progressRepository.save(progress);
   }
 
-  public List<UserRoadmapProgressEntity> getPendingRequests() {
-    return progressRepository.findByStatus(VerificationStatus.PENDING_APPROVAL);
+  @Transactional(readOnly = true)
+  public List<PendingVerificationDto> getPendingRequests() {
+    return progressRepository
+        .findByStatusWithUserAndNode(VerificationStatus.PENDING_APPROVAL)
+        .stream()
+        .map(this::toPendingDto)
+        .toList();
+  }
+
+  private PendingVerificationDto toPendingDto(UserRoadmapProgressEntity progress) {
+    UserEntity requester = progress.getUser();
+    RoadmapNodeEntity node = progress.getNode();
+    return PendingVerificationDto.builder()
+        .progressId(progress.getId())
+        .userId(requester.getId())
+        .username(requester.getUsername())
+        .fullName(requester.getFullName())
+        .profilePictureUrl(requester.getProfilePictureUrl())
+        .nodeId(node.getId())
+        .nodeName(node.getName())
+        .tier(progress.getTier())
+        .proofUrl(progress.getProofUrl())
+        .proofImageKey(progress.getProofImageKey())
+        .requestedAt(progress.getCreatedAt())
+        .build();
   }
 }

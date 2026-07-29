@@ -27,8 +27,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.NotificationResponseDto;
-import com.socialapp.notifications.entity.NotificationPreferenceEntity;
 import com.socialapp.notifications.entity.enums.EmailFrequency;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -273,7 +273,7 @@ class NotificationControllerTest {
       // Given
       when(notificationService.getPreference(currentUser.getId()))
           .thenReturn(
-              NotificationPreferenceEntity.builder()
+              NotificationPreferenceResponseDto.builder()
                   .userId(currentUser.getId())
                   .pushEnabled(true)
                   .emailFrequency(EmailFrequency.INSTANT)
@@ -309,7 +309,7 @@ class NotificationControllerTest {
       // Given
       when(notificationService.updatePreference(eq(currentUser.getId()), any()))
           .thenReturn(
-              NotificationPreferenceEntity.builder()
+              NotificationPreferenceResponseDto.builder()
                   .userId(currentUser.getId())
                   .pushEnabled(false)
                   .emailFrequency(EmailFrequency.WEEKLY_DIGEST)

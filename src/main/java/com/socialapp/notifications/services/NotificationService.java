@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
@@ -100,7 +101,7 @@ public class NotificationService {
     notificationRepository.markAllAsRead(userId);
   }
 
-  public NotificationPreferenceEntity updatePreference(
+  public NotificationPreferenceResponseDto updatePreference(
       Integer userId, UpdatePreferenceRequestDto request) {
     NotificationPreferenceEntity pref = getOrCreatePreference(userId);
 
@@ -112,11 +113,22 @@ public class NotificationService {
       pref.setEmailFrequency(request.getEmailFrequency());
     if (Objects.nonNull(request.getMutedTypes())) pref.setMutedTypes(request.getMutedTypes());
 
-    return preferenceRepository.save(pref);
+    return toPreferenceDto(preferenceRepository.save(pref));
   }
 
-  public NotificationPreferenceEntity getPreference(Integer userId) {
-    return getOrCreatePreference(userId);
+  public NotificationPreferenceResponseDto getPreference(Integer userId) {
+    return toPreferenceDto(getOrCreatePreference(userId));
+  }
+
+  private NotificationPreferenceResponseDto toPreferenceDto(NotificationPreferenceEntity pref) {
+    return NotificationPreferenceResponseDto.builder()
+        .userId(pref.getUserId())
+        .pushEnabled(pref.getPushEnabled())
+        .emailEnabled(pref.getEmailEnabled())
+        .emailFrequency(pref.getEmailFrequency())
+        .mutedTypes(pref.getMutedTypes())
+        .updatedAt(pref.getUpdatedAt())
+        .build();
   }
 
   private NotificationEntity saveNotification(SendNotificationRequest request) {
