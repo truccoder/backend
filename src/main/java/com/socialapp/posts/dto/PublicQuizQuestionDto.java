@@ -20,13 +20,14 @@ import lombok.NoArgsConstructor;
  * returned with the result instead.
  */
 /**
- * ignoreUnknown is required for the feed cache, not cosmetic. Feed entries written before this
- * type existed still hold {@code correctOptionIndex} and {@code explanation} inside the cached
- * JSON, and the application's ObjectMapper is a plain {@code new ObjectMapper()} (see {@code
- * RedisConfig#cacheObjectMapper}), which fails on unknown properties. Without this, every
- * pre-existing quiz post fails to deserialize on read and silently vanishes from the feed until
- * its cache entry expires. With it, the stale fields are dropped on the way out — so the old
- * entries stop leaking the moment this ships, with no cache flush needed.
+ * ignoreUnknown is for the feed cache, not cosmetic. Feed entries written before this type existed
+ * still hold {@code correctOptionIndex} and {@code explanation} inside the cached JSON, and
+ * without this every pre-existing quiz post would fail to deserialize on read and silently vanish
+ * from the feed until its cache entry expired. With it, the stale fields are dropped on the way
+ * out — so the old entries stop leaking the moment this ships, with no cache flush needed.
+ *
+ * <p>{@code RedisConfig#cacheObjectMapper} now disables FAIL_ON_UNKNOWN_PROPERTIES globally, which
+ * covers this case too; kept here so the type stays safe under any mapper it is handed to.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @Data
