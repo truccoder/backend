@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -62,9 +63,12 @@ public class PostReactionService {
     postReactionRepository.save(reaction);
     refreshCachedLikeCount(postId);
 
+    // Guarded by isNewReaction along with the notification and the rep award: swapping LIKE for
+    // LOVE on a post you already reacted to is the same single act of engagement, not a second one.
     if (isNewReaction) {
       notifyPostAuthor(post, userId);
       awardReactionRep(post, userId);
+      trackReactionInteraction(post, userId);
     }
   }
 
@@ -132,6 +136,19 @@ public class PostReactionService {
     if (userBanService.isUserBanned(userId)) {
       throw new UserBannedException(userBanService.getBanExpiry(userId));
     }
+  }
+
+  /**
+   * Feeds the reaction into feed affinity — see {@code NewsfeedService#trackInteraction}, which
+   * until now had no caller at all. Skips self-reaction for the same reason the notification and
+   * the reputation award do.
+   */
+  private void trackReactionInteraction(PostEntity post, Integer reactorId) {
+    if (post.getAuthorId().equals(reactorId)) {
+      return;
+    }
+    newsfeedService.trackInteraction(
+        reactorId, post.getId(), post.getAuthorId(), InteractionType.LIKE);
   }
 
   private void notifyPostAuthor(PostEntity post, Integer reactorId) {

@@ -53,7 +53,7 @@ class UserInteractionRepositoryTest extends AbstractIntegrationTest {
       userInteractionRepository.saveAndFlush(interaction(USER_ID, AUTHOR_A, InteractionType.LIKE));
       userInteractionRepository.saveAndFlush(
           interaction(USER_ID, AUTHOR_A, InteractionType.COMMENT));
-      userInteractionRepository.saveAndFlush(interaction(USER_ID, AUTHOR_B, InteractionType.VIEW));
+      userInteractionRepository.saveAndFlush(interaction(USER_ID, AUTHOR_B, InteractionType.LIKE));
 
       // When
       List<AuthorInteractionCount> result =

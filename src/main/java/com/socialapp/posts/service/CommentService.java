@@ -15,6 +15,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -90,6 +91,24 @@ public class CommentService {
     refreshCachedCommentCount(postId);
 
     notifyPostAuthor(post, authorId);
+    trackCommentInteraction(post, authorId);
+  }
+
+  /**
+   * Feeds the comment into feed affinity — see {@code NewsfeedService#trackInteraction}, which
+   * until now had no caller at all. Skips commenting on your own post, as the notification does.
+   *
+   * <p>Every comment counts, including replies and repeat comments on the same post: unlike a
+   * reaction there is no "already engaged" state to compare against, and somebody arguing in a
+   * thread all afternoon genuinely is more engaged with that author than somebody who commented
+   * once.
+   */
+  private void trackCommentInteraction(PostEntity post, Integer authorId) {
+    if (post.getAuthorId().equals(authorId)) {
+      return;
+    }
+    newsfeedService.trackInteraction(
+        authorId, post.getId(), post.getAuthorId(), InteractionType.COMMENT);
   }
 
   @Transactional

@@ -24,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
@@ -168,6 +169,60 @@ class PostReactionServiceTest {
       verify(postReactionRepository).save(any());
       verifyNoInteractions(notificationService);
       verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should record a LIKE interaction so the author gains feed affinity")
+    void shouldTrackInteraction_whenReactionIsNew() {
+      // Given — trackInteraction had no production caller at all, so t_user_interactions stayed
+      // empty and the affinity term of the feed ranking formula was always exactly zero
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postReactionRepository.existsById(id)).thenReturn(false);
+      when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+
+      // When
+      postReactionService.upsertReaction(USER_ID, POST_ID, sampleRequest(ReactionType.LIKE));
+
+      // Then
+      verify(newsfeedService).trackInteraction(USER_ID, POST_ID, 2, InteractionType.LIKE);
+    }
+
+    @Test
+    @DisplayName("should not record a second interaction when only the reaction type changes")
+    void shouldNotTrackInteraction_whenReactionAlreadyExists() {
+      // Given — swapping LIKE for LOVE is the same single act of engagement, not a second one
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      PostReactionEntity existing = new PostReactionEntity(id, ReactionType.LIKE, null);
+      when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postReactionRepository.existsById(id)).thenReturn(true);
+      when(postReactionRepository.findById(id)).thenReturn(Optional.of(existing));
+
+      // When
+      postReactionService.upsertReaction(USER_ID, POST_ID, sampleRequest(ReactionType.LOVE));
+
+      // Then
+      verify(newsfeedService, never()).trackInteraction(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should not record an interaction when the author reacts to their own post")
+    void shouldNotTrackInteraction_whenAuthorReactsToOwnPost() {
+      // Given — affinity with yourself would boost your own posts in your own feed
+      PostReactionId id = new PostReactionId(USER_ID, POST_ID);
+      when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(USER_ID)));
+      when(postReactionRepository.existsById(id)).thenReturn(false);
+      when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
+
+      // When
+      postReactionService.upsertReaction(USER_ID, POST_ID, sampleRequest(ReactionType.LIKE));
+
+      // Then
+      verify(newsfeedService, never()).trackInteraction(any(), any(), any(), any());
     }
 
     @Test

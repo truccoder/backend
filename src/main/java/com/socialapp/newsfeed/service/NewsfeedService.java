@@ -320,6 +320,26 @@ public class NewsfeedService {
     return FeedResponseDto.builder().posts(posts).page(page).size(size).hasMore(hasMore).build();
   }
 
+  /**
+   * Records that {@code userId} engaged with a post by {@code authorId}.
+   *
+   * <p>This is the write half of feed affinity: {@code PostScoringService.loadAffinityMap} counts
+   * these rows per author over the last 30 days and boosts that author's posts by up to six hours
+   * of apparent freshness. It had no caller anywhere in production — only tests — so {@code
+   * t_user_interactions} was permanently empty, {@code loadAffinityMap} always returned an empty
+   * map, and the affinity term of the ranking formula was always exactly zero. The feed was
+   * ordered by recency and engagement alone while looking, from the code, like it personalised.
+   *
+   * <p>Callers must skip self-interaction: affinity with yourself would boost your own posts in
+   * your own feed, which is noise, and every other per-post side effect here (author notification,
+   * reputation award) already skips it.
+   *
+   * <p>Deliberately append-only — nothing deletes a row when a reaction is removed, unlike the
+   * reputation award it sits next to. Having clicked like is attention paid to that author whether
+   * or not the click was taken back, and the 30-day window in {@code loadAffinityMap} already ages
+   * the signal out. The cost is that repeated like/unlike on one post adds a row each time; it only
+   * skews the reordering of that user's own feed, so it is not worth a dedup index to prevent.
+   */
   public void trackInteraction(
       Integer userId, Integer postId, Integer authorId, InteractionType type) {
     UserInteractionEntity entity = new UserInteractionEntity();

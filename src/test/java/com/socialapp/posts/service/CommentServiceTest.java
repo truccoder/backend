@@ -27,6 +27,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
@@ -145,6 +146,40 @@ class CommentServiceTest {
       // Then
       verify(commentRepository).save(any());
       verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should record a COMMENT interaction so the author gains feed affinity")
+    void shouldTrackInteraction_whenCommentIsCreated() {
+      // Given — trackInteraction had no production caller at all, so t_user_interactions stayed
+      // empty and the affinity term of the feed ranking formula was always exactly zero
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("Nice post!");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService).trackInteraction(AUTHOR_ID, POST_ID, 2, InteractionType.COMMENT);
+    }
+
+    @Test
+    @DisplayName("should not record an interaction when the author comments on their own post")
+    void shouldNotTrackInteraction_whenAuthorCommentsOnOwnPost() {
+      // Given — affinity with yourself would boost your own posts in your own feed
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("My own comment");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService, never()).trackInteraction(any(), any(), any(), any());
     }
 
     @Test
