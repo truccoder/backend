@@ -99,7 +99,12 @@ public class PostService {
     request.setPostType(PostType.BOOK);
     validateBookDetails(request.getBookDetails());
 
-    PostEntity post = buildAndSavePost(authorId, request);
+    // Fan-out is held back here on purpose. NewsfeedService reads t_books by postId to build the
+    // book block of the cached feed entry, and that row does not exist until createBookForPost
+    // below has run — fanning out from buildAndSavePost would cache the post with book: null for
+    // seven days, and only a later edit (which fans out again) would repair it. Same shape as the
+    // createdAt bug, but saveAndFlush does not fix it: the row is genuinely not written yet.
+    PostEntity post = buildAndSavePost(authorId, request, true);
 
     log.info(
         "[postId={}, authorId={}] createBookPost: post saved, uploading attached book",
@@ -107,9 +112,30 @@ public class PostService {
         authorId);
     bookService.createBookForPost(
         authorId, post.getId(), request.getBookDetails(), bookFile, coverFile);
+
+    // Only the moderation-off path deferred anything: with moderation on, nothing was fanned out
+    // at all and the post reaches the feed later, through ModerationEventListener, by which time
+    // the book row is long committed.
+    if (!moderationProperties.isEnabled()) {
+      log.info(
+          "[postId={}, authorId={}] createBookPost: book saved, running deferred fan-out",
+          post.getId(),
+          authorId);
+      newsfeedService.fanOutPost(post.getId());
+    }
   }
 
   private PostEntity buildAndSavePost(Integer authorId, CreatePostRequestDto request) {
+    return buildAndSavePost(authorId, request, false);
+  }
+
+  /**
+   * @param deferFanOut when true, skips the immediate fan-out of the moderation-off path so the
+   *     caller can publish the post once the rows it depends on exist. Has no effect when
+   *     moderation is enabled, since that path does not fan out here anyway.
+   */
+  private PostEntity buildAndSavePost(
+      Integer authorId, CreatePostRequestDto request, boolean deferFanOut) {
     log.info(
         "[authorId={}] createPost started: postType={}, visibility={}",
         authorId,
@@ -163,23 +189,42 @@ public class PostService {
     // another transaction, off a row that has already been written.
     postRepository.saveAndFlush(post);
 
+    publishSavedPost(post, request, moderationEnabled, deferFanOut);
+
+    return post;
+  }
+
+  /** Hands a freshly saved post to whichever publication path applies. */
+  private void publishSavedPost(
+      PostEntity post,
+      CreatePostRequestDto request,
+      boolean moderationEnabled,
+      boolean deferFanOut) {
     if (moderationEnabled) {
       log.info(
           "[postId={}, authorId={}] createPost: saved as PENDING_MODERATION, publishing async"
               + " moderation event",
           post.getId(),
-          authorId);
+          post.getAuthorId());
       moderationEventPublisher.publishForReview(post, request.getTaggedUserIds());
-    } else {
-      log.info(
-          "[postId={}, authorId={}] createPost: moderation disabled, saved as APPROVED and fanning"
-              + " out immediately",
-          post.getId(),
-          authorId);
-      newsfeedService.fanOutPost(post.getId());
+      return;
     }
 
-    return post;
+    if (deferFanOut) {
+      log.info(
+          "[postId={}, authorId={}] createPost: moderation disabled, saved as APPROVED, fan-out"
+              + " deferred to the caller",
+          post.getId(),
+          post.getAuthorId());
+      return;
+    }
+
+    log.info(
+        "[postId={}, authorId={}] createPost: moderation disabled, saved as APPROVED and fanning"
+            + " out immediately",
+        post.getId(),
+        post.getAuthorId());
+    newsfeedService.fanOutPost(post.getId());
   }
 
   @Transactional

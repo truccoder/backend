@@ -653,6 +653,52 @@ class PostServiceTest {
           .createBookForPost(eq(AUTHOR_ID), isNull(), eq(bookDetails), eq(bookFile), eq(coverFile));
       verify(newsfeedService).fanOutPost(any());
     }
+
+    @Test
+    @DisplayName("should create the book row before fanning out, not after")
+    void shouldFanOutAfterBookIsCreated() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest("Check out my book", PostVisibility.PUBLIC, null);
+      CreateBookRequestDto bookDetails = new CreateBookRequestDto();
+      bookDetails.setTitle("My First Book");
+      request.setBookDetails(bookDetails);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.createBookPost(AUTHOR_ID, request, bookFile, coverFile);
+
+      // Then — the feed entry embeds a book summary read from t_books by postId, so fanning out
+      // first caches book: null for the whole 7-day TTL.
+      InOrder ordered = inOrder(bookService, newsfeedService);
+      ordered.verify(bookService).createBookForPost(any(), any(), any(), any(), any());
+      ordered.verify(newsfeedService).fanOutPost(any());
+    }
+
+    @Test
+    @DisplayName("should not fan out at all when moderation is enabled")
+    void shouldNotFanOut_whenModerationEnabled() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest("Check out my book", PostVisibility.PUBLIC, null);
+      CreateBookRequestDto bookDetails = new CreateBookRequestDto();
+      bookDetails.setTitle("My First Book");
+      request.setBookDetails(bookDetails);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(true);
+      when(moderationRuleEngine.evaluate(eq(AUTHOR_ID), any())).thenReturn(approvedByRuleEngine());
+
+      // When
+      postService.createBookPost(AUTHOR_ID, request, bookFile, coverFile);
+
+      // Then — the post reaches the feed later, via ModerationEventListener.
+      verify(moderationEventPublisher).publishForReview(any(), any());
+      verify(bookService).createBookForPost(any(), any(), any(), any(), any());
+      verify(newsfeedService, never()).fanOutPost(any());
+    }
   }
 
   // =====================================================================
