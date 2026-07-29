@@ -1,6 +1,5 @@
 package com.socialapp.bookstore.service;
 
-import java.io.IOException;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -10,18 +9,20 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.bookstore.dto.BookResponseDto;
 import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.bookstore.entity.BookEntity;
-import com.socialapp.bookstore.entity.enums.FileFormat;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
-import com.socialapp.common.utils.FileExtensions;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Everything a book does once it exists: reads, signed URLs, purchase checks, deletion. Creation
+ * lives in {@link BookIngestionService} and is fronted here so callers keep one entry point.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -29,13 +30,7 @@ public class BookService {
   private final BookRepository bookRepository;
   private final BookPurchaseRepository purchaseRepository;
   private final BookStorageService bookStorageService;
-  private final BookPreviewGenerator bookPreviewGenerator;
-
-  private static final List<String> ALLOWED_FORMATS = List.of("pdf", "epub");
-
-  // Carries the bytes rather than an object key: generating a preview must not have
-  // uploaded anything yet, since this is the step that can still reject the request.
-  private record GeneratedPreview(byte[] previewBytes, int totalUnits) {}
+  private final BookIngestionService bookIngestionService;
 
   /**
    * Creates a book already linked to a post. This is the only way to create a book — always
@@ -49,148 +44,7 @@ public class BookService {
       CreateBookRequestDto bookDetails,
       MultipartFile bookFile,
       MultipartFile coverFile) {
-    return buildAndSaveBook(authorId, postId, bookDetails, bookFile, coverFile);
-  }
-
-  private BookEntity buildAndSaveBook(
-      Integer authorId,
-      Integer postId,
-      CreateBookRequestDto request,
-      MultipartFile bookFile,
-      MultipartFile coverFile) {
-    // Everything that can reject the request runs before the first byte reaches MinIO. Uploads
-    // used to come first, and because MinIO is not part of the surrounding transaction, a book
-    // rejected for its previewPages left its file (and cover) in the bucket forever while
-    // Postgres rolled back cleanly — measured at 4 objects for 2 books.
-    validateFile(bookFile);
-
-    FileFormat format = resolveFormat(bookFile.getOriginalFilename());
-    boolean isFree = request.getPrice() == null || request.getPrice() <= 0;
-
-    if (!isFree && (request.getPreviewPages() == null || request.getPreviewPages() <= 0)) {
-      throw new ValidationException("Paid books must have preview pages configured");
-    }
-
-    Integer totalPages;
-    byte[] previewBytes = null;
-
-    if (isFree) {
-      totalPages = countPages(format, bookFile);
-    } else {
-      // Generated in memory here, uploaded below: this is the step that rejects a previewPages
-      // value larger than the book itself, and it must be able to do so with nothing uploaded.
-      GeneratedPreview preview = generatePreview(format, bookFile, request.getPreviewPages());
-      previewBytes = preview.previewBytes();
-      totalPages = preview.totalUnits();
-    }
-
-    // Past this line uploads begin. Validation cannot fail any more, but MinIO or the insert
-    // still can, so whatever landed is removed on the way out.
-    String fileKey = null;
-    String previewFileKey = null;
-    String coverKey = null;
-
-    try {
-      fileKey = bookStorageService.uploadBook(authorId, bookFile);
-
-      if (previewBytes != null) {
-        String extension = format == FileFormat.EPUB ? "epub" : "pdf";
-        previewFileKey = bookStorageService.uploadPreview(authorId, previewBytes, extension);
-      }
-
-      if (coverFile != null && !coverFile.isEmpty()) {
-        coverKey = bookStorageService.uploadCover(authorId, coverFile);
-      }
-
-      return saveBook(
-          authorId,
-          postId,
-          request,
-          bookFile,
-          format,
-          isFree,
-          fileKey,
-          previewFileKey,
-          coverKey,
-          totalPages);
-    } catch (RuntimeException e) {
-      bookStorageService.deleteQuietly(bookStorageService.booksBucket(), fileKey);
-      bookStorageService.deleteQuietly(bookStorageService.booksBucket(), previewFileKey);
-      bookStorageService.deleteQuietly(bookStorageService.coversBucket(), coverKey);
-      throw e;
-    }
-  }
-
-  private BookEntity saveBook(
-      Integer authorId,
-      Integer postId,
-      CreateBookRequestDto request,
-      MultipartFile bookFile,
-      FileFormat format,
-      boolean isFree,
-      String fileKey,
-      String previewFileKey,
-      String coverKey,
-      Integer totalPages) {
-    BookEntity book =
-        BookEntity.builder()
-            .authorId(authorId)
-            .postId(postId)
-            .title(request.getTitle())
-            .description(request.getDescription())
-            .fileKey(fileKey)
-            .previewFileKey(previewFileKey)
-            .coverImageKey(coverKey)
-            .fileFormat(format)
-            .fileSizeBytes(bookFile.getSize())
-            .totalPages(totalPages)
-            .previewPages(isFree ? 0 : request.getPreviewPages())
-            .price(isFree ? 0L : request.getPrice())
-            .isFree(isFree)
-            .build();
-
-    bookRepository.save(book);
-    return book;
-  }
-
-  private int countPages(FileFormat format, MultipartFile bookFile) {
-    try {
-      byte[] original = bookFile.getBytes();
-      return format == FileFormat.EPUB
-          ? bookPreviewGenerator.countEpubChapters(original)
-          : bookPreviewGenerator.countPdfPages(original);
-    } catch (IOException e) {
-      throw new ValidationException("Book file is corrupted or not a valid " + format, e);
-    }
-  }
-
-  /**
-   * Generates and uploads a trimmed preview containing only the first {@code previewPages}
-   * pages/chapters, so previewing a paid book can never expose more than that regardless of what
-   * URL the client has.
-   */
-  private GeneratedPreview generatePreview(
-      FileFormat format, MultipartFile bookFile, int previewPages) {
-    try {
-      byte[] original = bookFile.getBytes();
-      BookPreviewResult result =
-          format == FileFormat.EPUB
-              ? bookPreviewGenerator.generateEpubPreview(original, previewPages)
-              : bookPreviewGenerator.generatePdfPreview(original, previewPages);
-
-      if (previewPages >= result.totalUnits()) {
-        throw new ValidationException(
-            "Preview pages/chapters ("
-                + previewPages
-                + ") must be less than the book's total ("
-                + result.totalUnits()
-                + ")");
-      }
-
-      return new GeneratedPreview(result.previewBytes(), result.totalUnits());
-    } catch (IOException e) {
-      throw new ValidationException("Book file is corrupted or not a valid " + format, e);
-    }
+    return bookIngestionService.ingest(authorId, postId, bookDetails, bookFile, coverFile);
   }
 
   public BookResponseDto getBook(Integer bookId, Integer requesterId) {
@@ -280,21 +134,6 @@ public class BookService {
     return bookRepository
         .findById(bookId)
         .orElseThrow(() -> new NotFoundException("Book not found: " + bookId));
-  }
-
-  private void validateFile(MultipartFile file) {
-    if (file == null || file.isEmpty()) {
-      throw new ValidationException("Book file is required");
-    }
-    String ext = FileExtensions.getExtension(file.getOriginalFilename(), "");
-    if (!ALLOWED_FORMATS.contains(ext)) {
-      throw new ValidationException("Only PDF and EPUB formats are supported");
-    }
-  }
-
-  private FileFormat resolveFormat(String filename) {
-    String ext = FileExtensions.getExtension(filename, "");
-    return "epub".equals(ext) ? FileFormat.EPUB : FileFormat.PDF;
   }
 
   private BookResponseDto toResponseDto(BookEntity book, Integer requesterId) {

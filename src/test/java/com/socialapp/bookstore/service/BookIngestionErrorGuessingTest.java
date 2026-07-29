@@ -19,13 +19,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.bookstore.dto.CreateBookRequestDto;
-import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.common.exception.ValidationException;
 
 /**
  * Stage 5 (Experience-based Testing) — Error Guessing technique per ISTQB CTFL v4.0.1 Section
- * 4.5.3, applied to {@link BookService}'s PDF/EPUB processing paths ({@code countPages} and
+ * 4.5.3, applied to {@link BookIngestionService}'s PDF/EPUB processing paths ({@code countPages} and
  * {@code generatePreview}). Unlike the corrupted-*network*-input scenarios already covered for
  * {@code BookStorageService} (MinIO outages), this class targets a corrupted/malformed *book
  * file itself* — the failure originates from {@code PDFBox}/{@code epublib} rejecting the bytes
@@ -41,17 +40,16 @@ import com.socialapp.common.exception.ValidationException;
  * in for PDFBox/epublib throwing on genuinely malformed bytes.
  */
 @ExtendWith(MockitoExtension.class)
-class BookServiceErrorGuessingTest {
+class BookIngestionErrorGuessingTest {
 
   private static final Integer AUTHOR_ID = 1;
   private static final Integer POST_ID = 100;
 
   @Mock private BookRepository bookRepository;
-  @Mock private BookPurchaseRepository purchaseRepository;
   @Mock private BookStorageService bookStorageService;
   @Mock private BookPreviewGenerator bookPreviewGenerator;
 
-  @InjectMocks private BookService bookService;
+  @InjectMocks private BookIngestionService ingestionService;
 
   private static CreateBookRequestDto bookRequest(Long price, Integer previewPages) {
     CreateBookRequestDto dto = new CreateBookRequestDto();
@@ -90,7 +88,7 @@ class BookServiceErrorGuessingTest {
       // When / Then — a corrupted upload must not surface as an opaque 500
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("corrupted or not a valid")
@@ -111,7 +109,7 @@ class BookServiceErrorGuessingTest {
       // When / Then
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(0L, null), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("corrupted or not a valid")
@@ -131,7 +129,7 @@ class BookServiceErrorGuessingTest {
       // When / Then
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .cause()
@@ -161,7 +159,7 @@ class BookServiceErrorGuessingTest {
       // When / Then
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(1000L, 5), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("corrupted or not a valid")
@@ -183,7 +181,7 @@ class BookServiceErrorGuessingTest {
       // When / Then
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(1000L, 3), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("corrupted or not a valid")
@@ -204,7 +202,7 @@ class BookServiceErrorGuessingTest {
       // When / Then — the service's own wrapping message must still be intact, no NPE
       assertThatThrownBy(
               () ->
-                  bookService.createBookForPost(
+                  ingestionService.ingest(
                       AUTHOR_ID, POST_ID, bookRequest(1000L, 5), bookFile, null))
           .isInstanceOf(ValidationException.class)
           .hasMessageContaining("corrupted or not a valid");
