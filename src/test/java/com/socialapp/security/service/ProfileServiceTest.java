@@ -29,6 +29,7 @@ import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
@@ -43,6 +44,7 @@ import com.socialapp.security.repository.UserRepository;
 class ProfileServiceTest {
 
   private static final Integer USER_ID = 1;
+  private static final String USERNAME = "jane-doe";
   private static final String ENCODED_PASSWORD = "{bcrypt}encoded";
 
   @Mock private UserRepository userRepository;
@@ -59,6 +61,7 @@ class ProfileServiceTest {
     user.setEmail("user@example.com");
     user.setPassword(ENCODED_PASSWORD);
     user.setFullName("Jane Doe");
+    user.setUsername(USERNAME);
     return user;
   }
 
@@ -360,6 +363,41 @@ class ProfileServiceTest {
       verify(minIOService).ensurePublicReadPolicy("profile-pictures");
       verify(userRepository).save(user);
       verify(userProfileCache).evict(USER_ID);
+    }
+  }
+
+  @Nested
+  @DisplayName("getPublicProfile")
+  class GetPublicProfileTests {
+
+    @Test
+    @DisplayName("should return identity fields only — never the email, verified flag or role")
+    void shouldNotLeakPrivateFields() {
+      // Given
+      when(userRepository.findByUsernameIgnoreCase(USERNAME))
+          .thenReturn(Optional.of(user(USER_ID)));
+
+      // When
+      PublicUserResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then — the record has no email/role component at all, which is the point: this is
+      // enforced by the type, not by remembering to leave fields out
+      assertThat(response.id()).isEqualTo(USER_ID);
+      assertThat(response.fullName()).isEqualTo("Jane Doe");
+      assertThat(PublicUserResponse.class.getRecordComponents())
+          .extracting(java.lang.reflect.RecordComponent::getName)
+          .doesNotContain("email", "emailVerified", "role", "password");
+    }
+
+    @Test
+    @DisplayName("should throw NotFound when the user does not exist")
+    void shouldThrowWhenMissing() {
+      // Given
+      when(userRepository.findByUsernameIgnoreCase(USERNAME)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> profileService.getPublicProfile(USERNAME))
+          .isInstanceOf(NotFoundException.class);
     }
   }
 }

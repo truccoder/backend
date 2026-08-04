@@ -17,6 +17,7 @@ import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.utils.FileExtensions;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
@@ -43,6 +44,27 @@ public class ProfileService {
 
   public UserResponse getProfile(Integer userId) {
     return toResponse(requireUser(userId));
+  }
+
+  /**
+   * The same user, as someone else is allowed to see them — looked up by handle.
+   *
+   * <p>Split from {@link #getProfile} by return type rather than by a boolean flag: the caller of
+   * that method is always the subject, so it may carry {@code email}/{@code role}, and this one
+   * must never. Keeping the distinction in the type means a future edit cannot accidentally widen
+   * the public shape — see {@link PublicUserResponse}.
+   *
+   * <p>Takes a <b>username</b>, not an id, because the public profile URL is {@code /u/{username}}
+   * — ids are sequential, and a profile routed by id lets anyone enumerate the whole user table by
+   * counting upwards. The response still carries {@code id}, deliberately: it is the one lookup
+   * that turns a handle into the id every other per-user endpoint ({@code /users/{userId}/posts},
+   * {@code /reputation}, {@code /github/stats}) already takes.
+   */
+  public PublicUserResponse getPublicProfile(String username) {
+    return PublicUserResponse.from(
+        userRepository
+            .findByUsernameIgnoreCase(username)
+            .orElseThrow(() -> new NotFoundException("User not found: " + username)));
   }
 
   @Transactional
