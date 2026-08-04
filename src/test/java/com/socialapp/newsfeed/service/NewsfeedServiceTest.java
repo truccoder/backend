@@ -17,13 +17,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -31,6 +31,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.dto.RatingBreakdownDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.FileFormat;
@@ -97,7 +98,40 @@ class NewsfeedServiceTest {
   @Mock private ZSetOperations<String, String> zSetOperations;
   @Mock private ValueOperations<String, String> valueOperations;
 
-  @InjectMocks private NewsfeedService newsfeedService;
+  @Mock private BlockQueryService blockQueryService;
+
+  private NewsfeedService newsfeedService;
+
+  /**
+   * The payload builder is wired up for real, not mocked.
+   *
+   * <p>{@link FeedPostDataMapper} was carved out of this class so the read-from-Postgres endpoints
+   * could return the same shape as the feed; the behaviour it took with it — which detail blocks
+   * are copied, where the counts come from, how a book summary is attached — is still behaviour
+   * fan-out is responsible for, and the assertions below are the ones that catch a field being
+   * dropped from that payload. Mocking the mapper would have deleted that coverage in the name of
+   * unit purity. Its own edge cases are covered separately in {@code FeedPostDataMapperTest}.
+   */
+  @BeforeEach
+  void wireService() {
+    newsfeedService =
+        new NewsfeedService(
+            redisTemplate,
+            objectMapper,
+            friendshipQueryService,
+            userInteractionRepository,
+            postRepository,
+            userRepository,
+            notificationService,
+            new FeedPostDataMapper(
+                userRepository,
+                bookRepository,
+                bookReviewService,
+                bookStorageService,
+                postReactionRepository,
+                commentRepository),
+            blockQueryService);
+  }
 
   @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
@@ -878,6 +912,51 @@ class NewsfeedServiceTest {
       assertThat(captor.getValue().getPostId()).isEqualTo(POST_ID);
       assertThat(captor.getValue().getAuthorId()).isEqualTo(AUTHOR_ID);
       assertThat(captor.getValue().getType()).isEqualTo(InteractionType.LIKE);
+    }
+  }
+
+  @Nested
+  @DisplayName("getFeed — block filtering")
+  class GetFeedBlockFilteringTests {
+
+    @Test
+    @DisplayName("should drop posts by anyone in the caller's block set")
+    void shouldDropBlockedAuthorsPosts() throws Exception {
+      // Given: the feed's Redis entry still holds a post fanned out before the block was placed
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of(FRIEND_ID));
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      // The window is widened when the caller has blocks, so that filtering afterwards still
+      // usually fills the page — see NewsfeedService#getFeed.
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 6))
+          .thenReturn(new java.util.LinkedHashSet<>(List.of("1", "2")));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(List.of("feedpost:1", "feedpost:2")))
+          .thenReturn(List.of("json-1", "json-2"));
+      when(objectMapper.readValue("json-1", FeedPostDataDto.class))
+          .thenReturn(FeedPostDataDto.builder().postId(1).authorId(AUTHOR_ID).build());
+      when(objectMapper.readValue("json-2", FeedPostDataDto.class))
+          .thenReturn(FeedPostDataDto.builder().postId(2).authorId(FRIEND_ID).build());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("should read the ordinary window when the caller has blocked nobody")
+    void shouldNotWidenWindowWithoutBlocks() {
+      // Given
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 2)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then — nearly every user is in this case, and they must keep paying the old cost
+      assertThat(result.getPosts()).isEmpty();
     }
   }
 }

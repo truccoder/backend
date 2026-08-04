@@ -13,14 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.socialapp.bookstore.dto.RatingBreakdownDto;
-import com.socialapp.bookstore.entity.BookEntity;
-import com.socialapp.bookstore.repository.BookRepository;
-import com.socialapp.bookstore.service.BookReviewService;
-import com.socialapp.bookstore.service.BookStorageService;
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.utils.GoogleMapsUrlBuilder;
-import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -29,17 +23,10 @@ import com.socialapp.newsfeed.repository.UserInteractionRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
-import com.socialapp.posts.dto.PublicQuizDetailsDto;
-import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
-import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.QnaDetails;
-import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
-import com.socialapp.posts.repository.CommentRepository;
-import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
-import com.socialapp.reputation.RepLevel;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -58,20 +45,26 @@ public class NewsfeedService {
   private final PostRepository postRepository;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
-  private final BookRepository bookRepository;
-  private final BookReviewService bookReviewService;
-  private final PostReactionRepository postReactionRepository;
-  private final CommentRepository commentRepository;
-  private final BookStorageService bookStorageService;
+  private final FeedPostDataMapper feedPostDataMapper;
+  private final BlockQueryService blockQueryService;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
 
+  /**
+   * How much wider than {@code size} the feed window is read when the caller has blocks, so that
+   * removing blocked authors afterwards still usually fills the page. Three is a guess with a
+   * bounded cost (one Redis range read and up to 3× the cached-post deserialisation), not a
+   * measured optimum.
+   */
+  private static final int BLOCK_OVERFETCH_FACTOR = 3;
+
   // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
-  // post.getHashtags() below are LAZY collections, and with spring.jpa.open-in-view off there is
-  // no session left over from the request to initialize them. Every caller today happens to be
-  // @Transactional, so this only makes an existing unwritten requirement explicit — but it is the
-  // difference between a future non-transactional caller failing here and failing in production.
+  // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
+  // spring.jpa.open-in-view off there is no session left over from the request to initialize them.
+  // Every caller today happens to be @Transactional, so this only makes an existing unwritten
+  // requirement explicit — but it is the difference between a future non-transactional caller
+  // failing here and failing in production.
   @Transactional
   public void fanOutPost(Integer postId) {
     PostEntity post =
@@ -84,59 +77,11 @@ public class NewsfeedService {
             .findById(post.getAuthorId())
             .orElseThrow(() -> new NotFoundException("Author not found: " + post.getAuthorId()));
 
-    List<Integer> taggedUserIds =
-        Objects.isNull(post.getTags())
-            ? List.of()
-            : post.getTags().stream().map(PostTagEntity::getTaggedUserId).toList();
-
-    FeedPostDataDto postData =
-        FeedPostDataDto.builder()
-            .postId(post.getId())
-            .authorId(post.getAuthorId())
-            .authorFullName(author.getFullName())
-            .authorProfilePictureUrl(author.getProfilePictureUrl())
-            .authorEliteScore(author.getEliteScore())
-            .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()))
-            .content(post.getContent())
-            .visibility(post.getVisibility())
-            .googlePlaceId(post.getGooglePlaceId())
-            .locationType(post.getLocationType())
-            .locationDetails(post.getLocationDetails())
-            .googleMapsUrl(
-                post.getLocationDetails() != null
-                    ? GoogleMapsUrlBuilder.build(
-                        post.getLocationDetails().getLatitude(),
-                        post.getLocationDetails().getLongitude())
-                    : null)
-            .postType(post.getPostType())
-            .eventDetails(post.getEventDetails())
-            // Every publish path runs through here (createPost, updatePost,
-            // ModerationEventListener, AdminModerationService.reviewPost), so a block missing
-            // from this builder is a block that no post in the feed can ever have. That is not
-            // only a display bug: updatePost applies UpdatePostRequest with
-            // BeanUtils.copyProperties, which copies nulls, and a client can only send back what
-            // the feed handed it — so a block absent here gets wiped from Postgres on the first
-            // edit. Keep this list in step with PostEntity's detail columns.
-            .quizDetails(PublicQuizDetailsDto.from(post.getQuizDetails()))
-            .codeSnippetDetails(post.getCodeSnippetDetails())
-            .articleDetails(post.getArticleDetails())
-            .qnaDetails(post.getQnaDetails())
-            .pollDetails(post.getPollDetails())
-            .linkDetails(post.getLinkDetails())
-            .images(post.getImages())
-            .taggedUserIds(taggedUserIds)
-            .book(loadBookSummary(post))
-            .hashtags(
-                post.getHashtags() != null
-                    ? post.getHashtags().stream().map(HashtagEntity::getName).toList()
-                    : null)
-            // Re-read on every fan-out rather than assumed zero: this method also runs for an
-            // edit and for a moderation approval that lands long after the post was written, by
-            // which time it can already carry reactions and comments.
-            .likeCount((int) postReactionRepository.countByIdPostId(post.getId()))
-            .commentCount((int) commentRepository.countByPostId(post.getId()))
-            .createdAt(post.getCreatedAt())
-            .build();
+    // The payload itself is built by FeedPostDataMapper, which the read-from-Postgres endpoints
+    // (permalink, an author's posts, the discovery feed) share — see that class for why this is
+    // not inlined here any more.
+    FeedPostDataDto postData = feedPostDataMapper.toFeedPostData(post, author);
+    List<Integer> taggedUserIds = postData.getTaggedUserIds();
 
     fanOutPost(postData, taggedUserIds);
     notifyTaggedUsers(post, author, taggedUserIds);
@@ -166,43 +111,6 @@ public class NewsfeedService {
     }
 
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
-  }
-
-  private FeedBookSummaryDto loadBookSummary(PostEntity post) {
-    if (!PostType.BOOK.equals(post.getPostType())) {
-      return null;
-    }
-
-    return bookRepository.findByPostId(post.getId()).stream()
-        .findFirst()
-        .map(this::toBookSummary)
-        .orElse(null);
-  }
-
-  private FeedBookSummaryDto toBookSummary(BookEntity book) {
-    RatingBreakdownDto ratings = bookReviewService.getRatingBreakdown(book.getId());
-
-    return FeedBookSummaryDto.builder()
-        .bookId(book.getId())
-        .title(book.getTitle())
-        .description(book.getDescription())
-        .coverImageKey(book.getCoverImageKey())
-        .fileFormat(book.getFileFormat())
-        .fileSizeBytes(book.getFileSizeBytes())
-        .totalPages(book.getTotalPages())
-        .previewPages(book.getPreviewPages())
-        .price(book.getPrice())
-        .currency(book.getCurrency())
-        .isFree(book.getIsFree())
-        .avgRating(book.getAvgRating())
-        .reviewCount(book.getReviewCount())
-        .oneStarCount(ratings.oneStarCount())
-        .twoStarsCount(ratings.twoStarsCount())
-        .threeStarsCount(ratings.threeStarsCount())
-        .fourStarsCount(ratings.fourStarsCount())
-        .fiveStarsCount(ratings.fiveStarsCount())
-        .totalRatings(ratings.totalRatings())
-        .build();
   }
 
   private void notifyTaggedUsers(PostEntity post, UserEntity author, List<Integer> taggedUserIds) {
@@ -300,10 +208,28 @@ public class NewsfeedService {
     }
   }
 
+  /**
+   * The caller's own feed.
+   *
+   * <p>Blocked authors are removed <b>after</b> the page is read, unlike everywhere else, and that
+   * is forced by the storage: this feed is a Redis sorted set of post ids per user, so there is no
+   * query to add a predicate to. A post already fanned out to somebody's feed before the block was
+   * placed is still sitting in that set, and blocking does not walk every follower's list to prune
+   * it — that would be a write over an unbounded number of keys for something the read can filter.
+   *
+   * <p>The cost of filtering after the fact is that a page can come back short. To keep that from
+   * being visible for the ordinary case, the window read from Redis is widened only when the
+   * caller actually has blocks; a user with none — nearly everyone — reads exactly what they did
+   * before. It can still return fewer than {@code size} items for a user who has blocked heavily
+   * and whose feed is dense with those authors; that is a thin page, not a leak, and the next page
+   * still advances.
+   */
   public FeedResponseDto getFeed(Integer userId, int page, int size) {
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
+
     String feedKey = FEED_KEY_PREFIX + userId;
     long start = (long) (page - 1) * size;
-    long end = start + size;
+    long end = start + (blockedIds.isEmpty() ? size : (long) size * BLOCK_OVERFETCH_FACTOR);
 
     Set<String> postIds = redisTemplate.opsForZSet().reverseRange(feedKey, start, end);
 
@@ -317,6 +243,9 @@ public class NewsfeedService {
     }
 
     List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
+    if (!blockedIds.isEmpty()) {
+      posts = posts.stream().filter(post -> !blockedIds.contains(post.getAuthorId())).toList();
+    }
     signBookCovers(posts);
 
     boolean hasMore = posts.size() > size;
@@ -357,20 +286,9 @@ public class NewsfeedService {
     userInteractionRepository.save(entity);
   }
 
-  /**
-   * Signs each cached cover key as the feed is served.
-   *
-   * <p>Deliberately here and not in {@code fanOutPost}: a signature lasts 24h and a cache entry
-   * lasts 7 days, so anything signed at fan-out time is dead for most of its life in the cache.
-   * Signing is a local HMAC computation, not a call to MinIO, so doing it per page is cheap.
-   */
+  /** Signs each cached cover key as the feed is served — see {@code FeedPostDataMapper}. */
   private void signBookCovers(List<FeedPostDataDto> posts) {
-    for (FeedPostDataDto post : posts) {
-      FeedBookSummaryDto book = post.getBook();
-      if (Objects.nonNull(book)) {
-        book.setCoverImageUrl(bookStorageService.getCoverUrl(book.getCoverImageKey()));
-      }
-    }
+    posts.forEach(feedPostDataMapper::signBookCover);
   }
 
   private List<FeedPostDataDto> loadPostsFromCache(Collection<String> postIds) {
