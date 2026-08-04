@@ -171,3 +171,17 @@ momo:
   api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
+
+# Anonymous read surface (the discovery feed, a public post, a public profile and its posts,
+# trending, reputation, GitHub stats, books by author). Those endpoints have no user id to hold
+# responsible, so the only handle left for a bulk crawl is the caller's IP.
+#
+# trust-forwarded-for stays FALSE unless this service sits behind a reverse proxy that overwrites
+# X-Forwarded-For: any client can set that header itself, so trusting it without a proxy means a
+# scraper sends a fresh fake IP per request and the limit protects nothing.
+rate-limit:
+  guest:
+    enabled: ${GUEST_RATE_LIMIT_ENABLED:true}
+    requests: ${GUEST_RATE_LIMIT_REQUESTS:60}
+    window: ${GUEST_RATE_LIMIT_WINDOW:1m}
+    trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}

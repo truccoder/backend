@@ -154,11 +154,24 @@ class TrendingControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
-    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
-      // When / Then — endpoint still requires authentication even though the controller method
-      // never reads the current user
-      mockMvc.perform(get(TRENDING_URL)).andExpect(status().isUnauthorized());
+    @DisplayName("shouldReturn200_whenCalledByAGuestWithNoAuthorizationHeader")
+    void shouldServeGuests() throws Exception {
+      // Given
+      when(trendingService.getTrending(null, "week", 1, 10))
+          .thenReturn(
+              TrendingPageResponseDto.builder()
+                  .items(java.util.List.of())
+                  .page(1)
+                  .size(10)
+                  .totalElements(0)
+                  .totalPages(0)
+                  .hasNext(false)
+                  .build());
+
+      // Given: no Authorization header at all
+      // When / Then — opened to guests when the product moved from closed to open;
+      // this assertion is what stops a later SecurityConfig tidy-up closing it again.
+      mockMvc.perform(get(TRENDING_URL)).andExpect(status().isOk());
     }
   }
 }

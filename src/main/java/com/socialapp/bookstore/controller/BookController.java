@@ -24,9 +24,18 @@ public class BookController {
     return bookService.getBook(bookId, SecurityUtils.getCurrentUserId());
   }
 
+  /**
+   * The books written by one author — the "sách đã viết" section of a public profile, and
+   * therefore readable by a guest.
+   *
+   * <p>{@code getCurrentUserIdOrNull()} because of that: the throwing variant made this endpoint
+   * 401 for an anonymous caller no matter what {@code SecurityConfig} allowed. {@code
+   * BookService.toResponseDto} already treats a null requester as "has not bought it" — such a
+   * reader gets the preview URL and no download URL, which is exactly what a guest should see.
+   */
   @GetMapping("/author/{authorId}")
   public List<BookResponseDto> getBooksByAuthor(@PathVariable Integer authorId) {
-    return bookService.getBooksByAuthor(authorId, SecurityUtils.getCurrentUserId());
+    return bookService.getBooksByAuthor(authorId, SecurityUtils.getCurrentUserIdOrNull());
   }
 
   @GetMapping("/{bookId}/download")

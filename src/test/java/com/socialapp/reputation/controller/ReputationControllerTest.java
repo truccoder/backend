@@ -146,12 +146,15 @@ class ReputationControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
-    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
-      // When / Then
+    @DisplayName("shouldReturn200_whenCalledByAGuestWithNoAuthorizationHeader")
+    void shouldServeGuests() throws Exception {
+      // Given: no Authorization header at all
+      // When / Then — opened to guests when the product moved from closed to open;
+      // this assertion is what stops a later SecurityConfig tidy-up closing it again.
+      // Elite Score is part of the public profile a guest can open from a shared link.
       mockMvc
           .perform(get("/v1/api/users/" + TARGET_USER_ID + "/reputation"))
-          .andExpect(status().isUnauthorized());
+          .andExpect(status().isOk());
     }
   }
 }

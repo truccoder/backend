@@ -196,10 +196,18 @@ class BookControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
-    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
-      // When / Then
-      mockMvc.perform(get(BOOKS_URL + "/author/2")).andExpect(status().isUnauthorized());
+    @DisplayName("shouldReturn200_whenCalledByAGuest_withNoDownloadUrl")
+    void shouldServeGuests() throws Exception {
+      // Given
+      when(bookService.getBooksByAuthor(2, null)).thenReturn(java.util.List.of());
+
+      // Given: no Authorization header at all
+      // When / Then — opened to guests when the product moved from closed to open;
+      // this assertion is what stops a later SecurityConfig tidy-up closing it again.
+      // The viewer id passed down is null, which BookService already reads as "has not bought
+      // it" — a guest gets preview URLs and no download URLs.
+      mockMvc.perform(get(BOOKS_URL + "/author/2")).andExpect(status().isOk());
+      verify(bookService).getBooksByAuthor(2, null);
     }
   }
 
