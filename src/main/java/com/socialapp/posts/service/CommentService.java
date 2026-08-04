@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -41,12 +42,29 @@ public class CommentService {
   private final UserRepository userRepository;
   private final NotificationService notificationService;
   private final NewsfeedService newsfeedService;
+  private final BlockQueryService blockQueryService;
 
+  /**
+   * The comments on a post, as {@code viewerId} is allowed to see them.
+   *
+   * <p>Takes a viewer — it used to take only the post id — because comments by a blocked user have
+   * to be hidden. A comment thread is the one place where somebody who has been blocked can still
+   * talk directly at the person who blocked them, so leaving this unfiltered would undo much of
+   * what the block is for.
+   *
+   * <p>Hidden, not deleted, and hidden only for this reader: the comment stays visible to everyone
+   * else, including its author, who is not told. That asymmetry is deliberate — a block that
+   * announced itself would invite retaliation.
+   */
   @Transactional(readOnly = true)
-  public List<CommentResponseDto> getComments(Integer postId) {
+  public List<CommentResponseDto> getComments(Integer viewerId, Integer postId) {
     verifyPostExists(postId);
 
-    List<CommentEntity> comments = commentRepository.findByPostIdOrderByCreatedAtAsc(postId);
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(viewerId);
+    List<CommentEntity> comments =
+        commentRepository.findByPostIdOrderByCreatedAtAsc(postId).stream()
+            .filter(comment -> !blockedIds.contains(comment.getAuthorId()))
+            .toList();
     Set<Integer> authorIds =
         comments.stream().map(CommentEntity::getAuthorId).collect(Collectors.toSet());
     Map<Integer, UserEntity> authorsById =

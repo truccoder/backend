@@ -4,9 +4,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -32,11 +34,15 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -77,6 +83,7 @@ class PostControllerTest {
   @Autowired private MockMvc mockMvc;
 
   @MockBean private PostService postService;
+  @MockBean private PostQueryService postQueryService;
   @MockBean private JwtProvider jwtProvider;
   @MockBean private UserRepository userRepository;
 
@@ -532,6 +539,125 @@ class PostControllerTest {
                   .content(requestJson))
           .andExpect(status().isForbidden())
           .andExpect(jsonPath("$.message").value("Only the author can modify this post"));
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/posts/{postId}  and  GET /v1/api/posts/public
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}")
+  class GetPostTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheFeedShapedPost_happyPath")
+    void shouldReturnPost() throws Exception {
+      // Given
+      when(postQueryService.getPost(currentUser.getId(), 7))
+          .thenReturn(FeedPostDataDto.builder().postId(7).authorId(2).content("hello").build());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(POSTS_URL + "/7")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.postId").value(7))
+          .andExpect(jsonPath("$.content").value("hello"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_notForbidden_whenTheViewerMayNotSeeThePost")
+    void shouldReturn404ForInvisiblePost() throws Exception {
+      // Given: a 403 here would confirm the post exists, which is the fact being withheld
+      when(postQueryService.getPost(currentUser.getId(), 7))
+          .thenThrow(new NotFoundException("Post not found with ID: 7"));
+
+      // When / Then
+      mockMvc.perform(authed(get(POSTS_URL + "/7"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn200_whenCalledByAGuest_withTheStrangerVisibilityLevel")
+    void shouldServeGuests() throws Exception {
+      // Given: no Authorization header, so the viewer id handed to the service is null
+      when(postQueryService.getPost(null, 7))
+          .thenReturn(FeedPostDataDto.builder().postId(7).authorId(2).content("hello").build());
+
+      // When / Then — a shared permalink has to open for someone who has never signed in
+      mockMvc
+          .perform(get(POSTS_URL + "/7"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.postId").value(7));
+      verify(postQueryService).getPost(null, 7);
+    }
+  }
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/public")
+  class GetPublicFeedTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndACursorPage_happyPath")
+    void shouldReturnPage() throws Exception {
+      // Given
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+          .thenReturn(
+              new PostPageResponseDto(
+                  java.util.List.of(FeedPostDataDto.builder().postId(9).authorId(3).build()),
+                  9,
+                  true));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(POSTS_URL + "/public")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.posts[0].postId").value(9))
+          .andExpect(jsonPath("$.nextCursor").value(9))
+          .andExpect(jsonPath("$.hasMore").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldRouteToTheDiscoveryFeed_notToAPostWhoseIdIsPublic")
+    void shouldNotBeSwallowedByThePostIdRoute() throws Exception {
+      // Given
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+          .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
+
+      // When
+      mockMvc.perform(authed(get(POSTS_URL + "/public"))).andExpect(status().isOk());
+
+      // Then — the literal segment must win over the {postId} template
+      verify(postQueryService).getPublicFeed(currentUser.getId(), null, 20);
+      verify(postQueryService, never()).getPost(any(), any());
+    }
+
+    @Test
+    @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
+    void shouldPassPagingThrough() throws Exception {
+      // Given
+      when(postQueryService.getPublicFeed(currentUser.getId(), 30, 5))
+          .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(POSTS_URL + "/public")).param("cursor", "30").param("limit", "5"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(postQueryService).getPublicFeed(currentUser.getId(), 30, 5);
+    }
+
+    @Test
+    @DisplayName("shouldReturn200_whenCalledByAGuest_becauseThisIsAGuestsHomePage")
+    void shouldServeGuests() throws Exception {
+      // Given: no Authorization header
+      when(postQueryService.getPublicFeed(null, null, 20))
+          .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
+
+      // When / Then — /v1/api/feed is a per-user Redis fan-out and cannot be opened, so this is
+      // the page an anonymous visitor lands on
+      mockMvc.perform(get(POSTS_URL + "/public")).andExpect(status().isOk());
+      verify(postQueryService).getPublicFeed(null, null, 20);
     }
   }
 }

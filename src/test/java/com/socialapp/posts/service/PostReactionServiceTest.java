@@ -3,12 +3,15 @@ package com.socialapp.posts.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
@@ -28,6 +31,7 @@ import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostReactionEntity;
@@ -37,6 +41,7 @@ import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -50,6 +55,7 @@ class PostReactionServiceTest {
 
   private static final Integer USER_ID = 1;
   private static final Integer POST_ID = 100;
+  private static final Integer AUTHOR_ID = 9;
 
   @Mock private PostReactionRepository postReactionRepository;
   @Mock private PostRepository postRepository;
@@ -58,6 +64,7 @@ class PostReactionServiceTest {
   @Mock private NotificationService notificationService;
   @Mock private ReputationEventPublisher reputationEventPublisher;
   @Mock private NewsfeedService newsfeedService;
+  @Mock private PostVisibilityService postVisibilityService;
 
   @InjectMocks private PostReactionService postReactionService;
 
@@ -392,5 +399,156 @@ class PostReactionServiceTest {
     user.setId(USER_ID);
     user.setFullName(fullName);
     return user;
+  }
+
+  // =====================================================================
+  // getReactionSummary / getReactors  (the "who reacted" endpoints)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getReactionSummary")
+  class GetReactionSummaryTests {
+
+    @Test
+    @DisplayName("should return the per-type counts for a post the viewer may see")
+    void shouldReturnCountsPerType() {
+      // Given
+      PostEntity post = samplePost(AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(post, USER_ID)).thenReturn(true);
+      when(postReactionRepository.countByType(POST_ID))
+          .thenReturn(Map.of(ReactionType.LIKE, 4L, ReactionType.LOVE, 2L));
+
+      // When
+      Map<ReactionType, Long> summary = postReactionService.getReactionSummary(USER_ID, POST_ID);
+
+      // Then
+      assertThat(summary).containsEntry(ReactionType.LIKE, 4L).containsEntry(ReactionType.LOVE, 2L);
+    }
+
+    @Test
+    @DisplayName("should report the post as missing when the viewer may not see it")
+    void shouldHidePostTheViewerCannotSee() {
+      // Given: counting reactions on a FRIENDS post would expose that post's audience
+      PostEntity post = samplePost(AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(post, USER_ID)).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> postReactionService.getReactionSummary(USER_ID, POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+  }
+
+  @Nested
+  @DisplayName("getReactors")
+  class GetReactorsTests {
+
+    private void stubVisiblePost() {
+      PostEntity post = samplePost(AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(post, USER_ID)).thenReturn(true);
+    }
+
+    private static UserEntity reactor(Integer id) {
+      UserEntity user = new UserEntity();
+      user.setId(id);
+      user.setUsername("u" + id);
+      user.setFullName("User " + id);
+      user.setEmail("u" + id + "@example.com");
+      return user;
+    }
+
+    @Test
+    @DisplayName("should return public user shapes, never the email-carrying UserResponse")
+    void shouldReturnPublicShapes() {
+      // Given
+      stubVisiblePost();
+      when(postReactionRepository.findReactorIds(eq(POST_ID), eq(null), eq(null), any()))
+          .thenReturn(List.of(5, 6));
+      when(userRepository.findAllById(List.of(5, 6))).thenReturn(List.of(reactor(5), reactor(6)));
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(2L);
+
+      // When
+      ReactorPageResponseDto page =
+          postReactionService.getReactors(USER_ID, POST_ID, null, null, 20);
+
+      // Then
+      assertThat(page.reactors()).extracting(PublicUserResponse::id).containsExactly(5, 6);
+      assertThat(page.totalCount()).isEqualTo(2);
+      assertThat(page.hasMore()).isFalse();
+      assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("should trim the extra row and hand back the last id as the cursor")
+    void shouldTrimAndReportCursor() {
+      // Given: asked for limit + 1, three came back
+      stubVisiblePost();
+      when(postReactionRepository.findReactorIds(eq(POST_ID), eq(null), eq(null), any()))
+          .thenReturn(List.of(5, 6, 7));
+      when(userRepository.findAllById(List.of(5, 6))).thenReturn(List.of(reactor(5), reactor(6)));
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(3L);
+
+      // When
+      ReactorPageResponseDto page =
+          postReactionService.getReactors(USER_ID, POST_ID, null, null, 2);
+
+      // Then
+      assertThat(page.reactors()).hasSize(2);
+      assertThat(page.hasMore()).isTrue();
+      assertThat(page.nextCursor()).isEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("should count only the requested type when one is given")
+    void shouldCountFilteredTotal() {
+      // Given
+      stubVisiblePost();
+      when(postReactionRepository.findReactorIds(
+              eq(POST_ID), eq(ReactionType.LOVE), eq(null), any()))
+          .thenReturn(List.of(5));
+      when(userRepository.findAllById(List.of(5))).thenReturn(List.of(reactor(5)));
+      when(postReactionRepository.countByIdPostIdAndReactionType(POST_ID, ReactionType.LOVE))
+          .thenReturn(1L);
+
+      // When
+      ReactorPageResponseDto page =
+          postReactionService.getReactors(USER_ID, POST_ID, ReactionType.LOVE, null, 20);
+
+      // Then
+      assertThat(page.totalCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should skip a reactor whose user row is gone rather than render a blank")
+    void shouldSkipDeletedUsers() {
+      // Given
+      stubVisiblePost();
+      when(postReactionRepository.findReactorIds(eq(POST_ID), eq(null), eq(null), any()))
+          .thenReturn(List.of(5, 6));
+      when(userRepository.findAllById(List.of(5, 6))).thenReturn(List.of(reactor(6)));
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(2L);
+
+      // When
+      ReactorPageResponseDto page =
+          postReactionService.getReactors(USER_ID, POST_ID, null, null, 20);
+
+      // Then
+      assertThat(page.reactors()).extracting(PublicUserResponse::id).containsExactly(6);
+    }
+
+    @Test
+    @DisplayName("should report the post as missing when the viewer may not see it")
+    void shouldHidePostTheViewerCannotSee() {
+      // Given
+      PostEntity post = samplePost(AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(post, USER_ID)).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> postReactionService.getReactors(USER_ID, POST_ID, null, null, 20))
+          .isInstanceOf(NotFoundException.class);
+    }
   }
 }

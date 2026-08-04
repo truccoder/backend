@@ -22,6 +22,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -31,6 +32,7 @@ import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -58,6 +60,7 @@ class CommentServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
   @Mock private NewsfeedService newsfeedService;
+  @Mock private BlockQueryService blockQueryService;
 
   @InjectMocks private CommentService commentService;
 
@@ -518,5 +521,38 @@ class CommentServiceTest {
     user.setId(AUTHOR_ID);
     user.setFullName(fullName);
     return user;
+  }
+
+  @Nested
+  @DisplayName("getComments — block filtering")
+  class GetCommentsBlockFilteringTests {
+
+    @Test
+    @DisplayName("should hide comments written by someone in the viewer's block set")
+    void shouldHideBlockedAuthorsComments() {
+      // Given: two comments, one by a user the viewer has blocked (or who blocked the viewer)
+      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      CommentEntity mine = new CommentEntity();
+      mine.setId(1);
+      mine.setPostId(POST_ID);
+      mine.setAuthorId(7);
+      mine.setContent("visible");
+      CommentEntity blocked = new CommentEntity();
+      blocked.setId(2);
+      blocked.setPostId(POST_ID);
+      blocked.setAuthorId(8);
+      blocked.setContent("hidden");
+      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+          .thenReturn(java.util.List.of(mine, blocked));
+      when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of(8));
+      when(userRepository.findAllById(java.util.Set.of(7))).thenReturn(java.util.List.of());
+
+      // When
+      var comments = commentService.getComments(5, POST_ID);
+
+      // Then — a comment thread is where a blocked user can talk straight at the person who
+      // blocked them, so leaving this unfiltered would undo most of what the block is for
+      assertThat(comments).extracting(CommentResponseDto::getId).containsExactly(1);
+    }
   }
 }

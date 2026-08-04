@@ -120,7 +120,9 @@ class CommentControllerTest {
               .createdAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"))
               .updatedAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"))
               .build();
-      when(commentService.getComments(1)).thenReturn(List.of(comment));
+      // The authenticated user (id 1) is now passed through as the viewer, so that comments by
+      // someone they have blocked can be filtered out.
+      when(commentService.getComments(1, 1)).thenReturn(List.of(comment));
 
       // When / Then
       mockMvc
@@ -138,7 +140,7 @@ class CommentControllerTest {
       // Given
       doThrow(new NotFoundException("Post not found with ID: 999"))
           .when(commentService)
-          .getComments(999);
+          .getComments(1, 999);
 
       // When / Then
       mockMvc

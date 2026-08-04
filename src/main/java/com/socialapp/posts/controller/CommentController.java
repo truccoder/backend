@@ -21,7 +21,7 @@ public class CommentController {
 
   @GetMapping
   public List<CommentResponseDto> getComments(@PathVariable Integer postId) {
-    return commentService.getComments(postId);
+    return commentService.getComments(SecurityUtils.getCurrentUserId(), postId);
   }
 
   @PostMapping

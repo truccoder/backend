@@ -4,12 +4,16 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.CreatePostRequestDto;
+import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -17,10 +21,34 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class PostController {
   private final PostService postService;
+  private final PostQueryService postQueryService;
 
   @PostMapping
   public void createPost(@Valid @RequestBody CreatePostRequestDto request) {
     postService.createPost(SecurityUtils.getCurrentUserId(), request);
+  }
+
+  /**
+   * The discovery feed: everyone's public posts.
+   *
+   * <p>Declared before {@code /{postId}} on purpose. Spring maps the literal segment ahead of the
+   * template regardless of declaration order, so this is documentation rather than load-bearing —
+   * but a reader scanning the file should see immediately that {@code /posts/public} is not a post
+   * whose id is "public".
+   */
+  @GetMapping("/public")
+  public PostPageResponseDto getPublicFeed(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = "20") @Positive int limit) {
+    // OrNull, not getCurrentUserId(): this endpoint is open to guests, and the throwing variant
+    // would turn an allowed anonymous request into a 401 after Spring Security let it through.
+    return postQueryService.getPublicFeed(SecurityUtils.getCurrentUserIdOrNull(), cursor, limit);
+  }
+
+  /** Permalink. A post the caller may not see is reported as missing — see PostQueryService. */
+  @GetMapping("/{postId}")
+  public FeedPostDataDto getPost(@PathVariable Integer postId) {
+    return postQueryService.getPost(SecurityUtils.getCurrentUserIdOrNull(), postId);
   }
 
   @PostMapping(value = "/books", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
