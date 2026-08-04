@@ -24,6 +24,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.chat.client.StreamChatClient;
 import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.dto.ChatTokenResponse;
@@ -48,6 +49,7 @@ class StreamChatServiceTest {
   @Mock private StreamChatClient streamChatClient;
   @Mock private FriendshipService friendshipService;
   @Mock private UserRepository userRepository;
+  @Mock private BlockQueryService blockQueryService;
 
   @Captor private ArgumentCaptor<Collection<UserEntity>> upsertedUsers;
 
@@ -68,7 +70,8 @@ class StreamChatServiceTest {
             new StreamTokenSigner(properties),
             streamChatClient,
             friendshipService,
-            userRepository);
+            userRepository,
+            blockQueryService);
 
     user = new UserEntity();
     user.setId(42);
@@ -224,6 +227,28 @@ class StreamChatServiceTest {
       assertThatThrownBy(() -> service.issueToken(user))
           .isInstanceOf(MissingConfigurationException.class);
       then(streamChatClient).should(never()).upsertUsers(any());
+    }
+  }
+
+  @Nested
+  @DisplayName("issueToken — block filtering")
+  class BlockFilteringTests {
+
+    @Test
+    @DisplayName("should not push a blocked friend's profile to Stream")
+    void shouldSkipBlockedFriends() {
+      // Given
+      given(friendshipService.getFriendIds(42)).willReturn(List.of(7, 8));
+      given(blockQueryService.blockedPairIds(42)).willReturn(java.util.Set.of(8));
+      given(userRepository.findAllById(List.of(7))).willReturn(List.of(friend(7)));
+
+      // When
+      service.issueToken(user);
+
+      // Then — this is a partial defence only: it stops THIS server introducing the two to
+      // Stream, it cannot stop a channel Stream would create on its own. See the method's javadoc.
+      then(streamChatClient).should().upsertUsers(upsertedUsers.capture());
+      assertThat(upsertedUsers.getValue()).extracting(UserEntity::getId).containsExactly(42, 7);
     }
   }
 }

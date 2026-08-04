@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -25,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
@@ -54,6 +57,7 @@ class NotificationServiceTest {
   @Mock private PushNotificationService pushService;
   @Mock private MailService mailService;
   @Mock private UserRepository userRepository;
+  @Mock private BlockQueryService blockQueryService;
 
   @InjectMocks private NotificationService notificationService;
 
@@ -648,6 +652,46 @@ class NotificationServiceTest {
       // Then
       assertThat(result.getUserId()).isEqualTo(RECIPIENT_ID);
       verify(preferenceRepository).save(any());
+    }
+  }
+
+  @Nested
+  @DisplayName("send — block filtering")
+  class SendBlockFilteringTests {
+
+    @Test
+    @DisplayName("should drop the notification entirely when a block stands between the two")
+    void shouldDropNotificationAcrossABlock() {
+      // Given
+      when(blockQueryService.isBlockedEitherWay(RECIPIENT_ID, ACTOR_ID)).thenReturn(true);
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.BOTH).build());
+
+      // Then — nothing stored and nothing sent: a notification names its actor, so delivering one
+      // across a block tells each side the other is still reaching them
+      verifyNoInteractions(notificationRepository);
+      verifyNoInteractions(pushService);
+      verifyNoInteractions(mailService);
+      verifyNoInteractions(preferenceRepository);
+    }
+
+    @Test
+    @DisplayName("should not consult the block set for a system notification with no actor")
+    void shouldSkipBlockCheckWithoutActor() {
+      // Given: a notification with no actor cannot be "from" anyone to block
+      when(preferenceRepository.findByUserId(RECIPIENT_ID))
+          .thenReturn(Optional.of(preference(false, false, null, null)));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.PUSH).actorId(null).build());
+
+      // Then
+      verify(blockQueryService, never()).isBlockedEitherWay(any(), any());
+      // Saved rather than dropped — send() writes the row and then writes it again with sentAt,
+      // so the count here is about the notification surviving the block check, not about how
+      // many times the row is persisted.
+      verify(notificationRepository, atLeastOnce()).save(any());
     }
   }
 }

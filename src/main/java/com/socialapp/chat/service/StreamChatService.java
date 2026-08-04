@@ -3,9 +3,11 @@ package com.socialapp.chat.service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.chat.client.StreamChatClient;
 import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.dto.ChatTokenResponse;
@@ -27,6 +29,7 @@ public class StreamChatService {
   private final StreamChatClient streamChatClient;
   private final FriendshipService friendshipService;
   private final UserRepository userRepository;
+  private final BlockQueryService blockQueryService;
 
   public ChatTokenResponse issueToken(UserEntity user) {
     if (!properties.isConfigured()) {
@@ -65,13 +68,25 @@ public class StreamChatService {
    * <p>A failed profile sync degrades the chat UI to numeric ids; a failed token blocks chat
    * entirely. Never let the former cause the latter — Stream lazily creates the user on {@code
    * connectUser} anyway.
+   *
+   * <p><b>Blocked users are left out, and that is a partial defence, not a complete one.</b>
+   * Skipping them here means this backend never introduces the two of them to Stream. It does not
+   * make a channel between them impossible: the frontend holds a Stream user token and talks to
+   * Stream directly, so if Stream already knows both users — which it will as soon as each of them
+   * has chatted with anyone — it will honour a channel create between them without asking this
+   * server. Closing that hole needs a call to Stream's own server-side API when a block is placed;
+   * it is written down in {@code docs/fe-debt.md} rather than left implied here.
    */
   private void syncProfilesBestEffort(UserEntity user) {
     try {
       List<UserEntity> toSync = new ArrayList<>();
       toSync.add(user);
 
-      List<Integer> friendIds = friendshipService.getFriendIds(user.getId());
+      Set<Integer> blockedIds = blockQueryService.blockedPairIds(user.getId());
+      List<Integer> friendIds =
+          friendshipService.getFriendIds(user.getId()).stream()
+              .filter(id -> !blockedIds.contains(id))
+              .toList();
       if (!friendIds.isEmpty()) {
         // findAllById() silently skips ids missing from Postgres, which is exactly what we want
         // for friend edges left dangling in Neo4j by a deleted account.
