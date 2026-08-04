@@ -14,6 +14,7 @@ import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -50,6 +51,7 @@ public class FriendshipService {
   private final FriendSuggestionCache friendSuggestionCache;
   private final UserProfessionalProfileRepository professionalProfileRepository;
   private final Neo4jClient neo4jClient;
+  private final BlockQueryService blockQueryService;
 
   /**
    * Candidate pool pulled from Neo4j before background-based re-ranking and trimming to the
@@ -64,6 +66,20 @@ public class FriendshipService {
     }
     if (!userRepository.existsById(addresseeId)) {
       throw new NotFoundException("User not found with ID: " + addresseeId);
+    }
+    // Refused across a block, in either direction.
+    //
+    // Blocking already ends the friendship and cancels whatever request was in flight at the time
+    // — but nothing stopped the blocked user from simply sending a new one. The row would be
+    // written, and while the notification is suppressed elsewhere, the request itself still landed
+    // in the blocker's pending list: their name back in front of the person who blocked them, as
+    // often as they cared to click. That is the thing blocking exists to prevent.
+    //
+    // The message deliberately does not say "you are blocked". It cannot hide that the request was
+    // refused — silently accepting it would either store a request that can never be accepted or
+    // lie to the sender about what happened — but it does not have to confirm why.
+    if (blockQueryService.isBlockedEitherWay(actorId, addresseeId)) {
+      throw new ValidationException("You cannot send a friend request to this user");
     }
     if (friendshipRepository.areFriends(actorId, addresseeId)) {
       throw new ValidationException("You are already friends with this user");
@@ -154,6 +170,37 @@ public class FriendshipService {
     friendRequestRepository.save(request);
   }
 
+  /**
+   * Ends a friendship.
+   *
+   * <p>Until now there was no way back out of one: {@code acceptFriendRequest} wrote to Postgres
+   * <i>and</i> Neo4j and nothing undid either, so an unwanted friend could only be removed with
+   * hand-written SQL and Cypher.
+   *
+   * <p><b>Both stores, always.</b> The graph holds the friendship itself (it is what {@code
+   * getFriends}, the suggestion query and the fan-out audience all read); the accepted request row
+   * in Postgres is the record that produced it. Clearing one and not the other leaves the pair
+   * friends according to whichever store was missed.
+   *
+   * <p><b>Idempotent.</b> Calling it when the two are not friends is a no-op, not a 404: the
+   * caller asked for a state ("we are not friends") that is already true, and a client retrying
+   * after a dropped response must not get an error for succeeding twice.
+   */
+  @Transactional
+  public void unfriend(Integer actorId, Integer otherUserId) {
+    if (actorId.equals(otherUserId)) {
+      throw new ValidationException("You cannot unfriend yourself");
+    }
+
+    friendshipRepository.deleteFriendship(actorId, otherUserId);
+    friendRequestRepository.deleteAcceptedBetween(actorId, otherUserId);
+
+    // Both suggestion pools are now wrong in the same way: each of these two people is once again
+    // a candidate for the other, and their mutual-friend counts have changed.
+    friendSuggestionCache.evict(actorId);
+    friendSuggestionCache.evict(otherUserId);
+  }
+
   public FriendListResponseDto getFriends(Integer userId, Integer cursor, int limit) {
     List<Integer> friendIds =
         friendshipRepository.findFriendIdsAfterCursor(userId, cursor, limit + 1);
@@ -179,10 +226,39 @@ public class FriendshipService {
     return friendshipRepository.findFriendIds(userId);
   }
 
+  /**
+   * Whether two users are friends, as one graph lookup.
+   *
+   * <p>Exists alongside {@link #getFriendIds} so a caller asking about a single pair — the post
+   * permalink, the visibility check on one author — does not have to pull that user's entire
+   * friend list and scan it. Same reason as {@link #getFriendIds} for living here rather than in
+   * the callers: nothing outside this module should touch the Neo4j repository.
+   */
+  public boolean areFriends(Integer userId, Integer otherUserId) {
+    return friendshipRepository.areFriends(userId, otherUserId);
+  }
+
+  /**
+   * The friend requests waiting for this user's answer.
+   *
+   * <p>Filtered by the block set as well, even though {@code sendFriendRequest} now refuses to
+   * create such a request and {@code block()} cancels the ones in flight. This is the reader-side
+   * half of the same rule, and it is worth having twice: rows written before those two guards
+   * existed are still sitting in databases that have been running the previous build, and this is
+   * the screen where such a row would put a blocked user's name back in front of the person who
+   * blocked them.
+   *
+   * <p>The sent-requests list needs no equivalent: blocking cancels pending requests in both
+   * directions, so a request the caller sent to someone who then blocked them is already gone.
+   */
   public List<PendingFriendRequestDto> getPendingRequests(Integer userId) {
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
     List<FriendRequestEntity> requests =
-        friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(
-            userId, FriendRequestStatus.PENDING);
+        friendRequestRepository
+            .findByAddresseeIdAndStatusOrderByCreatedAtDesc(userId, FriendRequestStatus.PENDING)
+            .stream()
+            .filter(request -> !blockedIds.contains(request.getRequesterId()))
+            .toList();
 
     Map<Integer, UserProfileDto> profilesById =
         loadProfiles(
@@ -234,8 +310,19 @@ public class FriendshipService {
         friendSuggestionCache.getOrLoad(
             userId, () -> findFriendSuggestions(userId, SUGGESTION_POOL_SIZE));
 
+    // Filtered here rather than inside the Cypher: the pool is cached, and a block placed after
+    // it was cached would otherwise keep suggesting that person until the entry expired. This also
+    // keeps one cached pool valid for the whole ranking pipeline. Blocking is two-way for
+    // filtering, so this drops both people the caller blocked and people who blocked the caller —
+    // suggesting someone who blocked you is a particularly bad way to find out.
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
+    List<MutualFriendCountDto> visiblePool =
+        blockedIds.isEmpty()
+            ? pool
+            : pool.stream().filter(s -> !blockedIds.contains(s.userId())).toList();
+
     List<MutualFriendCountDto> topSuggestions =
-        rankByBackground(userId, pool).stream().limit(limit).toList();
+        rankByBackground(userId, visiblePool).stream().limit(limit).toList();
 
     Set<Integer> suggestedIds =
         topSuggestions.stream().map(MutualFriendCountDto::userId).collect(Collectors.toSet());
