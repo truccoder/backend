@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookStorageService;
@@ -33,17 +34,19 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class SearchService {
+  private final BlockQueryService blockQueryService;
   private final UserRepository userRepository;
   private final PostRepository postRepository;
   private final BookRepository bookRepository;
   private final BookStorageService bookStorageService;
 
   public SearchResult<UserDto> searchUsers(
-      String query, int page, int size, List<Integer> friendIds) {
+      String query, int page, int size, Integer currentUserId, List<Integer> friendIds) {
     Page<UserEntity> result =
         userRepository.search(
             SearchQuerySanitizer.sanitize(query),
             safeFriendIds(friendIds),
+            excludedIds(blockQueryService.blockedPairIds(currentUserId)),
             PageRequest.of(page - 1, size));
     return toSearchResult(result, this::toUserDtos, page, size);
   }
@@ -57,11 +60,16 @@ public class SearchService {
       String query, int size, Integer currentUserId, List<Integer> friendIds) {
     String sanitized = SearchQuerySanitizer.sanitize(query);
     List<Integer> safeFriends = safeFriendIds(friendIds);
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(currentUserId);
 
     List<PostEntity> contentMatches =
         postRepository
             .searchByContentOrEventName(
-                sanitized, currentUserId, safeFriends, PageRequest.of(0, size))
+                sanitized,
+                currentUserId,
+                safeFriends,
+                excludedIds(blockedIds),
+                PageRequest.of(0, size))
             .getContent();
 
     List<Integer> bookMatchedPostIds =
@@ -69,10 +77,13 @@ public class SearchService {
             .map(BookEntity::getPostId)
             .filter(Objects::nonNull)
             .toList();
+    // The book table has no author of its own to filter on in SQL, so the block check for this
+    // branch happens here, on the posts the matched books belong to.
     List<PostEntity> bookMatches =
         bookMatchedPostIds.isEmpty()
             ? List.of()
             : postRepository.findAllById(bookMatchedPostIds).stream()
+                .filter(p -> !blockedIds.contains(p.getAuthorId()))
                 .filter(p -> isVisibleToViewer(p, currentUserId, safeFriends))
                 .toList();
 
@@ -196,5 +207,13 @@ public class SearchService {
 
   private List<Integer> safeFriendIds(List<Integer> friendIds) {
     return friendIds == null || friendIds.isEmpty() ? List.of(-1) : friendIds;
+  }
+
+  /**
+   * The caller's block set, never empty — same sentinel trick as {@link #safeFriendIds}, for the
+   * same reason: {@code NOT IN ()} is not valid SQL and having blocked nobody is the normal case.
+   */
+  private Collection<Integer> excludedIds(Set<Integer> blockedIds) {
+    return blockedIds.isEmpty() ? List.of(-1) : blockedIds;
   }
 }

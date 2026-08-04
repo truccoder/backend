@@ -21,6 +21,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookStorageService;
@@ -54,6 +55,7 @@ class SearchServiceTest {
   private static final Integer FRIEND_ID = 2;
   private static final Integer STRANGER_ID = 3;
 
+  @Mock private BlockQueryService blockQueryService;
   @Mock private UserRepository userRepository;
   @Mock private PostRepository postRepository;
   @Mock private BookRepository bookRepository;
@@ -92,11 +94,13 @@ class SearchServiceTest {
     void shouldReturnMappedUsers_withPagingMetadata() {
       // Given
       Page<UserEntity> page = new PageImpl<>(List.of(user(2, "Alice")), PageRequest.of(0, 10), 1);
-      when(userRepository.search(eq("alice"), eq(List.of(FRIEND_ID)), eq(PageRequest.of(0, 10))))
+      when(userRepository.search(
+              eq("alice"), eq(List.of(FRIEND_ID)), eq(List.of(-1)), eq(PageRequest.of(0, 10))))
           .thenReturn(page);
 
       // When
-      SearchResult<UserDto> result = searchService.searchUsers("alice", 1, 10, List.of(FRIEND_ID));
+      SearchResult<UserDto> result =
+          searchService.searchUsers("alice", 1, 10, CURRENT_USER_ID, List.of(FRIEND_ID));
 
       // Then
       assertThat(result.getItems()).hasSize(1);
@@ -110,10 +114,10 @@ class SearchServiceTest {
     @DisplayName("should use a sentinel friend id when the friend list is null")
     void shouldUseSentinelFriendId_whenFriendIdsIsNull() {
       // Given
-      when(userRepository.search(any(), eq(List.of(-1)), any())).thenReturn(Page.empty());
+      when(userRepository.search(any(), eq(List.of(-1)), any(), any())).thenReturn(Page.empty());
 
       // When
-      SearchResult<UserDto> result = searchService.searchUsers("q", 1, 10, null);
+      SearchResult<UserDto> result = searchService.searchUsers("q", 1, 10, CURRENT_USER_ID, null);
 
       // Then — the stub above only matches a call with the sentinel [-1]; a mismatched call would
       // return null from the unstubbed default and NPE before reaching this assertion.
@@ -124,10 +128,11 @@ class SearchServiceTest {
     @DisplayName("should use a sentinel friend id when the friend list is empty")
     void shouldUseSentinelFriendId_whenFriendIdsIsEmpty() {
       // Given
-      when(userRepository.search(any(), eq(List.of(-1)), any())).thenReturn(Page.empty());
+      when(userRepository.search(any(), eq(List.of(-1)), any(), any())).thenReturn(Page.empty());
 
       // When
-      SearchResult<UserDto> result = searchService.searchUsers("q", 1, 10, List.of());
+      SearchResult<UserDto> result =
+          searchService.searchUsers("q", 1, 10, CURRENT_USER_ID, List.of());
 
       // Then
       assertThat(result.getItems()).isEmpty();
@@ -151,7 +156,8 @@ class SearchServiceTest {
     void shouldReturnContentMatches_whenNoBookMatches() {
       // Given
       PostEntity matched = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
-      when(postRepository.searchByContentOrEventName(any(), eq(CURRENT_USER_ID), any(), any()))
+      when(postRepository.searchByContentOrEventName(
+              any(), eq(CURRENT_USER_ID), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(matched)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
@@ -170,7 +176,7 @@ class SearchServiceTest {
     @DisplayName("should include a book match authored by the current viewer")
     void shouldIncludeBookMatch_whenAuthoredByViewer() {
       // Given
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(Page.empty());
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -193,7 +199,7 @@ class SearchServiceTest {
     @DisplayName("should include a public book match authored by someone else")
     void shouldIncludeBookMatch_whenPublic() {
       // Given
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(Page.empty());
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -216,7 +222,7 @@ class SearchServiceTest {
         "should include a friends-only book match when the viewer is a friend of the author")
     void shouldIncludeBookMatch_whenFriendsOnlyAndViewerIsFriend() {
       // Given
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(Page.empty());
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -238,7 +244,7 @@ class SearchServiceTest {
     @DisplayName("should exclude a friends-only book match when the viewer is not a friend")
     void shouldExcludeBookMatch_whenFriendsOnlyAndViewerNotFriend() {
       // Given
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(Page.empty());
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -257,7 +263,7 @@ class SearchServiceTest {
     @DisplayName("should exclude a private book match not authored by the viewer")
     void shouldExcludePrivateBookMatch_whenNotOwnedByViewer() {
       // Given
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(Page.empty());
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -277,7 +283,7 @@ class SearchServiceTest {
     void shouldNotDuplicate_whenMatchedByBothContentAndBook() {
       // Given
       PostEntity matched = post(20, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.BOOK);
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(matched)));
       BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
       when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
@@ -303,7 +309,7 @@ class SearchServiceTest {
       details.setEventTitle("Launch Party");
       eventPost.setEventDetails(details);
       eventPost.setCreatedAt(OffsetDateTime.now());
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(eventPost)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
@@ -330,7 +336,7 @@ class SearchServiceTest {
       OffsetDateTime createdAt = OffsetDateTime.parse("2026-07-27T18:24:54Z");
       PostEntity postEntity = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       postEntity.setCreatedAt(createdAt);
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(postEntity)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
@@ -350,7 +356,7 @@ class SearchServiceTest {
       // Given — B15: the payload carried the raw score with no label, so the chip in a search
       // result had nothing to render but a number.
       PostEntity postEntity = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(postEntity)));
       stubEmptyBookSearch();
       UserEntity author = user(CURRENT_USER_ID, "Me");
@@ -385,7 +391,7 @@ class SearchServiceTest {
       qnaPost.setQnaDetails(new QnaDetails());
       qnaPost.setPollDetails(new PollDetails());
       qnaPost.setLinkDetails(new LinkDetails());
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(qnaPost)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
@@ -412,7 +418,7 @@ class SearchServiceTest {
     void shouldMapOptionalFields_toNullWhenAbsent() {
       // Given
       PostEntity plainPost = post(10, CURRENT_USER_ID, null, PostType.REGULAR);
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(plainPost)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID))).thenReturn(List.of());
@@ -437,7 +443,7 @@ class SearchServiceTest {
       // Given
       PostEntity post1 = post(1, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       PostEntity post2 = post(2, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
-      when(postRepository.searchByContentOrEventName(any(), any(), any(), any()))
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(post1, post2)));
       stubEmptyBookSearch();
       when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
@@ -449,6 +455,53 @@ class SearchServiceTest {
 
       // Then
       assertThat(result).hasSize(1);
+    }
+  }
+
+  // =====================================================================
+  // block filtering
+  // =====================================================================
+
+  @Nested
+  @DisplayName("block filtering")
+  class BlockFilteringTests {
+
+    @Test
+    @DisplayName("should pass the caller's block set to the user query as an exclusion")
+    void shouldExcludeBlockedUsersFromUserSearch() {
+      // Given
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of(9));
+      when(userRepository.search(any(), any(), eq(java.util.Set.of(9)), any()))
+          .thenReturn(Page.empty());
+
+      // When
+      SearchResult<UserDto> result =
+          searchService.searchUsers("q", 1, 10, CURRENT_USER_ID, List.of());
+
+      // Then — the stub only matches a call carrying the block set; a search box that still finds
+      // a blocked user's profile makes the block cosmetic
+      assertThat(result.getItems()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should drop a book-matched post whose author is blocked")
+    void shouldDropBlockedAuthorsBookMatch() {
+      // Given: the book branch has no author column of its own to filter on in SQL
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID))
+          .thenReturn(java.util.Set.of(STRANGER_ID));
+      when(postRepository.searchByContentOrEventName(any(), any(), any(), any(), any()))
+          .thenReturn(Page.empty());
+      BookEntity book = BookEntity.builder().id(5).postId(20).title("Java Basics").build();
+      when(bookRepository.search(any(), any())).thenReturn(new PageImpl<>(List.of(book)));
+      PostEntity blockedAuthorsPost = post(20, STRANGER_ID, PostVisibility.PUBLIC, PostType.BOOK);
+      when(postRepository.findAllById(List.of(20))).thenReturn(List.of(blockedAuthorsPost));
+
+      // When
+      List<PostDto> posts =
+          searchService.searchPostsWithBookInfo("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(posts).isEmpty();
     }
   }
 }

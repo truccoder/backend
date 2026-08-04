@@ -106,7 +106,7 @@ class SearchControllerTest {
     void shouldReturn200AndResults_happyPath() throws Exception {
       // Given
       when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
-      when(searchService.searchUsers(eq("reader"), eq(1), eq(10), any()))
+      when(searchService.searchUsers(eq("reader"), eq(1), eq(10), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
                   .items(List.of(UserDto.builder().id(2).username("reader1").build()))
@@ -132,7 +132,7 @@ class SearchControllerTest {
     void shouldPassSizeThrough_whenProvided() throws Exception {
       // Given
       when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
-      when(searchService.searchUsers(eq("java"), eq(1), eq(5), any()))
+      when(searchService.searchUsers(eq("java"), eq(1), eq(5), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
                   .items(List.of())

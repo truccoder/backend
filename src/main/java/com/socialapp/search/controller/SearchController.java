@@ -41,7 +41,8 @@ public class SearchController {
     Integer currentUserId = SecurityUtils.getCurrentUserId();
     List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
 
-    List<UserDto> users = searchService.searchUsers(q, 1, size, friendIds).getItems();
+    List<UserDto> users =
+        searchService.searchUsers(q, 1, size, currentUserId, friendIds).getItems();
     List<PostDto> posts = searchService.searchPostsWithBookInfo(q, size, currentUserId, friendIds);
 
     return new SearchResponse(users, posts);

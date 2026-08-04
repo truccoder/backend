@@ -1,6 +1,7 @@
 package com.socialapp.security.service;
 
 import java.security.SecureRandom;
+import java.util.Locale;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,9 @@ import lombok.RequiredArgsConstructor;
 public class OAuthAuthService {
 
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+  /** Random-suffix attempts before falling back to a value that cannot collide. */
+  private static final int USERNAME_ATTEMPTS = 5;
 
   private final UserRepository userRepository;
   private final TokenService tokenService;
@@ -148,8 +152,34 @@ public class OAuthAuthService {
     return tokenService.issueTokens(user, isAutoLinked, isNewUser);
   }
 
+  /**
+   * Builds a handle for an account created by signing in with Google or GitHub.
+   *
+   * <p>Two things changed here when {@code V47} made {@code username} unique and NOT NULL:
+   *
+   * <ul>
+   *   <li><b>Lowercased.</b> It used to keep whatever case the email had, which produced handles a
+   *       user could never have typed themselves ({@code UsernamePattern} is lowercase-only) and
+   *       which read as two different handles in a URL while the database now treats them as one.
+   *   <li><b>Checked, not just randomised.</b> A four-digit suffix made a clash unlikely, not
+   *       impossible — and "unlikely" used to mean a duplicate row, whereas now it means the
+   *       insert fails and the user cannot sign in at all. The loop is bounded; the final fallback
+   *       is a value that cannot collide.
+   * </ul>
+   */
   private String generateUsername(String email) {
-    String baseUsername = email.split("@")[0].replaceAll("[^a-zA-Z0-9]", "");
-    return baseUsername + "_" + SECURE_RANDOM.nextInt(10000);
+    String base = email.split("@")[0].replaceAll("[^a-zA-Z0-9]", "").toLowerCase(Locale.ROOT);
+    if (base.isEmpty()) {
+      base = "user";
+    }
+
+    for (int attempt = 0; attempt < USERNAME_ATTEMPTS; attempt++) {
+      String candidate = base + "-" + SECURE_RANDOM.nextInt(10000);
+      if (!userRepository.existsByUsernameIgnoreCase(candidate)) {
+        return candidate;
+      }
+    }
+    // Time-based, so it cannot keep losing the same race the loop above just lost.
+    return base + "-" + System.nanoTime();
   }
 }
