@@ -186,4 +186,32 @@ class CommentRepositoryTest extends AbstractIntegrationTest {
       assertThat(result).isFalse();
     }
   }
+
+  @Nested
+  @DisplayName("countByPostIds")
+  class CountByPostIds {
+
+    @Test
+    @DisplayName("counts a whole page of posts in one query, replies included")
+    void countsManyPostsAtOnce() {
+      // Given
+      CommentEntity top =
+          commentRepository.saveAndFlush(comment(postId, authorId, "top level", null));
+      commentRepository.saveAndFlush(comment(postId, authorId, "a reply", top.getId()));
+      Integer otherPostId = postRepository.saveAndFlush(post(authorId)).getId();
+
+      // When
+      var counts = commentRepository.countByPostIds(List.of(postId, otherPostId));
+
+      // Then — a post with no comments is simply absent; the caller defaults it to zero
+      assertThat(counts).containsEntry(postId, 2L).doesNotContainKey(otherPostId);
+    }
+
+    @Test
+    @DisplayName("returns an empty map for an empty id list without touching the database")
+    void emptyInputShortCircuits() {
+      // When / Then
+      assertThat(commentRepository.countByPostIds(List.of())).isEmpty();
+    }
+  }
 }
