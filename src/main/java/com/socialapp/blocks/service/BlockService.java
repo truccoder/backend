@@ -8,10 +8,13 @@ import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.socialapp.blocks.entity.UserBlockEntity;
 import com.socialapp.blocks.entity.UserBlockId;
 import com.socialapp.blocks.repository.UserBlockRepository;
+import com.socialapp.chat.service.StreamChatService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.repository.FriendRequestRepository;
@@ -31,6 +34,11 @@ public class BlockService {
   private final UserRepository userRepository;
   private final FriendshipService friendshipService;
   private final FriendRequestRepository friendRequestRepository;
+
+  // blocks -> chat, and chat -> blocks via BlockQueryService. Not a cycle: BlockQueryService was
+  // split off precisely so the read side has no dependencies (see its class comment), so the two
+  // beans do not close a loop.
+  private final StreamChatService streamChatService;
 
   /**
    * Blocks a user, and severs whatever connection the two already had.
@@ -66,6 +74,8 @@ public class BlockService {
     // an earlier partial failure rather than leaving that state unreachable.
     friendshipService.unfriend(blockerId, blockedId);
     friendRequestRepository.cancelPendingBetween(blockerId, blockedId);
+
+    afterCommit(() -> streamChatService.applyBlock(blockerId, blockedId));
   }
 
   /**
@@ -84,6 +94,32 @@ public class BlockService {
     if (userBlockRepository.existsById(id)) {
       userBlockRepository.deleteById(id);
     }
+
+    afterCommit(() -> streamChatService.liftBlock(blockerId, blockedId));
+  }
+
+  /**
+   * Runs {@code action} once the surrounding transaction has committed, or immediately if there is
+   * no transaction.
+   *
+   * <p>Two reasons the Stream calls are not made inline. Ordering: the call reaches an external
+   * service that could act on it before this transaction commits — or after it rolls back, leaving
+   * a block on Stream that does not exist here. Connection hold time: an HTTP round trip to
+   * Stream's servers inside the transaction keeps a database connection checked out for its
+   * duration, on a request that has already done all the database work it needs.
+   */
+  private void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            action.run();
+          }
+        });
   }
 
   /** Who the caller has blocked, newest first. Not the reverse direction — that is not theirs. */

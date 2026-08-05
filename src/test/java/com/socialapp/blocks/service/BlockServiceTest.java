@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.blocks.entity.UserBlockEntity;
 import com.socialapp.blocks.entity.UserBlockId;
 import com.socialapp.blocks.repository.UserBlockRepository;
+import com.socialapp.chat.service.StreamChatService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.repository.FriendRequestRepository;
@@ -44,6 +45,7 @@ class BlockServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private FriendshipService friendshipService;
   @Mock private FriendRequestRepository friendRequestRepository;
+  @Mock private StreamChatService streamChatService;
 
   @InjectMocks private BlockService blockService;
 
@@ -89,6 +91,10 @@ class BlockServiceTest {
       // friends-only audience — the severing is the point, not a side effect.
       verify(friendshipService).unfriend(BLOCKER_ID, BLOCKED_ID);
       verify(friendRequestRepository).cancelPendingBetween(BLOCKER_ID, BLOCKED_ID);
+      // Without this, the block stops at this backend's own reads: the frontend holds a Stream
+      // token and creates channels against Stream directly, so a pair Stream already knows can
+      // keep chatting through a block it was never told about.
+      verify(streamChatService).applyBlock(BLOCKER_ID, BLOCKED_ID);
     }
 
     @Test
@@ -144,6 +150,8 @@ class BlockServiceTest {
 
       // Then
       verify(userBlockRepository).deleteById(id);
+      // The lift has to reach Stream too, or unblocking restores everything except chat.
+      verify(streamChatService).liftBlock(BLOCKER_ID, BLOCKED_ID);
     }
 
     @Test

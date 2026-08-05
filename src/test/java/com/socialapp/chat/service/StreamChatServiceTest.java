@@ -30,6 +30,8 @@ import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.dto.ChatTokenResponse;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.MissingConfigurationException;
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -249,6 +251,121 @@ class StreamChatServiceTest {
       // Stream, it cannot stop a channel Stream would create on its own. See the method's javadoc.
       then(streamChatClient).should().upsertUsers(upsertedUsers.capture());
       assertThat(upsertedUsers.getValue()).extracting(UserEntity::getId).containsExactly(42, 7);
+    }
+  }
+
+  // =====================================================================
+  // ensureChatParticipants  (C3 — chat opened beyond the friend circle)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("ensureChatParticipants")
+  class EnsureChatParticipantsTests {
+
+    @Test
+    @DisplayName("should upsert both people so a channel with a non-friend can be created")
+    void shouldUpsertBothUsers() {
+      // Given
+      UserEntity other = friend(7);
+      given(blockQueryService.isBlockedEitherWay(42, 7)).willReturn(false);
+      given(userRepository.findAllById(List.of(42, 7))).willReturn(List.of(user, other));
+
+      // When
+      service.ensureChatParticipants(42, 7);
+
+      // Then: Stream refuses a channel containing a user it has never seen, which is exactly why
+      // chat only ever worked between friends
+      then(streamChatClient).should().upsertUsers(upsertedUsers.capture());
+      assertThat(upsertedUsers.getValue()).extracting(UserEntity::getId).containsExactly(42, 7);
+    }
+
+    @Test
+    @DisplayName("should refuse a pair separated by a block, in either direction")
+    void shouldRefuseBlockedPair() {
+      // Given
+      given(blockQueryService.isBlockedEitherWay(42, 7)).willReturn(true);
+
+      // When / Then: the message deliberately does not confirm that a block is the reason
+      assertThatThrownBy(() -> service.ensureChatParticipants(42, 7))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageNotContaining("block");
+      then(streamChatClient).should(never()).upsertUsers(any());
+    }
+
+    @Test
+    @DisplayName("should refuse a conversation with yourself")
+    void shouldRefuseSelfConversation() {
+      // When / Then
+      assertThatThrownBy(() -> service.ensureChatParticipants(42, 42))
+          .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    @DisplayName("should 404 when the other user does not exist")
+    void shouldThrowWhenOtherUserMissing() {
+      // Given
+      given(blockQueryService.isBlockedEitherWay(42, 7)).willReturn(false);
+      given(userRepository.findAllById(List.of(42, 7))).willReturn(List.of(user));
+
+      // When / Then
+      assertThatThrownBy(() -> service.ensureChatParticipants(42, 7))
+          .isInstanceOf(NotFoundException.class);
+    }
+  }
+
+  // =====================================================================
+  // applyBlock / liftBlock  (C3 — BE-1: the block finally reaches Stream)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("applyBlock / liftBlock")
+  class BlockSyncTests {
+
+    @Test
+    @DisplayName("should send the block to Stream in BOTH directions")
+    void shouldBlockBothDirections() {
+      // When
+      service.applyBlock(1, 2);
+
+      // Then: Stream's block belongs to the user who placed it, while this product's block is
+      // mutual — sending only the blocker's direction leaves the blocked user able to open the
+      // channel, which is the wrong half to enforce.
+      then(streamChatClient).should().blockUser(1, 2);
+      then(streamChatClient).should().blockUser(2, 1);
+    }
+
+    @Test
+    @DisplayName("should lift the block on Stream in both directions too")
+    void shouldUnblockBothDirections() {
+      // When
+      service.liftBlock(1, 2);
+
+      // Then
+      then(streamChatClient).should().unblockUser(1, 2);
+      then(streamChatClient).should().unblockUser(2, 1);
+    }
+
+    @Test
+    @DisplayName("should do nothing, and not fail, when Stream is not configured")
+    void shouldSkipWhenUnconfigured() {
+      // Given: exactly the local dev situation — no stream.chat.api-key/api-secret
+      properties.setApiKey(null);
+      properties.setApiSecret(null);
+
+      // When / Then
+      assertThatCode(() -> service.applyBlock(1, 2)).doesNotThrowAnyException();
+      then(streamChatClient).should(never()).blockUser(any(), any());
+    }
+
+    @Test
+    @DisplayName("should swallow a Stream failure — the local block is the source of truth")
+    void shouldSwallowStreamFailure() {
+      // Given
+      willThrow(new ExternalApiException("Stream is down")).given(streamChatClient).blockUser(1, 2);
+
+      // When / Then: if Stream is unreachable the pair is still blocked everywhere this backend
+      // controls, so the block call itself must not fail
+      assertThatCode(() -> service.applyBlock(1, 2)).doesNotThrowAnyException();
     }
   }
 }

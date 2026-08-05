@@ -98,6 +98,51 @@ public class StreamChatClient {
     }
   }
 
+  /**
+   * Tells Stream that {@code blockerId} has blocked {@code blockedId}.
+   *
+   * <p>This is the half of blocking that {@link #upsertUsers} cannot do. Leaving a blocked pair out
+   * of the profile sync only stops <em>this</em> server from introducing them; the frontend holds a
+   * Stream user token and talks to Stream directly, so once Stream knows both users — which it does
+   * as soon as each has chatted with anyone at all — a channel between them is created without this
+   * backend being asked. Stream has to be told about the block itself, or the block simply does not
+   * apply to chat.
+   *
+   * <p>One-directional by Stream's model: the block belongs to {@code user_id}. The product's block
+   * is mutual, so {@code StreamChatService} sends both directions.
+   */
+  public void blockUser(Integer blockerId, Integer blockedId) {
+    postUserBlock("/users/block", blockerId, blockedId);
+  }
+
+  /** Lifts a {@link #blockUser} on Stream's side. */
+  public void unblockUser(Integer blockerId, Integer blockedId) {
+    postUserBlock("/users/unblock", blockerId, blockedId);
+  }
+
+  private void postUserBlock(String path, Integer blockerId, Integer blockedId) {
+    Map<String, Object> body =
+        Map.of(
+            "user_id", String.valueOf(blockerId),
+            "blocked_user_id", String.valueOf(blockedId));
+
+    try {
+      streamChatWebClient
+          .post()
+          .uri(
+              uriBuilder ->
+                  uriBuilder.path(path).queryParam("api_key", properties.getApiKey()).build())
+          .header("Authorization", tokenSigner.serverToken())
+          .header("Stream-Auth-Type", "jwt")
+          .bodyValue(body)
+          .retrieve()
+          .bodyToMono(String.class)
+          .block();
+    } catch (Exception e) {
+      throw new ExternalApiException("Failed to apply block on Stream Chat (" + path + ")", e);
+    }
+  }
+
   private String displayName(UserEntity user) {
     if (StringUtils.hasText(user.getFullName())) {
       return user.getFullName();
