@@ -52,20 +52,52 @@ public interface UserRepository extends JpaRepository<UserEntity, Integer> {
    * blocked them, must not be findable by name — otherwise the block hides their posts while
    * leaving a working search box pointed at their profile. Like {@code friendIds} it must never be
    * empty; the caller substitutes a sentinel id, because {@code NOT IN ()} is not valid SQL.
+   *
+   * <p>{@code f_unaccent}, not {@code unaccent}: the trigram GIN indexes from {@code
+   * V48__add_trigram_search_indexes.sql} are built on the wrapper, and Postgres matches an
+   * expression index by the parsed expression. Plain {@code unaccent} still returns the right
+   * users, just via a full scan of t_users.
    */
   @Query(
       """
                       SELECT u FROM UserEntity u
-                      WHERE (cast(function('unaccent', LOWER(u.fullName)) as string)
-                              LIKE cast(function('unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
-                         OR cast(function('unaccent', LOWER(u.username)) as string)
-                              LIKE cast(function('unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\')
+                      WHERE (cast(function('f_unaccent', LOWER(u.fullName)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
+                         OR cast(function('f_unaccent', LOWER(u.username)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\')
                         AND u.id NOT IN :excludedIds
                       ORDER BY CASE WHEN u.id IN :friendIds THEN 0 ELSE 1 END, u.fullName ASC
                     """)
   Page<UserEntity> search(
       @Param("query") String query,
       @Param("friendIds") List<Integer> friendIds,
+      @Param("excludedIds") Collection<Integer> excludedIds,
+      Pageable pageable);
+
+  /**
+   * The type-ahead variant of {@link #search}: same match, no friend-first ranking.
+   *
+   * <p>Dropping {@code friendIds} is the whole point of having a second query. Ranking friends
+   * first means the caller must first fetch the viewer's friend ids, which lives in Neo4j — a
+   * second database round trip, on every keystroke. The results page can afford that; a dropdown
+   * that fires per character cannot.
+   *
+   * <p>{@code excludedIds} is not similarly optional: it carries the block set, and a suggestion
+   * box that completes the name of someone who blocked you undoes the block on its own. Same
+   * never-empty sentinel rule as {@link #search}.
+   */
+  @Query(
+      """
+                      SELECT u FROM UserEntity u
+                      WHERE (cast(function('f_unaccent', LOWER(u.fullName)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
+                         OR cast(function('f_unaccent', LOWER(u.username)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\')
+                        AND u.id NOT IN :excludedIds
+                      ORDER BY u.fullName ASC, u.id ASC
+                    """)
+  List<UserEntity> suggest(
+      @Param("query") String query,
       @Param("excludedIds") Collection<Integer> excludedIds,
       Pageable pageable);
 }

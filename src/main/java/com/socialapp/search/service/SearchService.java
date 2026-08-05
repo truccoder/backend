@@ -19,6 +19,8 @@ import com.socialapp.reputation.RepLevel;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResult;
+import com.socialapp.search.dto.SuggestionDto;
+import com.socialapp.search.dto.SuggestionType;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.util.SearchQuerySanitizer;
 import com.socialapp.security.entity.UserEntity;
@@ -49,6 +51,51 @@ public class SearchService {
             excludedIds(blockQueryService.blockedPairIds(currentUserId)),
             PageRequest.of(page - 1, size));
     return toSearchResult(result, this::toUserDtos, page, size);
+  }
+
+  /**
+   * The type-ahead dropdown: a short flat list of people and books, nothing else.
+   *
+   * <p>Separate from {@link #searchUsers}/{@link #searchPostsWithBookInfo} rather than a {@code
+   * size=5} call into them, because the results page does three things this cannot afford once per
+   * keystroke: it fetches the viewer's friend ids from Neo4j to rank friends first, it counts total
+   * hits for the pager, and it hydrates every post with its author, its book and its six format
+   * detail blobs.
+   *
+   * <p>People come before books in the returned list. Both lists are filled to {@code limit} and
+   * then the whole thing is trimmed, so a query matching only books still fills the dropdown.
+   */
+  public List<SuggestionDto> suggest(String query, int limit, Integer currentUserId) {
+    String sanitized = SearchQuerySanitizer.sanitize(query);
+    // Same block rule as /search. A dropdown that completes the name of someone who blocked the
+    // viewer hands back exactly the link the block exists to take away.
+    Collection<Integer> excluded = excludedIds(blockQueryService.blockedPairIds(currentUserId));
+    PageRequest page = PageRequest.of(0, limit);
+
+    List<SuggestionDto> suggestions = new ArrayList<>(limit);
+    userRepository.suggest(sanitized, excluded, page).stream()
+        .map(
+            u ->
+                new SuggestionDto(
+                    SuggestionType.USER,
+                    u.getId(),
+                    u.getFullName(),
+                    u.getUsername() == null ? null : "@" + u.getUsername(),
+                    u.getProfilePictureUrl()))
+        .forEach(suggestions::add);
+
+    bookRepository.suggestByTitle(sanitized, page).stream()
+        .map(
+            b ->
+                new SuggestionDto(
+                    SuggestionType.BOOK,
+                    b.getId(),
+                    b.getTitle(),
+                    null,
+                    bookStorageService.getCoverUrl(b.getCoverImageKey())))
+        .forEach(suggestions::add);
+
+    return suggestions.stream().limit(limit).toList();
   }
 
   /**

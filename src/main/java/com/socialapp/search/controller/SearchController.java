@@ -11,11 +11,13 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialapp.common.utils.Constants;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResponse;
+import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
@@ -46,5 +48,30 @@ public class SearchController {
     List<PostDto> posts = searchService.searchPostsWithBookInfo(q, size, currentUserId, friendIds);
 
     return new SearchResponse(users, posts);
+  }
+
+  /**
+   * Type-ahead suggestions for the search box, fired per keystroke.
+   *
+   * <p>Its own endpoint rather than {@code GET /v1/api/search?size=5}: see {@code
+   * SearchService#suggest} for what the results page does that a per-keystroke call must not.
+   *
+   * <p>Signed-in only, like {@code /search}. Guests read eight endpoints (see {@code
+   * SecurityConfig}) and search is deliberately not one of them — an unauthenticated,
+   * IP-rate-limited-only endpoint that returns people by partial name is a user-directory dump.
+   * Opening it later means adding the path to {@code SecurityConfig} <i>and</i> to {@code
+   * GuestRateLimitProperties.paths}; the two lists have to agree or the endpoint is open and
+   * unthrottled.
+   *
+   * <p>{@code limit} is capped at 20 by {@code @Max}. Without a ceiling this is {@code /search}
+   * with no pager and no total, which is a cheaper way to page through the user table than the
+   * paged endpoint.
+   */
+  @GetMapping("/suggest")
+  public List<SuggestionDto> suggest(
+      @RequestParam @NotBlank String q,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SUGGEST_LIMIT) @Positive @Max(20)
+          int limit) {
+    return searchService.suggest(q, limit, SecurityUtils.getCurrentUserId());
   }
 }

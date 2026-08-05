@@ -86,13 +86,26 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
       @Param("cursor") Integer cursor,
       Pageable pageable);
 
+  /**
+   * Substring search over post content and event title.
+   *
+   * <p><b>The function name matters.</b> {@code f_unaccent} is the IMMUTABLE wrapper created by
+   * {@code V48__add_trigram_search_indexes.sql}, and the two trigram GIN indexes there are built
+   * on {@code f_unaccent(lower(...))}. Postgres picks an expression index by comparing the parsed
+   * expression, so switching this back to plain {@code unaccent(...)} does not fail — it just
+   * stops using the index and goes back to scanning the whole table, with nothing in the log to
+   * say so.
+   *
+   * <p>The pattern still needs three characters before trigram matching can help; a one- or
+   * two-character query has no full trigram to look up and falls back to a scan by design.
+   */
   @Query(
       value =
           """
                               SELECT * FROM socialapp.t_posts p
-                              WHERE (unaccent(LOWER(p.content)) LIKE unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\'
-                                 OR unaccent(LOWER(p.event_details ->> 'eventTitle'))
-                                      LIKE unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
+                              WHERE (f_unaccent(LOWER(p.content)) LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\'
+                                 OR f_unaccent(LOWER(p.event_details ->> 'eventTitle'))
+                                      LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
                                 AND p.author_id NOT IN :excludedAuthorIds
                                 AND (p.visibility = 'PUBLIC'
                                      OR p.author_id = :currentUserId
@@ -107,9 +120,9 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
       countQuery =
           """
                               SELECT COUNT(*) FROM socialapp.t_posts p
-                              WHERE (unaccent(LOWER(p.content)) LIKE unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\'
-                                 OR unaccent(LOWER(p.event_details ->> 'eventTitle'))
-                                      LIKE unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
+                              WHERE (f_unaccent(LOWER(p.content)) LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\'
+                                 OR f_unaccent(LOWER(p.event_details ->> 'eventTitle'))
+                                      LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
                                 AND p.author_id NOT IN :excludedAuthorIds
                                 AND (p.visibility = 'PUBLIC'
                                      OR p.author_id = :currentUserId

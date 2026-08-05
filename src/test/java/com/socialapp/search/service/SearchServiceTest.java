@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -39,6 +40,8 @@ import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResult;
+import com.socialapp.search.dto.SuggestionDto;
+import com.socialapp.search.dto.SuggestionType;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -502,6 +505,84 @@ class SearchServiceTest {
 
       // Then
       assertThat(posts).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // suggest  (C2 — the type-ahead dropdown)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("suggest")
+  class SuggestTests {
+
+    @Test
+    @DisplayName("should return people first, then books, in one flat list")
+    void shouldReturnUsersThenBooks() {
+      // Given
+      UserEntity user = new UserEntity();
+      user.setId(1);
+      user.setFullName("Nguyen Truc");
+      user.setUsername("nguyentruc");
+      BookEntity book = new BookEntity();
+      book.setId(9);
+      book.setTitle("Lap trinh Java");
+
+      when(blockQueryService.blockedPairIds(1)).thenReturn(Set.of());
+      when(userRepository.suggest(any(), any(), any())).thenReturn(List.of(user));
+      when(bookRepository.suggestByTitle(any(), any())).thenReturn(List.of(book));
+
+      // When
+      List<SuggestionDto> result = searchService.suggest("lap", 8, 1);
+
+      // Then
+      assertThat(result).hasSize(2);
+      assertThat(result.get(0).type()).isEqualTo(SuggestionType.USER);
+      assertThat(result.get(0).sublabel()).isEqualTo("@nguyentruc");
+      assertThat(result.get(1).type()).isEqualTo(SuggestionType.BOOK);
+      assertThat(result.get(1).label()).isEqualTo("Lap trinh Java");
+    }
+
+    @Test
+    @DisplayName("should pass the caller's block set to the query, never an empty IN list")
+    void shouldPassBlockSetAsExclusion() {
+      // Given: a dropdown that completes the name of someone who blocked the viewer hands back
+      // exactly the link the block exists to take away
+      when(blockQueryService.blockedPairIds(1)).thenReturn(Set.of(99));
+      when(userRepository.suggest(any(), any(), any())).thenReturn(List.of());
+      when(bookRepository.suggestByTitle(any(), any())).thenReturn(List.of());
+
+      // When
+      searchService.suggest("x", 8, 1);
+
+      // Then
+      verify(userRepository).suggest(any(), eq(Set.of(99)), any());
+    }
+
+    @Test
+    @DisplayName("should never return more rows than the requested limit")
+    void shouldTrimToLimit() {
+      // Given
+      UserEntity u1 = new UserEntity();
+      u1.setId(1);
+      u1.setFullName("A");
+      UserEntity u2 = new UserEntity();
+      u2.setId(2);
+      u2.setFullName("B");
+      BookEntity book = new BookEntity();
+      book.setId(9);
+      book.setTitle("C");
+
+      when(blockQueryService.blockedPairIds(1)).thenReturn(Set.of());
+      when(userRepository.suggest(any(), any(), any())).thenReturn(List.of(u1, u2));
+      when(bookRepository.suggestByTitle(any(), any())).thenReturn(List.of(book));
+
+      // When: both lists are filled to limit and the whole thing trimmed afterwards, so a query
+      // matching only books still fills the dropdown
+      List<SuggestionDto> result = searchService.suggest("x", 2, 1);
+
+      // Then
+      assertThat(result).hasSize(2);
     }
   }
 }
