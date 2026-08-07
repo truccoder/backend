@@ -26,6 +26,7 @@ import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.PendingVerificationDto;
+import com.socialapp.roadmap.dto.RoadmapProgressDto;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -515,6 +516,80 @@ class SkillVerificationServiceTest {
           .extracting(Object::toString)
           .asString()
           .doesNotContain("hashed");
+    }
+  }
+
+  // =====================================================================
+  // getProgressForUser  (D1 — the "verified skills" card)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getProgressForUser")
+  class GetProgressForUserTests {
+
+    private UserRoadmapProgressEntity progress(VerificationStatus status, String nodeName) {
+      RoadmapNodeEntity node = RoadmapNodeEntity.builder().id(1).name(nodeName).build();
+      UserEntity owner = new UserEntity();
+      owner.setId(1);
+      return UserRoadmapProgressEntity.builder()
+          .id(1)
+          .user(owner)
+          .node(node)
+          .tier(VerificationTier.SELF_VERIFIED)
+          .status(status)
+          .proofUrl("https://private.example/certificate.pdf")
+          .build();
+    }
+
+    @Test
+    @DisplayName("should show a stranger only the skills that were actually verified")
+    void shouldHideUnverifiedFromStrangers() {
+      // Given
+      when(progressRepository.findByUserIdWithNode(1))
+          .thenReturn(
+              List.of(
+                  progress(VerificationStatus.VERIFIED, "Java"),
+                  progress(VerificationStatus.PENDING_APPROVAL, "Kubernetes"),
+                  progress(VerificationStatus.REJECTED, "Rust")));
+
+      // When
+      List<RoadmapProgressDto> result = skillVerificationService.getProgressForUser(1, 2);
+
+      // Then: a rejected verification is a record of a claim that was turned down; publishing it
+      // turns a "verified skills" card into a list of somebody's failed claims
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).getNodeName()).isEqualTo("Java");
+    }
+
+    @Test
+    @DisplayName("should show the owner their pending and rejected skills too")
+    void shouldShowEverythingToOwner() {
+      // Given
+      when(progressRepository.findByUserIdWithNode(1))
+          .thenReturn(
+              List.of(
+                  progress(VerificationStatus.VERIFIED, "Java"),
+                  progress(VerificationStatus.PENDING_APPROVAL, "Kubernetes")));
+
+      // When
+      List<RoadmapProgressDto> result = skillVerificationService.getProgressForUser(1, 1);
+
+      // Then
+      assertThat(result).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("should treat a signed-out visitor as a stranger")
+    void shouldTreatGuestAsStranger() {
+      // Given: viewerId is null for a guest, and this endpoint is part of the public profile
+      when(progressRepository.findByUserIdWithNode(1))
+          .thenReturn(List.of(progress(VerificationStatus.PENDING_APPROVAL, "Kubernetes")));
+
+      // When
+      List<RoadmapProgressDto> result = skillVerificationService.getProgressForUser(1, null);
+
+      // Then
+      assertThat(result).isEmpty();
     }
   }
 }

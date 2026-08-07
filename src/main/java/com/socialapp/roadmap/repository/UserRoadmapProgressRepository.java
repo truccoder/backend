@@ -29,6 +29,20 @@ public interface UserRoadmapProgressRepository
   List<UserRoadmapProgressEntity> findByStatusWithUserAndNode(
       @Param("status") VerificationStatus status);
 
+  /**
+   * One user's whole roadmap progress with the node joined in.
+   *
+   * <p>{@link #findByUserId} leaves {@code node} lazy, and with {@code open-in-view} off every row
+   * of the profile card would then be its own query — or a {@code LazyInitializationException} if
+   * the mapping happened one layer too late.
+   */
+  @Query(
+      "SELECT p FROM UserRoadmapProgressEntity p "
+          + "JOIN FETCH p.node "
+          + "WHERE p.user.id = :userId "
+          + "ORDER BY p.node.orderIndex ASC, p.node.id ASC")
+  List<UserRoadmapProgressEntity> findByUserIdWithNode(@Param("userId") Integer userId);
+
   Optional<UserRoadmapProgressEntity> findByUserIdAndNodeId(Integer userId, Integer nodeId);
 
   boolean existsByUserIdAndStatus(Integer userId, VerificationStatus status);

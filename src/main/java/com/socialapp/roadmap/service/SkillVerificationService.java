@@ -12,6 +12,7 @@ import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.PendingVerificationDto;
+import com.socialapp.roadmap.dto.RoadmapProgressDto;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.entity.RoadmapNodeEntity;
 import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
@@ -33,6 +34,28 @@ public class SkillVerificationService {
   private final UserRepository userRepository;
   private final GithubStatsRepository githubStatsRepository;
   private final ReputationEventPublisher reputationEventPublisher;
+
+  /**
+   * One user's roadmap progress, for the "verified skills" card on their profile.
+   *
+   * <p><b>Strangers see verified skills only.</b> The owner gets every row, including what is still
+   * waiting on a moderator and what was turned down; nobody else does. A rejected verification is a
+   * record of someone claiming a skill and being told no — publishing that turns a profile card
+   * into a list of a person's failed claims, which is not what "verified skills" means. A pending
+   * one is equally not a fact yet.
+   *
+   * <p>{@code viewerId} is null for a signed-out visitor, which lands on the stranger branch: this
+   * endpoint is part of the public profile.
+   */
+  @Transactional(readOnly = true)
+  public List<RoadmapProgressDto> getProgressForUser(Integer userId, Integer viewerId) {
+    boolean isOwner = userId.equals(viewerId);
+
+    return progressRepository.findByUserIdWithNode(userId).stream()
+        .filter(p -> isOwner || VerificationStatus.VERIFIED.equals(p.getStatus()))
+        .map(RoadmapProgressDto::from)
+        .toList();
+  }
 
   @Transactional
   public void submitVerificationRequest(Integer userId, SkillVerificationRequestDto dto) {

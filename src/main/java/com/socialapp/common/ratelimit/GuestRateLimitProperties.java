@@ -34,6 +34,7 @@ public class GuestRateLimitProperties {
           "/v1/api/users/*/profile",
           "/v1/api/users/*/posts",
           "/v1/api/users/*/reputation",
+          "/v1/api/users/*/roadmap-progress",
           "/v1/api/github/stats/*",
           "/v1/api/books/author/*",
           "/v1/api/trending");

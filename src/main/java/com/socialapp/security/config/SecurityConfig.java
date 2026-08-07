@@ -107,6 +107,11 @@ public class SecurityConfig {
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/v1/api/users/*/reputation")
                         .permitAll()
+                        // The "verified skills" card, another section of the same public profile.
+                        // Only VERIFIED rows reach a non-owner and the DTO carries no proof links
+                        // — see UserRoadmapProgressController.
+                        .requestMatchers(HttpMethod.GET, "/v1/api/users/*/roadmap-progress")
+                        .permitAll()
                         .requestMatchers(HttpMethod.GET, "/v1/api/github/stats/*")
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/v1/api/books/author/*")
