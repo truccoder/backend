@@ -33,6 +33,7 @@ public class BookService {
   private final BookPurchaseRepository purchaseRepository;
   private final BookStorageService bookStorageService;
   private final BookIngestionService bookIngestionService;
+  private final BookResponseMapper bookResponseMapper;
 
   /**
    * Creates a book already linked to a post. This is the only way to create a book — always
@@ -51,7 +52,7 @@ public class BookService {
 
   public BookResponseDto getBook(Integer bookId, Integer requesterId) {
     BookEntity book = findBookOrThrow(bookId);
-    return toResponseDto(book, requesterId);
+    return bookResponseMapper.toResponseDto(book, requesterId);
   }
 
   /**
@@ -72,7 +73,7 @@ public class BookService {
     List<BookEntity> visible = hasMore ? page.subList(0, limit) : page;
 
     List<BookResponseDto> items =
-        visible.stream().map(book -> toResponseDto(book, requesterId)).toList();
+        visible.stream().map(book -> bookResponseMapper.toResponseDto(book, requesterId)).toList();
     Integer nextCursor = visible.isEmpty() ? null : visible.get(visible.size() - 1).getId();
 
     return new BookPageResponseDto(items, nextCursor, hasMore);
@@ -80,7 +81,7 @@ public class BookService {
 
   public List<BookResponseDto> getBooksByAuthor(Integer authorId, Integer requesterId) {
     return bookRepository.findByAuthorIdOrderByCreatedAtDesc(authorId).stream()
-        .map(book -> toResponseDto(book, requesterId))
+        .map(book -> bookResponseMapper.toResponseDto(book, requesterId))
         .toList();
   }
 
@@ -103,11 +104,7 @@ public class BookService {
 
   public String getPreviewUrl(Integer bookId) {
     BookEntity book = findBookOrThrow(bookId);
-    return bookStorageService.getPreviewUrl(previewKeyOrFallback(book));
-  }
-
-  private String previewKeyOrFallback(BookEntity book) {
-    return book.getPreviewFileKey() != null ? book.getPreviewFileKey() : book.getFileKey();
+    return bookStorageService.getPreviewUrl(bookResponseMapper.previewKeyOrFallback(book));
   }
 
   @Transactional
@@ -160,46 +157,5 @@ public class BookService {
     return bookRepository
         .findById(bookId)
         .orElseThrow(() -> new NotFoundException("Book not found: " + bookId));
-  }
-
-  private BookResponseDto toResponseDto(BookEntity book, Integer requesterId) {
-    boolean purchased =
-        !book.getIsFree()
-            && requesterId != null
-            && (book.getAuthorId().equals(requesterId)
-                || purchaseRepository.existsByBookIdAndBuyerIdAndPaymentStatus(
-                    book.getId(), requesterId, PaymentStatus.COMPLETED));
-
-    String downloadUrl = null;
-    String previewUrl = null;
-
-    if (book.getIsFree() || purchased) {
-      downloadUrl = bookStorageService.getDownloadUrl(book.getFileKey());
-    } else {
-      previewUrl = bookStorageService.getPreviewUrl(previewKeyOrFallback(book));
-    }
-
-    return BookResponseDto.builder()
-        .id(book.getId())
-        .authorId(book.getAuthorId())
-        .postId(book.getPostId())
-        .title(book.getTitle())
-        .description(book.getDescription())
-        .downloadUrl(downloadUrl)
-        .previewUrl(previewUrl)
-        .coverImageUrl(bookStorageService.getCoverUrl(book.getCoverImageKey()))
-        .fileFormat(book.getFileFormat())
-        .fileSizeBytes(book.getFileSizeBytes())
-        .totalPages(book.getTotalPages())
-        .previewPages(book.getPreviewPages())
-        .price(book.getPrice())
-        .currency(book.getCurrency())
-        .isFree(book.getIsFree())
-        .downloadCount(book.getDownloadCount())
-        .avgRating(book.getAvgRating())
-        .reviewCount(book.getReviewCount())
-        .purchased(purchased)
-        .createdAt(book.getCreatedAt())
-        .build();
   }
 }

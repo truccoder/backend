@@ -26,6 +26,7 @@ import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
+import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -69,6 +70,10 @@ class SearchControllerTest {
   @Autowired private MockMvc mockMvc;
 
   @MockBean private SearchService searchService;
+
+  // /search/suggest now goes through its own service — see SuggestService for why the type-ahead
+  // path is kept off the results-page code.
+  @MockBean private SuggestService suggestService;
   @MockBean private FriendshipQueryService friendshipQueryService;
   @MockBean private JwtProvider jwtProvider;
 

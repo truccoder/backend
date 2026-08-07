@@ -12,13 +12,13 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
@@ -60,8 +60,28 @@ class BookServiceTest {
   @Mock private BookPurchaseRepository purchaseRepository;
   @Mock private BookStorageService bookStorageService;
   @Mock private BookPreviewGenerator bookPreviewGenerator;
+  @Mock private BookIngestionService bookIngestionService;
 
-  @InjectMocks private BookService bookService;
+  /**
+   * A <b>real</b> mapper over the same mocks, not a mock of it. The download-vs-preview rule these
+   * tests assert moved into {@link BookResponseMapper}; mocking it would leave those assertions
+   * checking a stub instead of the rule.
+   */
+  private BookResponseMapper bookResponseMapper;
+
+  private BookService bookService;
+
+  @BeforeEach
+  void wireService() {
+    bookResponseMapper = new BookResponseMapper(purchaseRepository, bookStorageService);
+    bookService =
+        new BookService(
+            bookRepository,
+            purchaseRepository,
+            bookStorageService,
+            bookIngestionService,
+            bookResponseMapper);
+  }
 
   @Captor private ArgumentCaptor<BookEntity> bookCaptor;
 

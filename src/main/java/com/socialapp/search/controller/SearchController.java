@@ -15,6 +15,7 @@ import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
+import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.constraints.Max;
@@ -33,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class SearchController {
   private final SearchService searchService;
+  private final SuggestService suggestService;
   private final FriendshipQueryService friendshipQueryService;
 
   @GetMapping
@@ -54,7 +56,7 @@ public class SearchController {
    * Type-ahead suggestions for the search box, fired per keystroke.
    *
    * <p>Its own endpoint rather than {@code GET /v1/api/search?size=5}: see {@code
-   * SearchService#suggest} for what the results page does that a per-keystroke call must not.
+   * SuggestService#suggest} for what the results page does that a per-keystroke call must not.
    *
    * <p>Signed-in only, like {@code /search}. Guests read eight endpoints (see {@code
    * SecurityConfig}) and search is deliberately not one of them — an unauthenticated,
@@ -72,6 +74,6 @@ public class SearchController {
       @RequestParam @NotBlank String q,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SUGGEST_LIMIT) @Positive @Max(20)
           int limit) {
-    return searchService.suggest(q, limit, SecurityUtils.getCurrentUserId());
+    return suggestService.suggest(q, limit, SecurityUtils.getCurrentUserId());
   }
 }
