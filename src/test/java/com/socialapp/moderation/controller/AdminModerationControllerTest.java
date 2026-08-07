@@ -28,6 +28,7 @@ import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.moderation.service.AdminModerationService;
+import com.socialapp.moderation.service.AppealService;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -63,13 +64,12 @@ class AdminModerationControllerTest {
   @Autowired private MockMvc mockMvc;
 
   @MockBean private AdminModerationService adminModerationService;
+  @MockBean private AppealService appealService;
   @MockBean private JwtProvider jwtProvider;
 
-  // This slice imports the real JwtAuthenticationFilter, which now takes a BanDetailsService to
-  // build the banned-account 403. Without this mock the whole application context fails to start
-  // with NoSuchBeanDefinitionException, so every test in the class errors out — and it compiles
-  // fine either way, which is why only a full `build` catches it.
-  @MockBean private BanDetailsService banDetailsService;
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
 
   @MockBean private UserRepository userRepository;
 
@@ -269,8 +269,8 @@ class AdminModerationControllerTest {
       // Given
       String requestJson =
           """
-              { "decision": "VERY_UNLIKELY", "feedback": "Looks fine" }
-              """;
+          { "decision": "VERY_UNLIKELY", "feedback": "Looks fine" }
+          """;
 
       // When / Then
       mockMvc
@@ -287,8 +287,8 @@ class AdminModerationControllerTest {
       // Given
       String requestJson =
           """
-              { "feedback": "No decision given" }
-              """;
+          { "feedback": "No decision given" }
+          """;
 
       // When / Then
       mockMvc
@@ -305,11 +305,11 @@ class AdminModerationControllerTest {
       // Given
       org.mockito.Mockito.doThrow(new IllegalStateException("Post is not in PENDING_REVIEW status"))
           .when(adminModerationService)
-          .reviewPost(org.mockito.ArgumentMatchers.anyInt(), any(), any());
+          .reviewPost(org.mockito.ArgumentMatchers.anyInt(), any(), any(), any());
       String requestJson =
           """
-              { "decision": "LIKELY" }
-              """;
+          { "decision": "LIKELY" }
+          """;
 
       // When / Then
       mockMvc
@@ -327,8 +327,8 @@ class AdminModerationControllerTest {
       // Given
       String requestJson =
           """
-              { "decision": "LIKELY" }
-              """;
+          { "decision": "LIKELY" }
+          """;
 
       // When / Then — EP: postId must be an Integer
       mockMvc
@@ -345,8 +345,8 @@ class AdminModerationControllerTest {
       // Given
       String requestJson =
           """
-              { "decision": "LIKELY" }
-              """;
+          { "decision": "LIKELY" }
+          """;
 
       // When / Then
       mockMvc
@@ -363,8 +363,8 @@ class AdminModerationControllerTest {
       // Given
       String requestJson =
           """
-              { "decision": "LIKELY" }
-              """;
+          { "decision": "LIKELY" }
+          """;
 
       // When / Then
       mockMvc
