@@ -46,6 +46,10 @@ class GithubApiClientTest {
     ReflectionTestUtils.setField(githubApiClient, "clientId", "test-client-id");
     ReflectionTestUtils.setField(githubApiClient, "clientSecret", "test-client-secret");
     ReflectionTestUtils.setField(githubApiClient, "redirectUri", "https://app.test/oauth/callback");
+    // The link flow has its own callback: a GitHub code is single-use, so sharing one route
+    // meant the login handler spent the code the link flow needed (B23a).
+    ReflectionTestUtils.setField(
+        githubApiClient, "linkRedirectUri", "https://app.test/settings/github/callback");
   }
 
   @SuppressWarnings({"unchecked", "rawtypes"})
@@ -115,6 +119,19 @@ class GithubApiClientTest {
           .startsWith("https://github.com/login/oauth/authorize?")
           .contains("client_id=test-client-id")
           .contains("redirect_uri=https://app.test/oauth/callback");
+    }
+
+    @Test
+    @DisplayName("should point the link flow at its own callback, not the sign-in one")
+    void shouldUseSeparateCallbackForLinking() {
+      // When
+      String url = githubApiClient.getLinkOAuthUrl();
+
+      // Then: the two flows must not share a callback — one GitHub code, two consumers, and the
+      // login handler always got there first, so linking could never complete (B23a).
+      assertThat(url)
+          .contains("redirect_uri=https://app.test/settings/github/callback")
+          .doesNotContain("redirect_uri=https://app.test/oauth/callback");
     }
   }
 

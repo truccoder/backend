@@ -26,13 +26,20 @@ public class GithubService {
   private final GithubApiClient githubApiClient;
   private final GithubStatsRepository githubStatsRepository;
 
+  /**
+   * The authorisation URL for <b>linking</b>, not for signing in.
+   *
+   * <p>{@code OAuthAuthService.getGithubOAuthUrl} returns the sign-in one. They used to be the same
+   * URL with the same callback, which is what made linking impossible — see {@code
+   * GithubApiClient#redirectUri}.
+   */
   public GithubOAuthUrlResponse getOAuthUrl() {
-    return GithubOAuthUrlResponse.builder().oauthUrl(githubApiClient.getOAuthUrl()).build();
+    return GithubOAuthUrlResponse.builder().oauthUrl(githubApiClient.getLinkOAuthUrl()).build();
   }
 
   @Transactional
   public void linkAccountWithCode(UserEntity user, String code) {
-    String accessToken = githubApiClient.exchangeCodeForToken(code);
+    String accessToken = githubApiClient.exchangeCodeForLinkToken(code);
     JsonNode githubUser = githubApiClient.getAuthenticatedUser(accessToken);
     linkAccountWithTokenAndProfile(user, accessToken, githubUser);
   }
@@ -62,11 +69,44 @@ public class GithubService {
     syncGithubData(entity);
   }
 
+  /**
+   * Best-effort sync, for the moment an account is first linked.
+   *
+   * <p>Swallowing the failure is correct <em>here</em>: the link itself succeeded, the token is
+   * stored, and failing the whole link because GitHub's GraphQL API was briefly unavailable would
+   * throw away a completed OAuth round trip. The stats simply arrive on the next sync.
+   *
+   * <p>It was <b>not</b> correct for {@link #syncNow}, which is a user pressing "Sync" and waiting
+   * for an answer. That path now calls {@link #performSync} and lets the failure surface — see
+   * {@code B23b}.
+   */
   @Transactional
   public void syncGithubData(GithubStatsEntity entity) {
+    try {
+      performSync(entity);
+    } catch (Exception e) {
+      log.error(
+          "Error syncing GitHub stats for user {}; the account stays linked",
+          entity.getUser().getId(),
+          e);
+    }
+  }
+
+  /**
+   * Pulls profile, pinned repos and contribution graph from GitHub, and <b>throws</b> if any of it
+   * fails.
+   *
+   * @throws ExternalApiException if the account has no stored token, or GitHub refused. The token
+   *     case is an exception rather than a silent return because the only ways to reach it are a
+   *     revoked authorisation or a half-written link row, and both need re-linking — telling the
+   *     user "synced" and changing nothing leaves them staring at stale numbers with no reason
+   *     given.
+   */
+  @Transactional
+  public void performSync(GithubStatsEntity entity) {
     if (entity.getAccessToken() == null) {
-      log.warn("User {} has no access token, skipping sync", entity.getUser().getId());
-      return;
+      throw new ExternalApiException(
+          "This GitHub account has no stored access token; please link it again");
     }
 
     try {
@@ -92,6 +132,7 @@ public class GithubService {
       log.info("Successfully synced GitHub stats for user {}", entity.getUser().getId());
     } catch (Exception e) {
       log.error("Error syncing GitHub stats for user {}", entity.getUser().getId(), e);
+      throw new ExternalApiException("Failed to sync GitHub data: " + e.getMessage(), e);
     }
   }
 
@@ -130,6 +171,9 @@ public class GithubService {
       throw new IllegalStateException("Please wait at least 1 hour before syncing again");
     }
 
-    syncGithubData(entity);
+    // performSync, not syncGithubData: a manual sync that fails silently is worse than one that
+    // errors — the user pressed a button, watched it say nothing, and has no way to tell a
+    // successful no-op from a broken token (B23b).
+    performSync(entity);
   }
 }

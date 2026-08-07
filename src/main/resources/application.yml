@@ -159,7 +159,13 @@ github:
   oauth:
     client-id: ${GITHUB_OAUTH_CLIENT_ID:}
     client-secret: ${GITHUB_OAUTH_CLIENT_SECRET:}
+    # Sign in with GitHub.
     redirect-uri: ${GITHUB_OAUTH_REDIRECT_URI:http://localhost:3000/oauth/github/callback}
+    # Link GitHub to an account that is already signed in. Must be a DIFFERENT route from the one
+    # above, and both must be registered on the GitHub OAuth app. A GitHub code is single-use, so
+    # sharing one callback meant the login handler consumed the code the link flow needed and
+    # linking never worked (B23a).
+    link-redirect-uri: ${GITHUB_OAUTH_LINK_REDIRECT_URI:http://localhost:3000/settings/github/callback}
 
 # MoMo AIO v2 sandbox. partner-code/access-key/secret-key default to MoMo's own publicly
 # published test credentials (github.com/momo-wallet/payment) so this works out of the box

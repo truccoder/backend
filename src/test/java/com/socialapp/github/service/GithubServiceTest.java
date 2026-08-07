@@ -80,7 +80,8 @@ class GithubServiceTest {
     @DisplayName("should wrap the api client's authorize URL in the response DTO")
     void shouldDelegateToApiClient() {
       // Given
-      when(githubApiClient.getOAuthUrl())
+      // GithubService serves the LINK flow, which has its own callback route (E4/B23a).
+      when(githubApiClient.getLinkOAuthUrl())
           .thenReturn("https://github.com/login/oauth/authorize?client_id=x");
 
       // When
@@ -106,7 +107,7 @@ class GithubServiceTest {
       // Given
       JsonNode githubUser =
           json("{\"login\":\"" + USERNAME + "\",\"public_repos\":5,\"followers\":10}");
-      when(githubApiClient.exchangeCodeForToken("auth-code")).thenReturn(ACCESS_TOKEN);
+      when(githubApiClient.exchangeCodeForLinkToken("auth-code")).thenReturn(ACCESS_TOKEN);
       when(githubApiClient.getAuthenticatedUser(ACCESS_TOKEN)).thenReturn(githubUser);
       when(githubStatsRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
       when(githubApiClient.fetchPinnedRepos(USERNAME, ACCESS_TOKEN))
