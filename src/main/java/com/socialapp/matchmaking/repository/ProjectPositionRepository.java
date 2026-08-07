@@ -1,5 +1,6 @@
 package com.socialapp.matchmaking.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -21,4 +22,18 @@ public interface ProjectPositionRepository extends JpaRepository<ProjectPosition
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select p from ProjectPositionEntity p where p.id = :id")
   Optional<ProjectPositionEntity> findByIdForUpdate(@Param("id") Integer id);
+
+  /**
+   * Every position belonging to any of {@code projectIds}, in one query.
+   *
+   * <p>This is what keeps the project list at two queries instead of one per project: the caller
+   * loads a page of projects, then all of that page's positions here, then groups them in memory.
+   */
+  @Query(
+      """
+      SELECT p FROM ProjectPositionEntity p
+      WHERE p.project.id IN :projectIds
+      ORDER BY p.id ASC
+      """)
+  List<ProjectPositionEntity> findByProjectIdIn(@Param("projectIds") List<Integer> projectIds);
 }
