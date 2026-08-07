@@ -81,6 +81,11 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  /**
+   * <p>Attaches {@code banDetails} alongside the sentence. The sentence is kept so nothing that
+   * reads {@code message} today breaks; the structured object is what a client should read, because
+   * the end date used to be extractable only by parsing English prose. See {@code BanDetailsDto}.
+   */
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(AccountBannedException.class)
   public ErrorResponseDto handle(AccountBannedException ex, HttpServletRequest request) {
@@ -91,6 +96,7 @@ public class GlobalExceptionHandler {
         .error("Account Banned")
         .message(ex.getMessage())
         .path(request.getRequestURI())
+        .banDetails(ex.getBanDetails())
         .build();
   }
 

@@ -25,6 +25,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.github.service.GithubApiClient;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.dto.OAuthUrlResponseDto;
 import com.socialapp.security.entity.AuthProvider;
@@ -46,6 +47,8 @@ class OAuthAuthServiceTest {
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
   @Mock private UserRepository userRepository;
+
+  @Mock private BanDetailsService banDetailsService;
   @Mock private TokenService tokenService;
   @Mock private GoogleApiClient googleApiClient;
   @Mock private GithubApiClient githubApiClient;

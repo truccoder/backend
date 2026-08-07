@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.*;
 import com.socialapp.security.entity.EmailVerificationToken;
@@ -50,6 +51,10 @@ public class AuthService {
   private final MagicLinkTokenRepository magicLinkTokenRepository;
   private final MailService mailService;
   private final ProfileService profileService;
+
+  // Describes why an account is locked, so the 403 carries structured banDetails rather than
+  // only an English sentence with a date embedded in it.
+  private final BanDetailsService banDetailsService;
 
   @Transactional
   public void register(RegisterRequestDto request, MultipartFile profilePicture) {
@@ -138,7 +143,8 @@ public class AuthService {
 
     if (user.isBanned()) {
       refreshTokenRepository.delete(stored);
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     refreshTokenRepository.delete(stored);
@@ -233,7 +239,8 @@ public class AuthService {
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     if (user.isBanned()) {
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     return tokenService.issueTokens(user);
@@ -317,7 +324,8 @@ public class AuthService {
     }
 
     if (user.isBanned()) {
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     return user;

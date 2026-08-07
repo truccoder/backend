@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.entity.enums.EmailFrequency;
@@ -71,6 +72,11 @@ class NotificationControllerTest {
 
   @MockBean private NotificationService notificationService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String NOTIFICATIONS_URL = "/v1/api/notifications";

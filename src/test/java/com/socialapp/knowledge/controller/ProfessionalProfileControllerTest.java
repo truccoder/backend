@@ -27,6 +27,7 @@ import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 import com.socialapp.knowledge.service.ProfessionalProfileService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -54,6 +55,11 @@ class ProfessionalProfileControllerTest {
 
   @MockBean private ProfessionalProfileService profileService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String PROFILE_URL = "/v1/api/profile/professional";

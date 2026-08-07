@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.reputation.dto.ReputationResponseDto;
 import com.socialapp.reputation.service.ReputationService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -58,6 +59,11 @@ class ReputationControllerTest {
 
   @MockBean private ReputationService reputationService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String VALID_TOKEN = "a-valid-jwt-token";

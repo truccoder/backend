@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.posts.dto.LocationResolutionResponseDto;
 import com.socialapp.posts.entity.enums.LocationType;
 import com.socialapp.posts.service.LocationResolutionService;
@@ -60,6 +61,11 @@ class LocationControllerTest {
 
   @MockBean private LocationResolutionService locationResolutionService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String RESOLVE_URL = "/v1/api/posts/locations/resolve";

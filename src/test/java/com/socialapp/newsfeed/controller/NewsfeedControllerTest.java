@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.service.NewsfeedService;
@@ -56,6 +57,11 @@ class NewsfeedControllerTest {
 
   @MockBean private NewsfeedService newsfeedService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String FEED_URL = "/v1/api/feed";

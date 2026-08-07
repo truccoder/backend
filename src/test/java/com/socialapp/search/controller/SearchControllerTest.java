@@ -21,6 +21,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
@@ -70,6 +71,11 @@ class SearchControllerTest {
   @MockBean private SearchService searchService;
   @MockBean private FriendshipQueryService friendshipQueryService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String SEARCH_URL = "/v1/api/search";

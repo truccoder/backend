@@ -27,6 +27,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.dto.ForgotPasswordRequestDto;
@@ -63,6 +64,8 @@ class AuthServiceTest {
   private static final String ENCODED_PASSWORD = "{bcrypt}encoded";
 
   @Mock private UserRepository userRepository;
+
+  @Mock private BanDetailsService banDetailsService;
   @Mock private PasswordEncoder passwordEncoder;
   @Mock private TokenService tokenService;
   @Mock private RefreshTokenRepository refreshTokenRepository;

@@ -27,6 +27,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.socialapp.blocks.service.BlockService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -54,6 +55,11 @@ class BlockControllerTest {
 
   @MockBean private BlockService blockService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String BLOCKS_URL = "/v1/api/blocks";

@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.service.PostQueryService;
@@ -53,6 +54,11 @@ class UserPostsControllerTest {
 
   @MockBean private PostQueryService postQueryService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String VALID_TOKEN = "a-valid-jwt-token";

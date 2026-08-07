@@ -37,6 +37,7 @@ import com.socialapp.friendships.dto.SentFriendRequestDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -75,6 +76,11 @@ class FriendshipControllerTest {
 
   @MockBean private FriendshipService friendshipService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String FRIENDSHIPS_URL = "/v1/api/friendships";

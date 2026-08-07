@@ -34,6 +34,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.dto.BanDetailsDto;
+import com.socialapp.moderation.enums.ViolationType;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -82,6 +85,11 @@ class AuthControllerTest {
   // JwtAuthenticationFilter's own dependencies — mocked so the real filter chain in
   // SecurityConfig can be wired up without needing a live JWT signing key or database.
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String REGISTER_URL = "/v1/api/auth/register";
@@ -181,7 +189,14 @@ class AuthControllerTest {
     void shouldReturn403_whenLoginThrowsAccountBannedException() throws Exception {
       // Given
       OffsetDateTime bannedUntil = OffsetDateTime.parse("2026-12-31T00:00:00Z");
-      when(authService.login(any())).thenThrow(new AccountBannedException(bannedUntil));
+      when(authService.login(any()))
+          .thenThrow(
+              new AccountBannedException(
+                  BanDetailsDto.builder()
+                      .bannedUntil(bannedUntil)
+                      .violationType(ViolationType.SPAM)
+                      .reason("Admin manual review: repeated advertising")
+                      .build()));
       String requestJson =
           """
           { "email": "banned@example.com", "password": "12345678a" }
@@ -193,7 +208,13 @@ class AuthControllerTest {
           .andExpect(status().isForbidden())
           .andExpect(jsonPath("$.code").value(403))
           .andExpect(jsonPath("$.error").value("Account Banned"))
-          .andExpect(jsonPath("$.message").value(containsString("banned until")));
+          .andExpect(jsonPath("$.message").value(containsString("banned until")))
+          // The structured half (E2): the end date used to be readable only by parsing it back
+          // out of the English sentence above.
+          .andExpect(jsonPath("$.banDetails.bannedUntil").exists())
+          .andExpect(jsonPath("$.banDetails.violationType").value("SPAM"))
+          .andExpect(
+              jsonPath("$.banDetails.reason").value("Admin manual review: repeated advertising"));
     }
 
     @Test

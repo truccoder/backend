@@ -29,6 +29,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.posts.dto.EventAttendeeDto;
 import com.socialapp.posts.entity.enums.RsvpStatus;
 import com.socialapp.posts.service.EventService;
@@ -73,6 +74,11 @@ class EventControllerTest {
   @MockBean private EventService eventService;
   @MockBean private GoogleCalendarService googleCalendarService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String EVENTS_URL = "/v1/api/events";

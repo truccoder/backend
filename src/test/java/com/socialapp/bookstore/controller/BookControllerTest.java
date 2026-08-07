@@ -36,6 +36,7 @@ import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -77,6 +78,11 @@ class BookControllerTest {
   @MockBean private BookService bookService;
   @MockBean private BookReviewService reviewService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String BOOKS_URL = "/v1/api/books";

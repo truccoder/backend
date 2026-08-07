@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.github.service.GithubApiClient;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.dto.OAuthUrlResponseDto;
 import com.socialapp.security.entity.AuthProvider;
@@ -32,6 +33,10 @@ public class OAuthAuthService {
   private final TokenService tokenService;
   private final GoogleApiClient googleApiClient;
   private final GithubApiClient githubApiClient;
+
+  // Describes why an account is locked, so the 403 carries structured banDetails rather than
+  // only an English sentence with a date embedded in it.
+  private final BanDetailsService banDetailsService;
 
   public OAuthUrlResponseDto getGoogleOAuthUrl() {
     return OAuthUrlResponseDto.builder().oauthUrl(googleApiClient.getOAuthUrl()).build();
@@ -69,7 +74,8 @@ public class OAuthAuthService {
       user = userRepository.save(user);
     } else {
       if (user.isBanned()) {
-        throw new AccountBannedException(user.getBannedUntil());
+        throw new AccountBannedException(
+            banDetailsService.describe(user.getId(), user.getBannedUntil()));
       }
 
       if (user.getAuthProvider() == AuthProvider.LOCAL) {
@@ -136,7 +142,8 @@ public class OAuthAuthService {
       user = userRepository.save(user);
     } else {
       if (user.isBanned()) {
-        throw new AccountBannedException(user.getBannedUntil());
+        throw new AccountBannedException(
+            banDetailsService.describe(user.getId(), user.getBannedUntil()));
       }
       if (user.getAuthProvider() == AuthProvider.LOCAL) {
         isAutoLinked = true;

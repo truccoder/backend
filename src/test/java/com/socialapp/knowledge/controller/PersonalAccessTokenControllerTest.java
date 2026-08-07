@@ -31,6 +31,7 @@ import com.socialapp.knowledge.dto.CreateTokenResponseDto;
 import com.socialapp.knowledge.dto.PersonalAccessTokenResponseDto;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.service.PersonalAccessTokenService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -58,6 +59,11 @@ class PersonalAccessTokenControllerTest {
 
   @MockBean private PersonalAccessTokenService tokenService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String TOKENS_URL = "/v1/api/tokens";
