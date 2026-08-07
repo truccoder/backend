@@ -23,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.bookstore.dto.BookPageResponseDto;
 import com.socialapp.bookstore.dto.BookResponseDto;
 import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.bookstore.entity.BookEntity;
@@ -542,6 +543,57 @@ class BookServiceTest {
       assertThatThrownBy(() -> bookService.deleteBooksForPost(POST_ID))
           .isInstanceOf(ValidationException.class);
       verify(bookRepository, never()).delete(any());
+    }
+  }
+
+  // =====================================================================
+  // getLibraryPage  (D2 — the Library front page)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getLibraryPage")
+  class GetLibraryPageTests {
+
+    @Test
+    @DisplayName("should trim the look-ahead row and report hasMore")
+    void shouldTrimLookaheadRow() {
+      // Given: the repository is asked for limit + 1 so hasMore costs no COUNT(*) per scroll
+      BookEntity b30 = new BookEntity();
+      b30.setId(30);
+      b30.setAuthorId(1);
+      b30.setIsFree(true);
+      BookEntity b29 = new BookEntity();
+      b29.setId(29);
+      b29.setAuthorId(1);
+      b29.setIsFree(true);
+      BookEntity b28 = new BookEntity();
+      b28.setId(28);
+      b28.setAuthorId(1);
+      b28.setIsFree(true);
+      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of(b30, b29, b28));
+
+      // When
+      BookPageResponseDto result = bookService.getLibraryPage(null, 2, 1);
+
+      // Then
+      assertThat(result.items()).hasSize(2);
+      assertThat(result.hasMore()).isTrue();
+      assertThat(result.nextCursor()).isEqualTo(29);
+    }
+
+    @Test
+    @DisplayName("should return a null cursor and hasMore=false for an empty library")
+    void shouldHandleEmptyPage() {
+      // Given
+      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of());
+
+      // When
+      BookPageResponseDto result = bookService.getLibraryPage(null, 10, 1);
+
+      // Then
+      assertThat(result.items()).isEmpty();
+      assertThat(result.nextCursor()).isNull();
+      assertThat(result.hasMore()).isFalse();
     }
   }
 }

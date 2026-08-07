@@ -2,10 +2,12 @@ package com.socialapp.bookstore.service;
 
 import java.util.List;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.bookstore.dto.BookPageResponseDto;
 import com.socialapp.bookstore.dto.BookResponseDto;
 import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.bookstore.entity.BookEntity;
@@ -50,6 +52,30 @@ public class BookService {
   public BookResponseDto getBook(Integer bookId, Integer requesterId) {
     BookEntity book = findBookOrThrow(bookId);
     return toResponseDto(book, requesterId);
+  }
+
+  /**
+   * One cursor page of the library, newest first.
+   *
+   * <p>No visibility filter, deliberately: a book is a catalogue entry, not a post. What a
+   * non-buyer may actually <em>do</em> with it is decided per row in {@link #toResponseDto}, which
+   * hands back a preview URL instead of a download URL — so listing every book exposes titles and
+   * covers, which is the point of a store front, and nothing more.
+   *
+   * <p>Fetches one row beyond {@code limit} so {@code hasMore} is answered by the page itself
+   * rather than by a {@code COUNT(*)} over the whole table on every scroll.
+   */
+  public BookPageResponseDto getLibraryPage(Integer cursor, int limit, Integer requesterId) {
+    List<BookEntity> page = bookRepository.findLibraryPage(cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = page.size() > limit;
+    List<BookEntity> visible = hasMore ? page.subList(0, limit) : page;
+
+    List<BookResponseDto> items =
+        visible.stream().map(book -> toResponseDto(book, requesterId)).toList();
+    Integer nextCursor = visible.isEmpty() ? null : visible.get(visible.size() - 1).getId();
+
+    return new BookPageResponseDto(items, nextCursor, hasMore);
   }
 
   public List<BookResponseDto> getBooksByAuthor(Integer authorId, Integer requesterId) {

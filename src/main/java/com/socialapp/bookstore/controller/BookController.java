@@ -2,22 +2,46 @@ package com.socialapp.bookstore.controller;
 
 import java.util.List;
 
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.bookstore.dto.*;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookService;
+import com.socialapp.common.utils.Constants;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
+@Validated
 @RestController
 @RequestMapping("/v1/api/books")
 @RequiredArgsConstructor
 public class BookController {
   private final BookService bookService;
   private final BookReviewService reviewService;
+
+  /**
+   * The Library front page: every book, newest first, cursor-paginated.
+   *
+   * <p>Signed-in only. {@code /books/author/{id}} is open to guests because it is a section of a
+   * public profile; the whole catalogue is not part of any profile, and the guest-readable surface
+   * in {@code SecurityConfig} is a list of specific pages rather than a rule about GETs. Opening
+   * it later means adding the path there and to {@code GuestRateLimitProperties.paths} together.
+   *
+   * <p>{@code limit} is capped at 50: this endpoint signs a storage URL per row, so an uncapped
+   * limit is a request that makes the server do unbounded crypto work.
+   */
+  @GetMapping
+  public BookPageResponseDto getLibrary(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive @Max(50)
+          int limit) {
+    return bookService.getLibraryPage(cursor, limit, SecurityUtils.getCurrentUserId());
+  }
 
   @GetMapping("/{bookId}")
   public BookResponseDto getBook(@PathVariable Integer bookId) {
