@@ -25,6 +25,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
 import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
@@ -235,7 +236,10 @@ class AdminModerationServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, null))
+      assertThatThrownBy(
+              () ->
+                  adminModerationService.reviewPost(
+                      POST_ID, Likelihood.LIKELY, ViolationType.SPAM, null))
           .isInstanceOf(NotFoundException.class);
     }
 
@@ -247,7 +251,10 @@ class AdminModerationServiceTest {
           .thenReturn(Optional.of(post(POST_ID, AUTHOR_ID, ModerationStatus.APPROVED)));
 
       // When / Then
-      assertThatThrownBy(() -> adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, null))
+      assertThatThrownBy(
+              () ->
+                  adminModerationService.reviewPost(
+                      POST_ID, Likelihood.LIKELY, ViolationType.SPAM, null))
           .isInstanceOf(IllegalStateException.class);
     }
 
@@ -260,21 +267,40 @@ class AdminModerationServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
 
       // When
-      adminModerationService.reviewPost(POST_ID, Likelihood.VERY_LIKELY, "explicit content");
+      adminModerationService.reviewPost(
+          POST_ID, Likelihood.VERY_LIKELY, ViolationType.SEXUALLY_EXPLICIT, "explicit content");
 
       // Then
       verify(postRepository).save(postCaptor.capture());
       assertThat(postCaptor.getValue().getModerationStatus()).isEqualTo(ModerationStatus.REJECTED);
+      // The type the admin picked, not HATE_SPEECH: this call used to hardcode HATE_SPEECH for
+      // every rejection, which rated every takedown CRITICAL toward the 7-day ban and told the
+      // user they had posted hate speech whatever they had actually done.
       verify(userBanService)
           .recordViolation(
               AUTHOR_ID,
               POST_ID,
-              ViolationType.HATE_SPEECH,
+              ViolationType.SEXUALLY_EXPLICIT,
               "Admin manual review: explicit content");
       verify(newsfeedService, never()).fanOutPost(any());
       verify(moderationLogRepository).save(logCaptor.capture());
       assertThat(logCaptor.getValue().getStatus()).isEqualTo(ModerationStatus.REJECTED);
-      assertThat(logCaptor.getValue().getViolationType()).isEqualTo(ViolationType.HATE_SPEECH);
+      assertThat(logCaptor.getValue().getViolationType())
+          .isEqualTo(ViolationType.SEXUALLY_EXPLICIT);
+    }
+
+    @Test
+    @DisplayName("should refuse a rejection that names no violation type")
+    void shouldRejectMissingViolationType() {
+      // Given
+      when(postRepository.findById(POST_ID))
+          .thenReturn(Optional.of(post(POST_ID, AUTHOR_ID, ModerationStatus.PENDING_REVIEW)));
+
+      // When / Then: refusing beats defaulting — a default constant is how the old bug worked
+      assertThatThrownBy(
+              () -> adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, null, null))
+          .isInstanceOf(ValidationException.class);
+      verify(userBanService, never()).recordViolation(any(), any(), any(), any());
     }
 
     @Test
@@ -285,7 +311,7 @@ class AdminModerationServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
 
       // When
-      adminModerationService.reviewPost(POST_ID, Likelihood.POSSIBLE, null);
+      adminModerationService.reviewPost(POST_ID, Likelihood.POSSIBLE, null, null);
 
       // Then
       verify(postRepository).save(postCaptor.capture());
@@ -305,15 +331,12 @@ class AdminModerationServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
 
       // When
-      adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, null);
+      adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, ViolationType.SPAM, null);
 
       // Then
       verify(userBanService)
           .recordViolation(
-              AUTHOR_ID,
-              POST_ID,
-              ViolationType.HATE_SPEECH,
-              "Admin manual review: content violation");
+              AUTHOR_ID, POST_ID, ViolationType.SPAM, "Admin manual review: content violation");
     }
   }
 }

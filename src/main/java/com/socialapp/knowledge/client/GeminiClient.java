@@ -10,11 +10,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.knowledge.config.GeminiProperties;
 
-import lombok.extern.slf4j.Slf4j;
-
-@Slf4j
 @Component
 public class GeminiClient {
   private final WebClient geminiWebClient;
@@ -57,9 +55,12 @@ public class GeminiClient {
               .block();
 
       return extractTextFromResponse(response);
+    } catch (ExternalApiException e) {
+      // Already carries the specific reason (no candidates / no text / bad JSON) — rethrow as-is
+      // instead of shadowing it under a generic message.
+      throw e;
     } catch (Exception e) {
-      log.error("Gemini API call failed: {}", e.getMessage(), e);
-      throw new RuntimeException("Failed to generate content from Gemini", e);
+      throw new ExternalApiException("Failed to generate content from Gemini", e);
     }
   }
 
@@ -68,16 +69,17 @@ public class GeminiClient {
       JsonNode root = objectMapper.readTree(response);
       JsonNode candidates = root.path("candidates");
       if (candidates.isEmpty()) {
-        throw new RuntimeException("No candidates in Gemini response");
+        throw new ExternalApiException("No candidates in Gemini response");
       }
       JsonNode textNode = candidates.get(0).path("content").path("parts").get(0).path("text");
       if (Objects.isNull(textNode) || textNode.isMissingNode()) {
-        throw new RuntimeException("No text content in Gemini response");
+        throw new ExternalApiException("No text content in Gemini response");
       }
       return textNode.asText();
+    } catch (ExternalApiException e) {
+      throw e;
     } catch (Exception e) {
-      log.error("Failed to parse Gemini response: {}", response, e);
-      throw new RuntimeException("Failed to parse Gemini response", e);
+      throw new ExternalApiException("Failed to parse Gemini response", e);
     }
   }
 }

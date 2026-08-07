@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -25,6 +27,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.blocks.service.BlockQueryService;
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationEntity;
@@ -53,6 +57,7 @@ class NotificationServiceTest {
   @Mock private PushNotificationService pushService;
   @Mock private MailService mailService;
   @Mock private UserRepository userRepository;
+  @Mock private BlockQueryService blockQueryService;
 
   @InjectMocks private NotificationService notificationService;
 
@@ -285,6 +290,44 @@ class NotificationServiceTest {
 
       // When
       notificationService.send(baseRequest(NotificationChannel.BOTH).build());
+
+      // Then
+      verify(mailService).sendNotificationEmail(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should not send an email when the recipient asked for NONE")
+    void shouldNotSendEmail_whenFrequencyIsNone() {
+      // Given — everything else says "send": channel EMAIL and emailEnabled true. Only the
+      // frequency objects. This is the case that used to send anyway, because shouldSendEmail
+      // never read emailFrequency.
+      NotificationPreferenceEntity prefs = preference(false, true, null, null);
+      prefs.setEmailFrequency(EmailFrequency.NONE);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.EMAIL).build());
+
+      // Then
+      verify(mailService, never()).sendNotificationEmail(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should send an email when the stored frequency is null")
+    void shouldSendEmail_whenFrequencyIsNull() {
+      // Given — rows written before email_frequency had a value read back as null. The check is
+      // deliberately NONE.equals(stored) rather than !INSTANT.equals(stored) so null keeps the
+      // old behaviour of sending instead of silently muting someone.
+      NotificationPreferenceEntity prefs = preference(false, true, null, null);
+      prefs.setEmailFrequency(null);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(userRepository.findById(RECIPIENT_ID))
+          .thenReturn(Optional.of(user(RECIPIENT_ID, "user@example.com", "Alice")));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.EMAIL).build());
 
       // Then
       verify(mailService).sendNotificationEmail(any(), any(), any(), any());
@@ -535,19 +578,20 @@ class NotificationServiceTest {
       request.setPushEnabled(false);
       request.setEmailEnabled(false);
       request.setOnesignalPlayerId("new-player");
-      request.setEmailFrequency(EmailFrequency.DAILY_DIGEST);
+      request.setEmailFrequency(EmailFrequency.NONE);
       request.setMutedTypes(List.of("SYSTEM"));
 
       // When
-      NotificationPreferenceEntity result =
+      NotificationPreferenceResponseDto result =
           notificationService.updatePreference(RECIPIENT_ID, request);
 
       // Then
       assertThat(result.getPushEnabled()).isFalse();
       assertThat(result.getEmailEnabled()).isFalse();
-      assertThat(result.getOnesignalPlayerId()).isEqualTo("new-player");
-      assertThat(result.getEmailFrequency()).isEqualTo(EmailFrequency.DAILY_DIGEST);
+      assertThat(result.getEmailFrequency()).isEqualTo(EmailFrequency.NONE);
       assertThat(result.getMutedTypes()).containsExactly("SYSTEM");
+      // The device token is persisted but deliberately kept out of the response DTO.
+      assertThat(existing.getOnesignalPlayerId()).isEqualTo("new-player");
     }
 
     @Test
@@ -561,13 +605,13 @@ class NotificationServiceTest {
       UpdatePreferenceRequestDto request = new UpdatePreferenceRequestDto();
 
       // When
-      NotificationPreferenceEntity result =
+      NotificationPreferenceResponseDto result =
           notificationService.updatePreference(RECIPIENT_ID, request);
 
       // Then
       assertThat(result.getPushEnabled()).isTrue();
       assertThat(result.getEmailEnabled()).isTrue();
-      assertThat(result.getOnesignalPlayerId()).isEqualTo("old-player");
+      assertThat(existing.getOnesignalPlayerId()).isEqualTo("old-player");
     }
   }
 
@@ -586,8 +630,13 @@ class NotificationServiceTest {
       NotificationPreferenceEntity existing = preference(true, true, null, null);
       when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(existing));
 
-      // When / Then
-      assertThat(notificationService.getPreference(RECIPIENT_ID)).isSameAs(existing);
+      // When
+      NotificationPreferenceResponseDto result = notificationService.getPreference(RECIPIENT_ID);
+
+      // Then
+      assertThat(result.getUserId()).isEqualTo(RECIPIENT_ID);
+      assertThat(result.getPushEnabled()).isTrue();
+      assertThat(result.getEmailEnabled()).isTrue();
     }
 
     @Test
@@ -598,11 +647,51 @@ class NotificationServiceTest {
       when(preferenceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
       // When
-      NotificationPreferenceEntity result = notificationService.getPreference(RECIPIENT_ID);
+      NotificationPreferenceResponseDto result = notificationService.getPreference(RECIPIENT_ID);
 
       // Then
       assertThat(result.getUserId()).isEqualTo(RECIPIENT_ID);
       verify(preferenceRepository).save(any());
+    }
+  }
+
+  @Nested
+  @DisplayName("send — block filtering")
+  class SendBlockFilteringTests {
+
+    @Test
+    @DisplayName("should drop the notification entirely when a block stands between the two")
+    void shouldDropNotificationAcrossABlock() {
+      // Given
+      when(blockQueryService.isBlockedEitherWay(RECIPIENT_ID, ACTOR_ID)).thenReturn(true);
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.BOTH).build());
+
+      // Then — nothing stored and nothing sent: a notification names its actor, so delivering one
+      // across a block tells each side the other is still reaching them
+      verifyNoInteractions(notificationRepository);
+      verifyNoInteractions(pushService);
+      verifyNoInteractions(mailService);
+      verifyNoInteractions(preferenceRepository);
+    }
+
+    @Test
+    @DisplayName("should not consult the block set for a system notification with no actor")
+    void shouldSkipBlockCheckWithoutActor() {
+      // Given: a notification with no actor cannot be "from" anyone to block
+      when(preferenceRepository.findByUserId(RECIPIENT_ID))
+          .thenReturn(Optional.of(preference(false, false, null, null)));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.PUSH).actorId(null).build());
+
+      // Then
+      verify(blockQueryService, never()).isBlockedEitherWay(any(), any());
+      // Saved rather than dropped — send() writes the row and then writes it again with sentAt,
+      // so the count here is about the notification surviving the block check, not about how
+      // many times the row is persisted.
+      verify(notificationRepository, atLeastOnce()).save(any());
     }
   }
 }

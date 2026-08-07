@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -189,6 +190,49 @@ class ExplanationServiceTest {
     }
 
     @Test
+    @DisplayName("should persist the external links the client sends back")
+    void shouldPersistExternalLinks() {
+      // Given — B18: Gemini generated these, the user saw them, and saving dropped them because
+      // neither the request DTO nor the entity had anywhere to put them
+      SaveExplanationRequestDto dto = request();
+      dto.setExternalLinks(
+          List.of(
+              new ExplanationResponseDto.ExternalLink(
+                  "Spring docs", "https://spring.io", "Official reference")));
+      when(explanationRepository.findMaxVersion(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(explanationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      ExplanationResponseDto result = explanationService.saveExplanation(USER_ID, dto);
+
+      // Then
+      ArgumentCaptor<ExplanationEntity> saved = ArgumentCaptor.forClass(ExplanationEntity.class);
+      verify(explanationRepository).save(saved.capture());
+      assertThat(saved.getValue().getExternalLinks())
+          .extracting(ExplanationResponseDto.ExternalLink::getUrl)
+          .containsExactly("https://spring.io");
+
+      // Then — and echoed straight back, so the card does not blink empty after saving
+      assertThat(result.getExternalLinks())
+          .extracting(ExplanationResponseDto.ExternalLink::getTitle)
+          .containsExactly("Spring docs");
+    }
+
+    @Test
+    @DisplayName("should save an explanation that has no external links")
+    void shouldSaveWithoutExternalLinks() {
+      // Given — the model does not always return links
+      when(explanationRepository.findMaxVersion(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(explanationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      ExplanationResponseDto result = explanationService.saveExplanation(USER_ID, request());
+
+      // Then
+      assertThat(result.getExternalLinks()).isEmpty();
+    }
+
+    @Test
     @DisplayName("should increment the version when previous versions exist")
     void shouldIncrementVersion_whenPreviousVersionExists() {
       // Given
@@ -224,6 +268,32 @@ class ExplanationServiceTest {
       // Then
       assertThat(result.getExplanations()).hasSize(1);
       assertThat(result.getTotalCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should echo the stored external links on the read path")
+    void shouldEchoExternalLinks() {
+      // Given — /my-library is where the loss actually showed up: the user goes back to find
+      // the links they saw before saving, and toResponseDto was not setting them
+      when(explanationRepository.findByUserIdOrderByCreatedAtDesc(USER_ID))
+          .thenReturn(
+              List.of(
+                  ExplanationEntity.builder()
+                      .id(1)
+                      .postId(POST_ID)
+                      .externalLinks(
+                          List.of(
+                              new ExplanationResponseDto.ExternalLink(
+                                  "Spring docs", "https://spring.io", "Official reference")))
+                      .build()));
+
+      // When
+      KnowledgeLibraryResponseDto result = explanationService.getLibrary(USER_ID);
+
+      // Then
+      assertThat(result.getExplanations().get(0).getExternalLinks())
+          .extracting(ExplanationResponseDto.ExternalLink::getUrl)
+          .containsExactly("https://spring.io");
     }
   }
 

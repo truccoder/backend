@@ -268,4 +268,57 @@ class FriendshipRepositoryTest extends AbstractIntegrationTest {
       assertThat(result).containsExactly(USER_2);
     }
   }
+
+  @Nested
+  @DisplayName("deleteFriendship")
+  class DeleteFriendship {
+
+    @Test
+    @DisplayName("removes the relationship whichever direction it was written in")
+    void removesUndirectedRelationship() {
+      // Given: created as (1)-[:FRIENDS_WITH]-(2)
+      friendshipRepository.mergeUser(USER_1);
+      friendshipRepository.mergeUser(USER_2);
+      friendshipRepository.createFriendship(USER_1, USER_2);
+
+      // When: deleted with the arguments the other way round
+      friendshipRepository.deleteFriendship(USER_2, USER_1);
+
+      // Then — a directed delete would have missed the stored direction and left an orphan that
+      // countFriends still counts
+      assertThat(friendshipRepository.areFriends(USER_1, USER_2)).isFalse();
+      assertThat(friendshipRepository.countFriends(USER_1)).isZero();
+      assertThat(friendshipRepository.countFriends(USER_2)).isZero();
+    }
+
+    @Test
+    @DisplayName("leaves other friendships of the same users alone")
+    void leavesOtherFriendshipsAlone() {
+      // Given
+      friendshipRepository.mergeUser(USER_1);
+      friendshipRepository.mergeUser(USER_2);
+      friendshipRepository.mergeUser(USER_3);
+      friendshipRepository.createFriendship(USER_1, USER_2);
+      friendshipRepository.createFriendship(USER_1, USER_3);
+
+      // When
+      friendshipRepository.deleteFriendship(USER_1, USER_2);
+
+      // Then
+      assertThat(friendshipRepository.areFriends(USER_1, USER_3)).isTrue();
+      assertThat(friendshipRepository.countFriends(USER_1)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("is a no-op when the two were never friends")
+    void isNoOpForStrangers() {
+      // Given
+      friendshipRepository.mergeUser(USER_1);
+      friendshipRepository.mergeUser(USER_2);
+
+      // When / Then — idempotency is a contract of DELETE /v1/api/friendships/{userId}
+      friendshipRepository.deleteFriendship(USER_1, USER_2);
+      assertThat(friendshipRepository.areFriends(USER_1, USER_2)).isFalse();
+    }
+  }
 }

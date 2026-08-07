@@ -2,6 +2,7 @@ package com.socialapp.knowledge.service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Base64;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.dto.CreateTokenRequestDto;
 import com.socialapp.knowledge.dto.CreateTokenResponseDto;
+import com.socialapp.knowledge.dto.PersonalAccessTokenResponseDto;
 import com.socialapp.knowledge.entity.PersonalAccessTokenEntity;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
@@ -85,8 +87,19 @@ public class PersonalAccessTokenService {
     return entity;
   }
 
-  public List<PersonalAccessTokenEntity> listTokens(Integer userId) {
-    return tokenRepository.findByUserId(userId);
+  public List<PersonalAccessTokenResponseDto> listTokens(Integer userId) {
+    return tokenRepository.findByUserId(userId).stream()
+        .map(
+            token ->
+                PersonalAccessTokenResponseDto.builder()
+                    .id(token.getId())
+                    .name(token.getName())
+                    .expiresAt(token.getExpiresAt())
+                    .lastUsedAt(token.getLastUsedAt())
+                    .vaultPermission(token.getVaultPermission())
+                    .createdAt(token.getCreatedAt())
+                    .build())
+        .toList();
   }
 
   @Transactional
@@ -113,7 +126,10 @@ public class PersonalAccessTokenService {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
       return HexFormat.of().formatHex(hash);
-    } catch (Exception e) {
+    } catch (NoSuchAlgorithmException e) {
+      // SHA-256 is a JDK-guaranteed algorithm (every conformant JVM ships it), so this can't
+      // happen in practice — an unchecked wrapper is the correct, standard way to surface a
+      // checked exception the caller has no meaningful way to recover from.
       throw new RuntimeException("Failed to hash token", e);
     }
   }

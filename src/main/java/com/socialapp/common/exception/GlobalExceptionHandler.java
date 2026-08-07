@@ -4,16 +4,20 @@ import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
 import static org.springframework.http.HttpStatus.*;
 
+import java.util.LinkedHashSet;
 import java.util.Objects;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -77,6 +81,11 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  /**
+   * <p>Attaches {@code banDetails} alongside the sentence. The sentence is kept so nothing that
+   * reads {@code message} today breaks; the structured object is what a client should read, because
+   * the end date used to be extractable only by parsing English prose. See {@code BanDetailsDto}.
+   */
   @ResponseStatus(FORBIDDEN)
   @ExceptionHandler(AccountBannedException.class)
   public ErrorResponseDto handle(AccountBannedException ex, HttpServletRequest request) {
@@ -87,6 +96,7 @@ public class GlobalExceptionHandler {
         .error("Account Banned")
         .message(ex.getMessage())
         .path(request.getRequestURI())
+        .banDetails(ex.getBanDetails())
         .build();
   }
 
@@ -323,6 +333,31 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Wrong verb on a path that exists — e.g. a client still on PATCH after /qna/accept-answer moved
+  // to POST. Fell through to the generic Exception handler and came back 500, which reads like the
+  // server broke rather than "you called it with the wrong method".
+  // Returns ResponseEntity, unlike every other handler here, because RFC 9110 §15.5.6 makes the
+  // Allow header mandatory on a 405 and @ResponseStatus alone cannot set it.
+  @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+  public ResponseEntity<ErrorResponseDto> handle(
+      HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    HttpHeaders headers = new HttpHeaders();
+    if (ex.getSupportedHttpMethods() != null) {
+      headers.setAllow(new LinkedHashSet<>(ex.getSupportedHttpMethods()));
+    }
+    return ResponseEntity.status(METHOD_NOT_ALLOWED)
+        .headers(headers)
+        .body(
+            ErrorResponseDto.builder()
+                .code(METHOD_NOT_ALLOWED.value())
+                .error(METHOD_NOT_ALLOWED.getReasonPhrase())
+                .message("Method " + ex.getMethod() + " is not supported for this endpoint")
+                .path(request.getRequestURI())
+                .build());
+  }
+
   // Covers service-layer "wrong current state for this action" checks (e.g. reviewing a post
   // that isn't PENDING_REVIEW anymore) — previously fell through to the generic Exception
   // handler and was incorrectly reported as 500 instead of a 409 Conflict.
@@ -355,6 +390,23 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Thrown by @Version-guarded entities (e.g. ProjectPositionEntity) when two concurrent
+  // requests race to update the same row — the second one to commit loses instead of silently
+  // overwriting the first, so surface it as a retryable conflict rather than a 500.
+  @ResponseStatus(CONFLICT)
+  @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+  public ErrorResponseDto handle(
+      ObjectOptimisticLockingFailureException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(CONFLICT.value())
+        .error(CONFLICT.getReasonPhrase())
+        .message("This was just updated by someone else, please retry")
+        .path(request.getRequestURI())
+        .build();
+  }
+
   // Downstream storage failure (MinIO timeout, connection refused, server error, etc.) — the
   // client's request was fine, the storage backend is the one having trouble, so 503 (not 500)
   // signals this is transient/retryable rather than a bug in our own request handling.
@@ -376,6 +428,39 @@ public class GlobalExceptionHandler {
   @ResponseStatus(SERVICE_UNAVAILABLE)
   @ExceptionHandler(PaymentException.class)
   public ErrorResponseDto handle(PaymentException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Same rationale as StorageException/PaymentException, for third-party APIs (GitHub, Google,
+  // Gemini) instead of MinIO/MoMo — the call failed or returned something we can't use, not a bug
+  // in our own request handling, hence 503.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(ExternalApiException.class)
+  public ErrorResponseDto handle(ExternalApiException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(SERVICE_UNAVAILABLE.value())
+        .error(SERVICE_UNAVAILABLE.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // A required server-side secret/key is unset (e.g. Stream Chat's api-secret) — never the
+  // caller's fault, and must not be silently masked by a fallback value. 503 signals the feature
+  // itself is unavailable until an operator fixes the deployment config, same rationale as
+  // StorageException/PaymentException above.
+  @ResponseStatus(SERVICE_UNAVAILABLE)
+  @ExceptionHandler(MissingConfigurationException.class)
+  public ErrorResponseDto handle(MissingConfigurationException ex, HttpServletRequest request) {
     writeLog(ex, request);
 
     return ErrorResponseDto.builder()

@@ -24,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.dto.CreateTokenRequestDto;
 import com.socialapp.knowledge.dto.CreateTokenResponseDto;
+import com.socialapp.knowledge.dto.PersonalAccessTokenResponseDto;
 import com.socialapp.knowledge.entity.PersonalAccessTokenEntity;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
@@ -236,13 +237,28 @@ class PersonalAccessTokenServiceTest {
   class ListTokensTests {
 
     @Test
-    @DisplayName("should return every token owned by the user")
+    @DisplayName("should return every token owned by the user, mapped to a response DTO")
     void shouldReturnTokensForUser() {
       // Given
-      when(tokenRepository.findByUserId(USER_ID)).thenReturn(List.of(token(1, USER_ID, null)));
+      PersonalAccessTokenEntity entity =
+          PersonalAccessTokenEntity.builder()
+              .id(1)
+              .userId(USER_ID)
+              .tokenHash("super-secret-hash")
+              .name("My Token")
+              .vaultPermission(VaultPermission.WRITE_ONLY)
+              .build();
+      when(tokenRepository.findByUserId(USER_ID)).thenReturn(List.of(entity));
 
-      // When / Then
-      assertThat(personalAccessTokenService.listTokens(USER_ID)).hasSize(1);
+      // When
+      List<PersonalAccessTokenResponseDto> result = personalAccessTokenService.listTokens(USER_ID);
+
+      // Then — PersonalAccessTokenResponseDto has no tokenHash field at all, so the hash
+      // cannot leak into the API response regardless of what the entity holds.
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).getId()).isEqualTo(1);
+      assertThat(result.get(0).getName()).isEqualTo("My Token");
+      assertThat(result.get(0).getVaultPermission()).isEqualTo(VaultPermission.WRITE_ONLY);
     }
   }
 

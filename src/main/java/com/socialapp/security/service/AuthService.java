@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.*;
 import com.socialapp.security.entity.EmailVerificationToken;
@@ -25,6 +26,7 @@ import com.socialapp.security.repository.PasswordResetTokenRepository;
 import com.socialapp.security.repository.RefreshTokenRepository;
 import com.socialapp.security.repository.UserRepository;
 import com.socialapp.security.util.EmailNormalizer;
+import com.socialapp.security.util.UsernameSlugger;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +52,10 @@ public class AuthService {
   private final MailService mailService;
   private final ProfileService profileService;
 
+  // Describes why an account is locked, so the 403 carries structured banDetails rather than
+  // only an English sentence with a date embedded in it.
+  private final BanDetailsService banDetailsService;
+
   @Transactional
   public void register(RegisterRequestDto request, MultipartFile profilePicture) {
     String email = EmailNormalizer.normalize(request.email());
@@ -63,6 +69,7 @@ public class AuthService {
     user.setFullName(request.fullname());
 
     userRepository.save(user);
+    assignUsername(user, request.username());
 
     // Upload the picture (if any) BEFORE sending the verification email. Both run inside this
     // same @Transactional method, but the email is an external side effect that @Transactional
@@ -75,6 +82,40 @@ public class AuthService {
     }
 
     createVerificationTokenAndSendEmail(user);
+  }
+
+  /**
+   * Gives the new account the handle its public profile URL will be built from.
+   *
+   * <p>Called after {@code save()} rather than before it, because the fallback for a name that
+   * slugs to nothing is the user's own id, and the id does not exist until the row does.
+   *
+   * <p>A handle the caller chose is taken as-is and rejected if taken — telling someone their
+   * requested handle is unavailable is normal, and silently handing them a different one would be
+   * worse. A handle the server derives is never rejected: the user did not ask for it and cannot
+   * do anything about a clash, so the id is appended and registration proceeds.
+   */
+  private void assignUsername(UserEntity user, String requestedUsername) {
+    if (requestedUsername != null && !requestedUsername.isBlank()) {
+      if (userRepository.existsByUsernameIgnoreCase(requestedUsername)) {
+        throw new ValidationException("Username already taken");
+      }
+      user.setUsername(requestedUsername);
+      return;
+    }
+
+    String slug = UsernameSlugger.slugify(user.getFullName());
+    String candidate =
+        slug == null
+            ? "user-" + user.getId()
+            : UsernameSlugger.padToMinimumLength(slug, user.getId());
+
+    // Same disambiguation as V47's backfill: suffix the id, which is already unique, instead of
+    // looping over "-2", "-3", … and racing another registration between the check and the write.
+    if (userRepository.existsByUsernameIgnoreCase(candidate)) {
+      candidate = candidate + "-" + user.getId();
+    }
+    user.setUsername(candidate);
   }
 
   @Transactional
@@ -102,7 +143,8 @@ public class AuthService {
 
     if (user.isBanned()) {
       refreshTokenRepository.delete(stored);
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     refreshTokenRepository.delete(stored);
@@ -197,7 +239,8 @@ public class AuthService {
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     if (user.isBanned()) {
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     return tokenService.issueTokens(user);
@@ -281,7 +324,8 @@ public class AuthService {
     }
 
     if (user.isBanned()) {
-      throw new AccountBannedException(user.getBannedUntil());
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
     return user;

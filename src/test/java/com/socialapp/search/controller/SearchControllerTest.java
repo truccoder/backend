@@ -2,6 +2,7 @@ package com.socialapp.search.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -21,10 +22,14 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.search.dto.SearchResult;
+import com.socialapp.search.dto.SuggestionDto;
+import com.socialapp.search.dto.SuggestionType;
 import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
+import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -65,11 +70,22 @@ import com.socialapp.security.repository.UserRepository;
 })
 class SearchControllerTest {
 
+  private static final String SUGGEST_URL = "/v1/api/search/suggest";
+
   @Autowired private MockMvc mockMvc;
 
   @MockBean private SearchService searchService;
+
+  // /search/suggest now goes through its own service — see SuggestService for why the type-ahead
+  // path is kept off the results-page code.
+  @MockBean private SuggestService suggestService;
   @MockBean private FriendshipQueryService friendshipQueryService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String SEARCH_URL = "/v1/api/search";
@@ -106,7 +122,7 @@ class SearchControllerTest {
     void shouldReturn200AndResults_happyPath() throws Exception {
       // Given
       when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
-      when(searchService.searchUsers(eq("reader"), eq(1), eq(10), any()))
+      when(searchService.searchUsers(eq("reader"), eq(1), eq(10), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
                   .items(List.of(UserDto.builder().id(2).username("reader1").build()))
@@ -132,7 +148,7 @@ class SearchControllerTest {
     void shouldPassSizeThrough_whenProvided() throws Exception {
       // Given
       when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
-      when(searchService.searchUsers(eq("java"), eq(1), eq(5), any()))
+      when(searchService.searchUsers(eq("java"), eq(1), eq(5), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
                   .items(List.of())
@@ -198,6 +214,80 @@ class SearchControllerTest {
           .perform(authed(get(SEARCH_URL)))
           .andExpect(status().isBadRequest())
           .andExpect(jsonPath("$.message").value("Missing required parameter 'q'"));
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/search/suggest   (C2 — the type-ahead dropdown)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/search/suggest")
+  class SuggestTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndAFlatList_happyPath")
+    void shouldReturnFlatList() throws Exception {
+      // Given
+      when(suggestService.suggest(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+          .thenReturn(
+              List.of(
+                  new SuggestionDto(SuggestionType.USER, 1, "Nguyen Truc", "@nguyentruc", null),
+                  new SuggestionDto(SuggestionType.BOOK, 9, "Lap trinh Java", null, null)));
+
+      // When / Then: one flat list, because the dropdown renders one list
+      mockMvc
+          .perform(authed(get(SUGGEST_URL)).param("q", "ngu"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].type").value("USER"))
+          .andExpect(jsonPath("$[0].sublabel").value("@nguyentruc"))
+          .andExpect(jsonPath("$[1].type").value("BOOK"));
+    }
+
+    @Test
+    @DisplayName("shouldUseTheDefaultLimit_whenNoneIsGiven")
+    void shouldUseDefaultLimit() throws Exception {
+      // Given
+      when(suggestService.suggest(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+          .thenReturn(List.of());
+
+      // When
+      mockMvc.perform(authed(get(SUGGEST_URL)).param("q", "a")).andExpect(status().isOk());
+
+      // Then — Constants.DEFAULT_PAGINATION_SUGGEST_LIMIT, smaller than a results page on purpose
+      verify(suggestService).suggest(eq("a"), eq(8), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitExceedsTheCap_boundary")
+    void shouldRejectLimitAboveCap() throws Exception {
+      // BVA: @Max(20). Uncapped, this is /search with no pager and no total — a cheaper way to
+      // page through the user table than the paged endpoint.
+      mockMvc
+          .perform(authed(get(SUGGEST_URL)).param("q", "a").param("limit", "21"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenQueryIsBlank")
+    void shouldRejectBlankQuery() throws Exception {
+      mockMvc
+          .perform(authed(get(SUGGEST_URL)).param("q", "  "))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenQueryParamIsOmittedEntirely")
+    void shouldRejectMissingQuery() throws Exception {
+      mockMvc.perform(authed(get(SUGGEST_URL))).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledByAGuest")
+    void shouldReturn401ForGuest() throws Exception {
+      // Deliberately NOT part of the guest-readable surface: an unauthenticated endpoint that
+      // returns people by partial name is a user-directory dump.
+      mockMvc.perform(get(SUGGEST_URL).param("q", "a")).andExpect(status().isUnauthorized());
     }
   }
 }

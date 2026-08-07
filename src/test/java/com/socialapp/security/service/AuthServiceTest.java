@@ -27,6 +27,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.dto.ForgotPasswordRequestDto;
@@ -63,6 +64,8 @@ class AuthServiceTest {
   private static final String ENCODED_PASSWORD = "{bcrypt}encoded";
 
   @Mock private UserRepository userRepository;
+
+  @Mock private BanDetailsService banDetailsService;
   @Mock private PasswordEncoder passwordEncoder;
   @Mock private TokenService tokenService;
   @Mock private RefreshTokenRepository refreshTokenRepository;
@@ -101,7 +104,7 @@ class AuthServiceTest {
     @DisplayName("should reject when the email is already registered")
     void shouldThrowValidationException_whenEmailAlreadyExists() {
       // Given
-      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe");
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe", null);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(true);
 
       // When / Then
@@ -117,7 +120,7 @@ class AuthServiceTest {
     void shouldRegister_withoutProfilePicture_whenNull() {
       // Given
       RegisterRequestDto request =
-          new RegisterRequestDto(" User@Example.com ", RAW_PASSWORD, "Jane Doe");
+          new RegisterRequestDto(" User@Example.com ", RAW_PASSWORD, "Jane Doe", null);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
       when(passwordEncoder.encode(RAW_PASSWORD)).thenReturn(ENCODED_PASSWORD);
 
@@ -137,7 +140,7 @@ class AuthServiceTest {
     @DisplayName("should skip the profile picture upload when the file is empty")
     void shouldRegister_withoutProfilePicture_whenEmpty() {
       // Given
-      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe");
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe", null);
       MultipartFile picture = mock(MultipartFile.class);
       when(picture.isEmpty()).thenReturn(true);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
@@ -154,7 +157,7 @@ class AuthServiceTest {
     @DisplayName("should upload the profile picture before sending the verification email")
     void shouldRegister_withProfilePicture_whenPresentAndNotEmpty() {
       // Given
-      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe");
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Jane Doe", null);
       MultipartFile picture = mock(MultipartFile.class);
       when(picture.isEmpty()).thenReturn(false);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
@@ -171,7 +174,7 @@ class AuthServiceTest {
     @DisplayName("should use the email as the recipient name when the full name is blank")
     void shouldUseEmailAsRecipientName_whenFullNameIsBlank() {
       // Given
-      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "   ");
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "   ", null);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
       when(passwordEncoder.encode(RAW_PASSWORD)).thenReturn(ENCODED_PASSWORD);
 
@@ -186,7 +189,7 @@ class AuthServiceTest {
     @DisplayName("should use the email as the recipient name when the full name is null")
     void shouldUseEmailAsRecipientName_whenFullNameIsNull() {
       // Given
-      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, null);
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, null, null);
       when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
       when(passwordEncoder.encode(RAW_PASSWORD)).thenReturn(ENCODED_PASSWORD);
 
@@ -273,7 +276,8 @@ class AuthServiceTest {
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       when(userRepository.findByEmailIgnoreCase(EMAIL)).thenReturn(Optional.of(user));
       when(passwordEncoder.matches(RAW_PASSWORD, ENCODED_PASSWORD)).thenReturn(true);
-      AuthResponseDto expected = new AuthResponseDto("access", "refresh", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access", "refresh", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
       LoginRequestDto request = new LoginRequestDto(" User@Example.com ", RAW_PASSWORD);
 
@@ -358,7 +362,8 @@ class AuthServiceTest {
       when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(false);
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
-      AuthResponseDto expected = new AuthResponseDto("access2", "refresh2", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access2", "refresh2", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
 
       // When
@@ -732,7 +737,8 @@ class AuthServiceTest {
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
-      AuthResponseDto expected = new AuthResponseDto("access", "refresh", "Bearer", 900);
+      AuthResponseDto expected =
+          new AuthResponseDto("access", "refresh", "Bearer", 900, false, false);
       when(tokenService.issueTokens(user)).thenReturn(expected);
 
       // When
@@ -777,6 +783,101 @@ class AuthServiceTest {
 
       // Then
       verify(refreshTokenRepository, never()).delete(any());
+    }
+  }
+
+  @Nested
+  @DisplayName("register — username assignment")
+  class RegisterUsernameTests {
+
+    private void stubHappyPath() {
+      when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
+      when(passwordEncoder.encode(RAW_PASSWORD)).thenReturn(ENCODED_PASSWORD);
+    }
+
+    @Test
+    @DisplayName("should derive a handle from the full name when the caller sends none")
+    void shouldDeriveHandleFromFullName() {
+      // Given: the old three-field body, which every existing client still sends
+      stubHappyPath();
+      RegisterRequestDto request =
+          new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Trần Phú Thịnh", null);
+
+      // When
+      authService.register(request, null);
+
+      // Then — before this, a real signup stored username = NULL, which is why the one account in
+      // the database that did not come from the seed script was the only one missing a handle
+      verify(userRepository).save(userCaptor.capture());
+      assertThat(userCaptor.getValue().getUsername()).isEqualTo("tran-phu-thinh");
+    }
+
+    @Test
+    @DisplayName("should keep the handle the caller chose")
+    void shouldKeepChosenHandle() {
+      // Given
+      stubHappyPath();
+      when(userRepository.existsByUsernameIgnoreCase("ada-lovelace")).thenReturn(false);
+      RegisterRequestDto request =
+          new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Ada Lovelace", "ada-lovelace");
+
+      // When
+      authService.register(request, null);
+
+      // Then
+      verify(userRepository).save(userCaptor.capture());
+      assertThat(userCaptor.getValue().getUsername()).isEqualTo("ada-lovelace");
+    }
+
+    @Test
+    @DisplayName("should reject a chosen handle that is taken, rather than silently changing it")
+    void shouldRejectTakenHandle() {
+      // Given
+      when(userRepository.existsByEmailIgnoreCase(EMAIL)).thenReturn(false);
+      when(passwordEncoder.encode(RAW_PASSWORD)).thenReturn(ENCODED_PASSWORD);
+      when(userRepository.existsByUsernameIgnoreCase("ada")).thenReturn(true);
+      RegisterRequestDto request =
+          new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Ada Lovelace", "ada");
+
+      // When / Then — being told the handle is taken is normal; being handed a different one
+      // without being told is not
+      assertThatThrownBy(() -> authService.register(request, null))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Username already taken");
+    }
+
+    @Test
+    @DisplayName("should suffix a derived handle that collides, instead of failing registration")
+    void shouldSuffixCollidingDerivedHandle() {
+      // Given: someone already holds the handle this name derives to
+      stubHappyPath();
+      when(userRepository.existsByUsernameIgnoreCase("ada-lovelace")).thenReturn(true);
+      RegisterRequestDto request =
+          new RegisterRequestDto(EMAIL, RAW_PASSWORD, "Ada Lovelace", null);
+
+      // When
+      authService.register(request, null);
+
+      // Then — the user did not choose this handle and can do nothing about the clash, so a
+      // derived handle is disambiguated rather than rejected. Id is null on an unsaved mock, which
+      // is fine: what is pinned is that it is suffixed and registration proceeds.
+      verify(userRepository).save(userCaptor.capture());
+      assertThat(userCaptor.getValue().getUsername()).startsWith("ada-lovelace-");
+    }
+
+    @Test
+    @DisplayName("should fall back to the id when the name yields no usable handle")
+    void shouldFallBackToIdForUnusableName() {
+      // Given: a name of punctuation only
+      stubHappyPath();
+      RegisterRequestDto request = new RegisterRequestDto(EMAIL, RAW_PASSWORD, "!!!", null);
+
+      // When
+      authService.register(request, null);
+
+      // Then
+      verify(userRepository).save(userCaptor.capture());
+      assertThat(userCaptor.getValue().getUsername()).startsWith("user-");
     }
   }
 }

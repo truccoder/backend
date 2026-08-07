@@ -176,4 +176,97 @@ class FriendRequestRepositoryTest extends AbstractIntegrationTest {
       assertThat(result).isFalse();
     }
   }
+
+  @Nested
+  @DisplayName("deleteAcceptedBetween")
+  class DeleteAcceptedBetween {
+
+    @Test
+    @DisplayName("deletes the accepted row whichever way round the pair was stored")
+    void deletesRegardlessOfDirection() {
+      // Given: B asked A, so the row reads (requester=B, addressee=A)
+      friendRequestRepository.saveAndFlush(request(userB, userA, FriendRequestStatus.ACCEPTED));
+
+      // When: A unfriends B
+      int deleted = friendRequestRepository.deleteAcceptedBetween(userA, userB);
+
+      // Then
+      assertThat(deleted).isEqualTo(1);
+      assertThat(
+              friendRequestRepository.findByParticipantsAndStatus(
+                  userA, userB, FriendRequestStatus.ACCEPTED))
+          .isEmpty();
+    }
+
+    @Test
+    @DisplayName("deletes every accepted row for the pair, from repeated friend/unfriend cycles")
+    void deletesAllAcceptedRows() {
+      // Given: a single-result lookup would blow up on this
+      friendRequestRepository.saveAndFlush(request(userA, userB, FriendRequestStatus.ACCEPTED));
+      friendRequestRepository.saveAndFlush(request(userB, userA, FriendRequestStatus.ACCEPTED));
+
+      // When / Then
+      assertThat(friendRequestRepository.deleteAcceptedBetween(userA, userB)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("leaves rows of other statuses and other pairs alone")
+    void leavesOtherRowsAlone() {
+      // Given
+      friendRequestRepository.saveAndFlush(request(userA, userB, FriendRequestStatus.PENDING));
+      friendRequestRepository.saveAndFlush(request(userA, userC, FriendRequestStatus.ACCEPTED));
+
+      // When
+      int deleted = friendRequestRepository.deleteAcceptedBetween(userA, userB);
+
+      // Then
+      assertThat(deleted).isZero();
+      assertThat(friendRequestRepository.hasPendingRequestBetween(userA, userB)).isTrue();
+    }
+  }
+
+  @Nested
+  @DisplayName("cancelPendingBetween")
+  class CancelPendingBetween {
+
+    @Test
+    @DisplayName("cancels a pending request in either direction")
+    void cancelsBothDirections() {
+      // Given: the blocked user had already asked to be friends
+      friendRequestRepository.saveAndFlush(request(userB, userA, FriendRequestStatus.PENDING));
+
+      // When: A blocks B
+      int cancelled = friendRequestRepository.cancelPendingBetween(userA, userB);
+
+      // Then — left pending, it would be a one-tap route back to being friends
+      assertThat(cancelled).isEqualTo(1);
+      assertThat(friendRequestRepository.hasPendingRequestBetween(userA, userB)).isFalse();
+    }
+
+    @Test
+    @DisplayName("records the request as CANCELLED rather than deleting it")
+    void keepsTheRowAsHistory() {
+      // Given
+      friendRequestRepository.saveAndFlush(request(userA, userB, FriendRequestStatus.PENDING));
+
+      // When
+      friendRequestRepository.cancelPendingBetween(userA, userB);
+
+      // Then — a request that was sent is a thing that happened
+      assertThat(
+              friendRequestRepository.findByParticipantsAndStatus(
+                  userA, userB, FriendRequestStatus.CANCELLED))
+          .isPresent();
+    }
+
+    @Test
+    @DisplayName("leaves an accepted row untouched")
+    void ignoresAcceptedRows() {
+      // Given
+      friendRequestRepository.saveAndFlush(request(userA, userB, FriendRequestStatus.ACCEPTED));
+
+      // When / Then
+      assertThat(friendRequestRepository.cancelPendingBetween(userA, userB)).isZero();
+    }
+  }
 }

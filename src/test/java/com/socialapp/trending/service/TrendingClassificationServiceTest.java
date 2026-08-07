@@ -64,6 +64,18 @@ class TrendingClassificationServiceTest {
   class ClassifyTests {
 
     @Test
+    @DisplayName("should keep the tags the model returned")
+    void shouldKeepTags() {
+      // Given
+      when(geminiClient.generateContent(any()))
+          .thenReturn("{\"category\": \"OPENSOURCE\", \"tags\": [\"java\", \"spring\"]}");
+
+      // When / Then
+      assertThat(classificationService.classify(item("Repo")).tags())
+          .containsExactly("java", "spring");
+    }
+
+    @Test
     @DisplayName("should return the parsed category when Gemini responds successfully")
     void shouldReturnParsedCategory_whenGeminiRespondsSuccessfully() {
       // Given
@@ -71,7 +83,7 @@ class TrendingClassificationServiceTest {
           .thenReturn("{\"category\": \"OPENSOURCE\", \"tags\": [\"java\"]}");
 
       // When / Then
-      assertThat(classificationService.classify(item("Repo")))
+      assertThat(classificationService.classify(item("Repo")).category())
           .isEqualTo(TrendingCategory.OPENSOURCE);
     }
 
@@ -82,7 +94,8 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenThrow(new RuntimeException("timeout"));
 
       // When / Then
-      assertThat(classificationService.classify(item("Repo"))).isEqualTo(TrendingCategory.OTHER);
+      assertThat(classificationService.classify(item("Repo")).category())
+          .isEqualTo(TrendingCategory.OTHER);
     }
 
     @Test
@@ -92,7 +105,8 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("{\"tags\": [\"java\"]}");
 
       // When / Then
-      assertThat(classificationService.classify(item("Repo"))).isEqualTo(TrendingCategory.OTHER);
+      assertThat(classificationService.classify(item("Repo")).category())
+          .isEqualTo(TrendingCategory.OTHER);
     }
 
     @Test
@@ -102,7 +116,8 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("{\"category\": \"NOT_A_CATEGORY\"}");
 
       // When / Then
-      assertThat(classificationService.classify(item("Repo"))).isEqualTo(TrendingCategory.OTHER);
+      assertThat(classificationService.classify(item("Repo")).category())
+          .isEqualTo(TrendingCategory.OTHER);
     }
 
     @Test
@@ -112,7 +127,8 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("not json at all");
 
       // When / Then
-      assertThat(classificationService.classify(item("Repo"))).isEqualTo(TrendingCategory.OTHER);
+      assertThat(classificationService.classify(item("Repo")).category())
+          .isEqualTo(TrendingCategory.OTHER);
     }
   }
 
@@ -125,6 +141,56 @@ class TrendingClassificationServiceTest {
   class ClassifyBatchTests {
 
     @Test
+    @DisplayName("should keep the tags the model returned for each item")
+    void shouldKeepTags_perItem() {
+      // Given — B3: the prompt has always asked for tags and Gemini has always answered with
+      // them; the classifier threw them away, so 110 of 110 rows were written with none
+      String response =
+          "{\"classifications\": ["
+              + "{\"index\": 1, \"category\": \"TOOL\", \"tags\": [\"cli\", \"rust\"]},"
+              + "{\"index\": 2, \"category\": \"CAREER\", \"tags\": [\"hiring\"]}"
+              + "]}";
+      when(geminiClient.generateContent(any())).thenReturn(response);
+
+      // When
+      List<TrendingClassification> result = classificationService.classifyBatch(items(2));
+
+      // Then
+      assertThat(result.get(0).tags()).containsExactly("cli", "rust");
+      assertThat(result.get(1).tags()).containsExactly("hiring");
+    }
+
+    @Test
+    @DisplayName("should fall back to no tags when the model omits them")
+    void shouldReturnEmptyTags_whenOmitted() {
+      // Given — tags are optional in practice even though the prompt asks for them
+      when(geminiClient.generateContent(any()))
+          .thenReturn("{\"classifications\": [{\"index\": 1, \"category\": \"TOOL\"}]}");
+
+      // When
+      List<TrendingClassification> result = classificationService.classifyBatch(items(1));
+
+      // Then
+      assertThat(result.get(0).tags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should drop blank tags and trim the rest")
+    void shouldDropBlankTags() {
+      // Given — a blank chip on the card is worse than no chip
+      String response =
+          "{\"classifications\": [{\"index\": 1, \"category\": \"TOOL\","
+              + " \"tags\": [\"  spaced  \", \"\", \"   \", \"ok\"]}]}";
+      when(geminiClient.generateContent(any())).thenReturn(response);
+
+      // When
+      List<TrendingClassification> result = classificationService.classifyBatch(items(1));
+
+      // Then
+      assertThat(result.get(0).tags()).containsExactly("spaced", "ok");
+    }
+
+    @Test
     @DisplayName("should classify in a single call when item count is at the batch size")
     void shouldClassifyInOneBatch_whenItemCountAtBatchSize() {
       // Given
@@ -133,10 +199,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn(response);
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(2));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(2));
 
       // Then
-      assertThat(result).containsExactly(TrendingCategory.TOOL, TrendingCategory.CAREER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsExactly(TrendingCategory.TOOL, TrendingCategory.CAREER);
       org.mockito.Mockito.verify(geminiClient, org.mockito.Mockito.times(1)).generateContent(any());
     }
 
@@ -147,7 +215,7 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("{\"classifications\": []}");
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(15));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(15));
 
       // Then
       assertThat(result).hasSize(15);
@@ -161,10 +229,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenThrow(new RuntimeException("timeout"));
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(3));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(3));
 
       // Then
-      assertThat(result).containsOnly(TrendingCategory.OTHER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsOnly(TrendingCategory.OTHER);
     }
 
     @Test
@@ -174,10 +244,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("{\"classifications\": \"oops\"}");
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(2));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(2));
 
       // Then
-      assertThat(result).containsExactly(TrendingCategory.OTHER, TrendingCategory.OTHER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsExactly(TrendingCategory.OTHER, TrendingCategory.OTHER);
     }
 
     @Test
@@ -194,10 +266,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn(response);
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(2));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(2));
 
       // Then
-      assertThat(result).containsExactly(TrendingCategory.CAREER, TrendingCategory.OTHER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsExactly(TrendingCategory.CAREER, TrendingCategory.OTHER);
     }
 
     @Test
@@ -208,10 +282,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn(response);
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(1));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(1));
 
       // Then
-      assertThat(result).containsExactly(TrendingCategory.OTHER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsExactly(TrendingCategory.OTHER);
     }
 
     @Test
@@ -221,10 +297,12 @@ class TrendingClassificationServiceTest {
       when(geminiClient.generateContent(any())).thenReturn("not json");
 
       // When
-      List<TrendingCategory> result = classificationService.classifyBatch(items(3));
+      List<TrendingClassification> result = classificationService.classifyBatch(items(3));
 
       // Then
-      assertThat(result).containsOnly(TrendingCategory.OTHER);
+      assertThat(result)
+          .extracting(TrendingClassification::category)
+          .containsOnly(TrendingCategory.OTHER);
     }
   }
 }

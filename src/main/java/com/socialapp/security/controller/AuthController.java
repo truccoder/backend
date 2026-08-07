@@ -1,6 +1,7 @@
 package com.socialapp.security.controller;
 
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.security.dto.*;
 import com.socialapp.security.service.AuthService;
+import com.socialapp.security.service.OAuthAuthService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class AuthController {
   private final AuthService authService;
+  private final OAuthAuthService oAuthAuthService;
 
   @PostMapping(value = "/register", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public void register(
@@ -67,5 +70,25 @@ public class AuthController {
   @PostMapping("/logout")
   public void logout(@Valid @RequestBody RefreshTokenRequestDto request) {
     authService.logout(request);
+  }
+
+  @GetMapping("/google/url")
+  public OAuthUrlResponseDto getGoogleOAuthUrl() {
+    return oAuthAuthService.getGoogleOAuthUrl();
+  }
+
+  @PostMapping("/google/callback")
+  public AuthResponseDto loginWithGoogle(@Valid @RequestBody GoogleLoginRequestDto request) {
+    return oAuthAuthService.loginWithGoogle(request.getCode());
+  }
+
+  @GetMapping("/github/url")
+  public OAuthUrlResponseDto getGithubOAuthUrl() {
+    return oAuthAuthService.getGithubOAuthUrl();
+  }
+
+  @PostMapping("/github/callback")
+  public AuthResponseDto loginWithGithub(@Valid @RequestBody GithubLoginRequestDto request) {
+    return oAuthAuthService.loginWithGithub(request.getCode());
   }
 }

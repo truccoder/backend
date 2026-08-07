@@ -3,10 +3,12 @@ package com.socialapp.moderation.rule;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -16,22 +18,32 @@ import com.socialapp.moderation.enums.ViolationType;
 
 /**
  * Component (unit) tests for {@link ModerationRuleEngine}, per ISTQB CTFL v4.0.1 Section 2.2.1
- * (component testing). {@link KeywordFilter} and {@link SpamDetector} are mocked so only the
- * ordering/short-circuit logic of {@code evaluate} is under test.
+ * (component testing). The 3 {@link ModerationRule} implementations are mocked directly so only
+ * the engine's own iteration/short-circuit logic is under test (each rule's own delegation logic
+ * is covered separately by {@link RateLimitRuleTest}/{@link DuplicateContentRuleTest}/{@link
+ * KeywordBlacklistRuleTest}).
  */
 @ExtendWith(MockitoExtension.class)
 class ModerationRuleEngineTest {
 
-  @Mock private KeywordFilter keywordFilter;
-  @Mock private SpamDetector spamDetector;
+  @Mock private ModerationRule rateLimitRule;
+  @Mock private ModerationRule duplicateContentRule;
+  @Mock private ModerationRule keywordBlacklistRule;
 
-  @InjectMocks private ModerationRuleEngine ruleEngine;
+  private ModerationRuleEngine ruleEngine;
+
+  @BeforeEach
+  void setUp() {
+    ruleEngine =
+        new ModerationRuleEngine(
+            List.of(rateLimitRule, duplicateContentRule, keywordBlacklistRule));
+  }
 
   @Test
-  @DisplayName("shouldRejectForSpam_whenAuthorIsRateLimited")
-  void shouldRejectForSpam_whenAuthorIsRateLimited() {
+  @DisplayName("shouldRejectForSpam_whenFirstRuleReportsAViolation")
+  void shouldRejectForSpam_whenFirstRuleReportsAViolation() {
     // Given
-    when(spamDetector.isRateLimited(1)).thenReturn(true);
+    when(rateLimitRule.check(1, "hello world")).thenReturn(ViolationType.SPAM);
 
     // When
     ModerationResult result = ruleEngine.evaluate(1, "hello world");
@@ -42,11 +54,11 @@ class ModerationRuleEngineTest {
   }
 
   @Test
-  @DisplayName("shouldRejectForDuplicateContent_whenNotRateLimitedButContentIsDuplicate")
-  void shouldRejectForDuplicateContent_whenNotRateLimitedButContentIsDuplicate() {
+  @DisplayName("shouldRejectForDuplicateContent_whenFirstRulePassesButSecondReportsAViolation")
+  void shouldRejectForDuplicateContent_whenFirstRulePassesButSecondReportsAViolation() {
     // Given
-    when(spamDetector.isRateLimited(1)).thenReturn(false);
-    when(spamDetector.isDuplicateContent(1, "hello world")).thenReturn(true);
+    when(rateLimitRule.check(1, "hello world")).thenReturn(null);
+    when(duplicateContentRule.check(1, "hello world")).thenReturn(ViolationType.DUPLICATE_CONTENT);
 
     // When
     ModerationResult result = ruleEngine.evaluate(1, "hello world");
@@ -57,12 +69,12 @@ class ModerationRuleEngineTest {
   }
 
   @Test
-  @DisplayName("shouldRejectForKeywordBlacklist_whenNeitherSpamCheckTrips")
-  void shouldRejectForKeywordBlacklist_whenNeitherSpamCheckTrips() {
+  @DisplayName("shouldRejectForKeywordBlacklist_whenNeitherEarlierRuleReportsAViolation")
+  void shouldRejectForKeywordBlacklist_whenNeitherEarlierRuleReportsAViolation() {
     // Given
-    when(spamDetector.isRateLimited(1)).thenReturn(false);
-    when(spamDetector.isDuplicateContent(1, "bad content")).thenReturn(false);
-    when(keywordFilter.containsBlacklistedContent("bad content")).thenReturn(true);
+    when(rateLimitRule.check(1, "bad content")).thenReturn(null);
+    when(duplicateContentRule.check(1, "bad content")).thenReturn(null);
+    when(keywordBlacklistRule.check(1, "bad content")).thenReturn(ViolationType.KEYWORD_BLACKLIST);
 
     // When
     ModerationResult result = ruleEngine.evaluate(1, "bad content");
@@ -73,12 +85,12 @@ class ModerationRuleEngineTest {
   }
 
   @Test
-  @DisplayName("shouldReturnPendingModeration_withNoViolations_whenAllChecksPass")
-  void shouldReturnPendingModeration_withNoViolations_whenAllChecksPass() {
+  @DisplayName("shouldReturnPendingModeration_withNoViolations_whenAllRulesPass")
+  void shouldReturnPendingModeration_withNoViolations_whenAllRulesPass() {
     // Given
-    when(spamDetector.isRateLimited(1)).thenReturn(false);
-    when(spamDetector.isDuplicateContent(1, "hello world")).thenReturn(false);
-    when(keywordFilter.containsBlacklistedContent("hello world")).thenReturn(false);
+    when(rateLimitRule.check(1, "hello world")).thenReturn(null);
+    when(duplicateContentRule.check(1, "hello world")).thenReturn(null);
+    when(keywordBlacklistRule.check(1, "hello world")).thenReturn(null);
 
     // When
     ModerationResult result = ruleEngine.evaluate(1, "hello world");

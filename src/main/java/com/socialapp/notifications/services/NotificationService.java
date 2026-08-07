@@ -10,11 +10,14 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.blocks.service.BlockQueryService;
+import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
 import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.dto.UpdatePreferenceRequestDto;
 import com.socialapp.notifications.entity.NotificationEntity;
 import com.socialapp.notifications.entity.NotificationPreferenceEntity;
+import com.socialapp.notifications.entity.enums.EmailFrequency;
 import com.socialapp.notifications.entity.enums.NotificationChannel;
 import com.socialapp.notifications.repository.NotificationPreferenceRepository;
 import com.socialapp.notifications.repository.NotificationRepository;
@@ -33,9 +36,24 @@ public class NotificationService {
   private final PushNotificationService pushService;
   private final MailService mailService;
   private final UserRepository userRepository;
+  private final BlockQueryService blockQueryService;
 
   @Async
   public void send(SendNotificationRequest request) {
+    // Dropped before anything is stored or sent. A notification always names an actor ("X reacted
+    // to your post"), so delivering one across a block would tell the recipient that the person
+    // they blocked is still acting on their content, and would tell the blocked user's target
+    // that they are still reachable. Checked in both directions, like every other block filter.
+    if (Objects.nonNull(request.getActorId())
+        && blockQueryService.isBlockedEitherWay(request.getRecipientId(), request.getActorId())) {
+      log.debug(
+          "Notification {} suppressed: block between {} and {}",
+          request.getType(),
+          request.getRecipientId(),
+          request.getActorId());
+      return;
+    }
+
     NotificationPreferenceEntity prefs = getOrCreatePreference(request.getRecipientId());
 
     if (isTypeMuted(prefs, request.getType().name())) {
@@ -100,7 +118,7 @@ public class NotificationService {
     notificationRepository.markAllAsRead(userId);
   }
 
-  public NotificationPreferenceEntity updatePreference(
+  public NotificationPreferenceResponseDto updatePreference(
       Integer userId, UpdatePreferenceRequestDto request) {
     NotificationPreferenceEntity pref = getOrCreatePreference(userId);
 
@@ -112,11 +130,22 @@ public class NotificationService {
       pref.setEmailFrequency(request.getEmailFrequency());
     if (Objects.nonNull(request.getMutedTypes())) pref.setMutedTypes(request.getMutedTypes());
 
-    return preferenceRepository.save(pref);
+    return toPreferenceDto(preferenceRepository.save(pref));
   }
 
-  public NotificationPreferenceEntity getPreference(Integer userId) {
-    return getOrCreatePreference(userId);
+  public NotificationPreferenceResponseDto getPreference(Integer userId) {
+    return toPreferenceDto(getOrCreatePreference(userId));
+  }
+
+  private NotificationPreferenceResponseDto toPreferenceDto(NotificationPreferenceEntity pref) {
+    return NotificationPreferenceResponseDto.builder()
+        .userId(pref.getUserId())
+        .pushEnabled(pref.getPushEnabled())
+        .emailEnabled(pref.getEmailEnabled())
+        .emailFrequency(pref.getEmailFrequency())
+        .mutedTypes(pref.getMutedTypes())
+        .updatedAt(pref.getUpdatedAt())
+        .build();
   }
 
   private NotificationEntity saveNotification(SendNotificationRequest request) {
@@ -151,13 +180,18 @@ public class NotificationService {
         && Objects.nonNull(prefs.getOnesignalPlayerId());
   }
 
+  // emailFrequency used to be write-only: stored here and echoed back in the response, but never
+  // consulted when deciding to send, so NONE still produced an email per like. It is read now.
+  // The digest values that used to live alongside it were removed rather than implemented — see
+  // EmailFrequency.
   private boolean shouldSendEmail(NotificationChannel channel, NotificationPreferenceEntity prefs) {
     return (NotificationChannel.EMAIL.equals(channel) || NotificationChannel.BOTH.equals(channel))
-        && Boolean.TRUE.equals(prefs.getEmailEnabled());
+        && Boolean.TRUE.equals(prefs.getEmailEnabled())
+        && !EmailFrequency.NONE.equals(prefs.getEmailFrequency());
   }
 
   private boolean isTypeMuted(NotificationPreferenceEntity prefs, String type) {
-    return Objects.nonNull(prefs.getMutedTypes()) && prefs.getMutedTypes().contains(type);
+    return prefs.getMutedTypes().contains(type);
   }
 
   private NotificationResponseDto toDto(NotificationEntity entity) {

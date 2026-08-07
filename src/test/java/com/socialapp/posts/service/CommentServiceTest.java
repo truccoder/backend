@@ -22,13 +22,17 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -55,6 +59,8 @@ class CommentServiceTest {
   @Mock private UserBanService userBanService;
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
+  @Mock private NewsfeedService newsfeedService;
+  @Mock private BlockQueryService blockQueryService;
 
   @InjectMocks private CommentService commentService;
 
@@ -85,6 +91,25 @@ class CommentServiceTest {
   @Nested
   @DisplayName("createComment")
   class CreateCommentTests {
+
+    @Test
+    @DisplayName("should push the new comment total into the feed cache")
+    void shouldRefreshCachedCommentCount_whenCommentIsCreated() {
+      // Given — the feed never falls back to Postgres, so posting a comment used to leave the
+      // card reading "0 comments" no matter how many times it was refetched (B7)
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(6L);
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("Nice post!");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService).updateCachedCommentCount(POST_ID, 6);
+    }
 
     @Test
     @DisplayName("should save a top-level comment and notify the post author")
@@ -124,6 +149,40 @@ class CommentServiceTest {
       // Then
       verify(commentRepository).save(any());
       verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should record a COMMENT interaction so the author gains feed affinity")
+    void shouldTrackInteraction_whenCommentIsCreated() {
+      // Given — trackInteraction had no production caller at all, so t_user_interactions stayed
+      // empty and the affinity term of the feed ranking formula was always exactly zero
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("Nice post!");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService).trackInteraction(AUTHOR_ID, POST_ID, 2, InteractionType.COMMENT);
+    }
+
+    @Test
+    @DisplayName("should not record an interaction when the author comments on their own post")
+    void shouldNotTrackInteraction_whenAuthorCommentsOnOwnPost() {
+      // Given — affinity with yourself would boost your own posts in your own feed
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("My own comment");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(newsfeedService, never()).trackInteraction(any(), any(), any(), any());
     }
 
     @Test
@@ -387,6 +446,22 @@ class CommentServiceTest {
   class DeleteCommentTests {
 
     @Test
+    @DisplayName("should push the decremented comment total into the feed cache")
+    void shouldRefreshCachedCommentCount_whenCommentIsDeleted() {
+      // Given
+      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(commentRepository.findById(COMMENT_ID))
+          .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(5L);
+
+      // When
+      commentService.deleteComment(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then — deleting has to move the number too, not just creating
+      verify(newsfeedService).updateCachedCommentCount(POST_ID, 5);
+    }
+
+    @Test
     @DisplayName("should delete the comment when the actor is its author")
     void shouldDeleteComment_whenActorIsAuthor() {
       // Given
@@ -446,5 +521,38 @@ class CommentServiceTest {
     user.setId(AUTHOR_ID);
     user.setFullName(fullName);
     return user;
+  }
+
+  @Nested
+  @DisplayName("getComments — block filtering")
+  class GetCommentsBlockFilteringTests {
+
+    @Test
+    @DisplayName("should hide comments written by someone in the viewer's block set")
+    void shouldHideBlockedAuthorsComments() {
+      // Given: two comments, one by a user the viewer has blocked (or who blocked the viewer)
+      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      CommentEntity mine = new CommentEntity();
+      mine.setId(1);
+      mine.setPostId(POST_ID);
+      mine.setAuthorId(7);
+      mine.setContent("visible");
+      CommentEntity blocked = new CommentEntity();
+      blocked.setId(2);
+      blocked.setPostId(POST_ID);
+      blocked.setAuthorId(8);
+      blocked.setContent("hidden");
+      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+          .thenReturn(java.util.List.of(mine, blocked));
+      when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of(8));
+      when(userRepository.findAllById(java.util.Set.of(7))).thenReturn(java.util.List.of());
+
+      // When
+      var comments = commentService.getComments(5, POST_ID);
+
+      // Then — a comment thread is where a blocked user can talk straight at the person who
+      // blocked them, so leaving this unfiltered would undo most of what the block is for
+      assertThat(comments).extracting(CommentResponseDto::getId).containsExactly(1);
+    }
   }
 }

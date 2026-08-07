@@ -37,6 +37,7 @@ import com.socialapp.friendships.dto.SentFriendRequestDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -75,6 +76,11 @@ class FriendshipControllerTest {
 
   @MockBean private FriendshipService friendshipService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String FRIENDSHIPS_URL = "/v1/api/friendships";
@@ -515,6 +521,52 @@ class FriendshipControllerTest {
       mockMvc
           .perform(post(FRIENDSHIPS_URL + "/requests/10/reject"))
           .andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // DELETE /v1/api/friendships/{userId}
+  // =====================================================================
+
+  @Nested
+  @DisplayName("DELETE /v1/api/friendships/{userId}")
+  class UnfriendTests {
+
+    @Test
+    @DisplayName("shouldReturn204AndUnfriend_happyPath")
+    void shouldReturn204() throws Exception {
+      // When / Then
+      mockMvc.perform(authed(delete(FRIENDSHIPS_URL + "/7"))).andExpect(status().isNoContent());
+      verify(friendshipService).unfriend(currentUser.getId(), 7);
+    }
+
+    @Test
+    @DisplayName("shouldReturn204_whenTheTwoWereNotFriends")
+    void shouldBeIdempotent() throws Exception {
+      // Given: the service treats this as a no-op — the caller asked for a state already true
+      // When / Then
+      mockMvc.perform(authed(delete(FRIENDSHIPS_URL + "/7"))).andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenUnfriendingYourself")
+    void shouldReturn400ForSelf() throws Exception {
+      // Given
+      doThrow(new ValidationException("You cannot unfriend yourself"))
+          .when(friendshipService)
+          .unfriend(currentUser.getId(), currentUser.getId());
+
+      // When / Then
+      mockMvc
+          .perform(authed(delete(FRIENDSHIPS_URL + "/" + currentUser.getId())))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401() throws Exception {
+      // When / Then
+      mockMvc.perform(delete(FRIENDSHIPS_URL + "/7")).andExpect(status().isUnauthorized());
     }
   }
 }

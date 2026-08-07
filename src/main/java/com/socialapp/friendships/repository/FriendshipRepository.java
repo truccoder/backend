@@ -22,6 +22,22 @@ public interface FriendshipRepository extends Neo4jRepository<UserNode, Long> {
       """)
   void createFriendship(@Param("userId1") Integer userId1, @Param("userId2") Integer userId2);
 
+  /**
+   * Removes the friendship, whichever direction it was written in.
+   *
+   * <p>The pattern is undirected ({@code -[r:FRIENDS_WITH]-}) to match the undirected {@code MERGE}
+   * in {@link #createFriendship}. Neo4j always stores a relationship with a direction even when it
+   * is created without one, so a directed delete here would remove only the half that happens to
+   * point the way it was written and leave the other pair orderings untouched — and {@link
+   * #countFriends}, which also matches undirected, would keep counting the leftover as a friend.
+   */
+  @Query(
+      """
+      MATCH (u1:User {userId: $userId1})-[r:FRIENDS_WITH]-(u2:User {userId: $userId2})
+      DELETE r
+      """)
+  void deleteFriendship(@Param("userId1") Integer userId1, @Param("userId2") Integer userId2);
+
   @Query(
       """
       OPTIONAL MATCH (u1:User {userId: $userId1})-[:FRIENDS_WITH]-(u2:User {userId: $userId2})

@@ -17,6 +17,8 @@ import com.socialapp.AbstractIntegrationTest;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.PostTagEntity;
+import com.socialapp.posts.entity.PostTagId;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
@@ -243,7 +245,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "pho ngon", authorId, List.of(), PageRequest.of(0, 10));
+              "pho ngon", authorId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).extracting(PostEntity::getId).containsExactly(target.getId());
@@ -263,7 +265,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "distinctwordconf", authorId, List.of(), PageRequest.of(0, 10));
+              "distinctwordconf", authorId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).extracting(PostEntity::getId).containsExactly(target.getId());
@@ -286,7 +288,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "uniquesearchtermpublic", strangerId, List.of(), PageRequest.of(0, 10));
+              "uniquesearchtermpublic", strangerId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).extracting(PostEntity::getId).containsExactly(target.getId());
@@ -308,7 +310,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "uniquesearchtermprivate", strangerId, List.of(), PageRequest.of(0, 10));
+              "uniquesearchtermprivate", strangerId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).isEmpty();
@@ -329,7 +331,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "uniquesearchtermprivate2", authorId, List.of(), PageRequest.of(0, 10));
+              "uniquesearchtermprivate2", authorId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).extracting(PostEntity::getId).containsExactly(target.getId());
@@ -353,10 +355,14 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> friendResult =
           postRepository.searchByContentOrEventName(
-              "uniquesearchtermfriends", friendId, List.of(authorId), PageRequest.of(0, 10));
+              "uniquesearchtermfriends",
+              friendId,
+              List.of(authorId),
+              List.of(-1),
+              PageRequest.of(0, 10));
       Page<PostEntity> strangerResult =
           postRepository.searchByContentOrEventName(
-              "uniquesearchtermfriends", strangerId, List.of(), PageRequest.of(0, 10));
+              "uniquesearchtermfriends", strangerId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(friendResult.getContent())
@@ -375,10 +381,198 @@ class PostRepositoryTest extends AbstractIntegrationTest {
       // When
       Page<PostEntity> result =
           postRepository.searchByContentOrEventName(
-              "zzz_no_such_keyword", authorId, List.of(), PageRequest.of(0, 10));
+              "zzz_no_such_keyword", authorId, List.of(), List.of(-1), PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // tag collection mapping
+  // =====================================================================
+
+  @Nested
+  @DisplayName("tags collection")
+  class TagsCollectionTests {
+
+    @Test
+    @DisplayName("clearing the tag list deletes the rows instead of orphaning them")
+    void clearingTagsDeletesRows() {
+      // Given — a saved post that already carries a tag
+      PostEntity post =
+          postRepository.saveAndFlush(
+              post(authorId, "tagged post", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), authorId));
+      postRepository.saveAndFlush(post);
+
+      // When — this is what updatePost does before rebuilding the list. Hibernate used to plan
+      // "UPDATE t_post_tags SET post_id = NULL" here, which the composite primary key rejects,
+      // so every edit of an already-tagged post failed with a constraint violation.
+      post.getTags().clear();
+
+      // Then
+      postRepository.flush();
+      PostEntity reloaded = postRepository.findById(post.getId()).orElseThrow();
+      assertThat(reloaded.getTags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("replacing the tag list keeps the new tags in position order")
+    void replacingTagsKeepsOrder() {
+      // Given
+      PostEntity post =
+          postRepository.saveAndFlush(
+              post(authorId, "tagged post", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), authorId));
+      postRepository.saveAndFlush(post);
+
+      Integer otherId = userRepository.saveAndFlush(user("other@example.com", "other")).getId();
+
+      // When
+      post.getTags().clear();
+      postRepository.flush();
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 0), otherId));
+      post.getTags().add(new PostTagEntity(new PostTagId(post.getId(), 1), authorId));
+      postRepository.saveAndFlush(post);
+
+      // Then — post_id is written by the child entity itself, so insert still works even though
+      // the association no longer owns that column
+      PostEntity reloaded = postRepository.findById(post.getId()).orElseThrow();
+      assertThat(reloaded.getTags())
+          .extracting(PostTagEntity::getTaggedUserId)
+          .containsExactly(otherId, authorId);
+    }
+  }
+
+  @Nested
+  @DisplayName("findByAuthorForViewer")
+  class FindByAuthorForViewer {
+
+    @Test
+    @DisplayName("returns only the visibilities and statuses the caller asked for, newest first")
+    void filtersByVisibilityAndStatus() {
+      // Given
+      PostEntity pub =
+          postRepository.saveAndFlush(
+              post(authorId, "public one", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      PostEntity friends =
+          postRepository.saveAndFlush(
+              post(authorId, "friends one", PostVisibility.FRIENDS, ModerationStatus.APPROVED));
+      postRepository.saveAndFlush(
+          post(authorId, "private one", PostVisibility.PRIVATE, ModerationStatus.APPROVED));
+      postRepository.saveAndFlush(
+          post(
+              authorId, "pending one", PostVisibility.PUBLIC, ModerationStatus.PENDING_MODERATION));
+
+      // When: what a friend is allowed to see
+      List<PostEntity> result =
+          postRepository.findByAuthorForViewer(
+              authorId,
+              List.of(PostVisibility.PUBLIC, PostVisibility.FRIENDS),
+              List.of(ModerationStatus.APPROVED),
+              null,
+              PageRequest.of(0, 10));
+
+      // Then — newest first, so the later id comes back first
+      assertThat(result)
+          .extracting(PostEntity::getId)
+          .containsExactly(friends.getId(), pub.getId());
+    }
+
+    @Test
+    @DisplayName("walks backwards from the cursor without repeating the row it points at")
+    void appliesCursor() {
+      // Given
+      PostEntity first =
+          postRepository.saveAndFlush(
+              post(authorId, "first", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      PostEntity second =
+          postRepository.saveAndFlush(
+              post(authorId, "second", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+
+      // When
+      List<PostEntity> result =
+          postRepository.findByAuthorForViewer(
+              authorId,
+              List.of(PostVisibility.PUBLIC),
+              List.of(ModerationStatus.APPROVED),
+              second.getId(),
+              PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(PostEntity::getId).containsExactly(first.getId());
+    }
+
+    @Test
+    @DisplayName("returns nothing for another author's posts")
+    void scopedToOneAuthor() {
+      // Given
+      postRepository.saveAndFlush(
+          post(authorId, "mine", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+
+      // When
+      List<PostEntity> result =
+          postRepository.findByAuthorForViewer(
+              authorId + 99_000,
+              List.of(PostVisibility.PUBLIC),
+              List.of(ModerationStatus.APPROVED),
+              null,
+              PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).isEmpty();
+    }
+  }
+
+  @Nested
+  @DisplayName("findPublicFeed")
+  class FindPublicFeed {
+
+    @Test
+    @DisplayName("returns approved PUBLIC posts only, newest first")
+    void returnsPublicApprovedOnly() {
+      // Given
+      PostEntity visible =
+          postRepository.saveAndFlush(
+              post(authorId, "discover me", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+      postRepository.saveAndFlush(
+          post(authorId, "friends only", PostVisibility.FRIENDS, ModerationStatus.APPROVED));
+      postRepository.saveAndFlush(
+          post(authorId, "not approved", PostVisibility.PUBLIC, ModerationStatus.REJECTED));
+
+      // When
+      List<PostEntity> result =
+          postRepository.findPublicFeed(List.of(-1), null, PageRequest.of(0, 50));
+
+      // Then
+      assertThat(result).extracting(PostEntity::getId).contains(visible.getId());
+      assertThat(result)
+          .allSatisfy(
+              p -> {
+                assertThat(p.getVisibility()).isEqualTo(PostVisibility.PUBLIC);
+                assertThat(p.getModerationStatus()).isEqualTo(ModerationStatus.APPROVED);
+              });
+    }
+
+    @Test
+    @DisplayName("drops posts whose author is in the excluded set")
+    void excludesBlockedAuthors() {
+      // Given
+      PostEntity blocked =
+          postRepository.saveAndFlush(
+              post(
+                  authorId,
+                  "from a blocked author",
+                  PostVisibility.PUBLIC,
+                  ModerationStatus.APPROVED));
+
+      // When
+      List<PostEntity> result =
+          postRepository.findPublicFeed(List.of(authorId), null, PageRequest.of(0, 50));
+
+      // Then
+      assertThat(result).extracting(PostEntity::getId).doesNotContain(blocked.getId());
     }
   }
 }

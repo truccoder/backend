@@ -49,7 +49,7 @@ class NotificationPreferenceRepositoryTest extends AbstractIntegrationTest {
     return NotificationPreferenceEntity.builder()
         .userId(userId)
         .pushEnabled(false)
-        .emailFrequency(EmailFrequency.WEEKLY_DIGEST)
+        .emailFrequency(EmailFrequency.NONE)
         .build();
   }
 
@@ -69,7 +69,7 @@ class NotificationPreferenceRepositoryTest extends AbstractIntegrationTest {
 
       // Then
       assertThat(result).isPresent();
-      assertThat(result.get().getEmailFrequency()).isEqualTo(EmailFrequency.WEEKLY_DIGEST);
+      assertThat(result.get().getEmailFrequency()).isEqualTo(EmailFrequency.NONE);
     }
 
     @Test

@@ -130,4 +130,108 @@ class PostReactionRepositoryTest extends AbstractIntegrationTest {
       assertThat(result).isEmpty();
     }
   }
+
+  @Nested
+  @DisplayName("findReactorIds")
+  class FindReactorIds {
+
+    private Integer seedReactor(String name, ReactionType type) {
+      Integer id = userRepository.saveAndFlush(user(name + "@example.com", name)).getId();
+      postReactionRepository.saveAndFlush(reaction(id, postId, type));
+      return id;
+    }
+
+    @Test
+    @DisplayName("returns every reactor in ascending id order when no type is given")
+    void returnsAllReactors() {
+      // Given
+      Integer first = seedReactor("r1", ReactionType.LIKE);
+      Integer second = seedReactor("r2", ReactionType.LOVE);
+
+      // When
+      var ids =
+          postReactionRepository.findReactorIds(
+              postId, null, null, org.springframework.data.domain.PageRequest.of(0, 10));
+
+      // Then
+      assertThat(ids).containsExactly(first, second);
+    }
+
+    @Test
+    @DisplayName("narrows to one reaction type when asked")
+    void filtersByType() {
+      // Given
+      seedReactor("r3", ReactionType.LIKE);
+      Integer lover = seedReactor("r4", ReactionType.LOVE);
+
+      // When
+      var ids =
+          postReactionRepository.findReactorIds(
+              postId,
+              ReactionType.LOVE,
+              null,
+              org.springframework.data.domain.PageRequest.of(0, 10));
+
+      // Then
+      assertThat(ids).containsExactly(lover);
+    }
+
+    @Test
+    @DisplayName("walks forward from the cursor without repeating it")
+    void appliesCursor() {
+      // Given
+      Integer first = seedReactor("r5", ReactionType.LIKE);
+      Integer second = seedReactor("r6", ReactionType.LIKE);
+
+      // When
+      var ids =
+          postReactionRepository.findReactorIds(
+              postId, null, first, org.springframework.data.domain.PageRequest.of(0, 10));
+
+      // Then
+      assertThat(ids).containsExactly(second);
+    }
+  }
+
+  @Nested
+  @DisplayName("countByIdPostIdAndReactionType / countByPostIds")
+  class CountingHelpers {
+
+    @Test
+    @DisplayName("counts one type on one post")
+    void countsOneType() {
+      // Given
+      Integer a = userRepository.saveAndFlush(user("c1@example.com", "c1")).getId();
+      Integer b = userRepository.saveAndFlush(user("c2@example.com", "c2")).getId();
+      postReactionRepository.saveAndFlush(reaction(a, postId, ReactionType.LIKE));
+      postReactionRepository.saveAndFlush(reaction(b, postId, ReactionType.LOVE));
+
+      // When / Then
+      assertThat(postReactionRepository.countByIdPostIdAndReactionType(postId, ReactionType.LIKE))
+          .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("counts a whole page of posts in one query, omitting posts with no reactions")
+    void countsManyPosts() {
+      // Given
+      Integer a = userRepository.saveAndFlush(user("c3@example.com", "c3")).getId();
+      postReactionRepository.saveAndFlush(reaction(a, postId, ReactionType.LIKE));
+      Integer emptyPostId = postRepository.saveAndFlush(post(a)).getId();
+
+      // When
+      Map<Integer, Long> counts =
+          postReactionRepository.countByPostIds(java.util.List.of(postId, emptyPostId));
+
+      // Then — the caller defaults an absent post to zero
+      assertThat(counts).containsEntry(postId, 1L).doesNotContainKey(emptyPostId);
+    }
+
+    @Test
+    @DisplayName("returns an empty map without querying for an empty id list")
+    void emptyInputShortCircuits() {
+      // When / Then
+      assertThat(postReactionRepository.countByPostIds(java.util.List.of())).isEmpty();
+    }
+  }
 }

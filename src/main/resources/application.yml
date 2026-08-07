@@ -45,6 +45,11 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+    # Spring Boot defaults this to true, which keeps the Hibernate session open through view
+    # rendering — lazy associations then resolve silently during JSON serialization, hiding
+    # missing fetch joins and turning list endpoints into N+1 query storms. Off, so an
+    # un-fetched association fails loudly in tests instead of quietly in production.
+    open-in-view: false
     show-sql: true
     properties:
       hibernate:
@@ -60,6 +65,26 @@ spring:
     authentication:
       username: neo4j
       password: neo4j_password
+
+# Defaults to on for local dev so the frontend can regenerate its types from /v3/api-docs.
+# Production must set SPRINGDOC_ENABLED=false — the spec enumerates every endpoint and DTO
+# field, which is reconnaissance material, and Swagger UI is a live request console.
+springdoc:
+  # Serialize every JSON map with its keys sorted. Without this, schema properties come
+  # out in whatever order reflection produced for that JVM run: stable while the process
+  # lives, different after a restart. The frontend commits the generated types and relies
+  # on `git diff` being empty to detect contract drift, so a restart-dependent ordering
+  # buried real changes under ~13k lines of reshuffling.
+  writer-with-order-by-keys: true
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /swagger-ui.html
+    # Endpoints grouped by tag (one tag per controller) rather than one flat list of 100+.
+    tags-sorter: alpha
+    operations-sorter: alpha
 
 cache:
   default-ttl: 30m
@@ -82,7 +107,7 @@ moderation:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
 
 jwt:
-  secret: ${JWT_SECRET:defaultSecretKeyThatShouldBeChangedInProduction12345}
+  secret: ${JWT_SECRET}
   access-token-expiration-ms: 900000
   refresh-token-expiration-ms: 604800000
 
@@ -101,6 +126,13 @@ gemini:
   max-output-tokens: 8192
   temperature: 0.7
 
+stream:
+  chat:
+    api-key: ${STREAM_API_KEY:}
+    api-secret: ${STREAM_API_SECRET:}
+    base-url: ${STREAM_BASE_URL:https://chat.stream-io-api.com}
+    token-ttl: ${STREAM_TOKEN_TTL:24h}
+
 trending:
   crawl-interval-ms: 3600000
 
@@ -118,6 +150,23 @@ google:
     client-secret: ${GOOGLE_CALENDAR_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_CALENDAR_REDIRECT_URI:http://localhost:8080/v1/api/events/google/callback}
 
+  oauth:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
+    client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${GOOGLE_OAUTH_REDIRECT_URI:http://localhost:3000/oauth/google/callback}
+
+github:
+  oauth:
+    client-id: ${GITHUB_OAUTH_CLIENT_ID:}
+    client-secret: ${GITHUB_OAUTH_CLIENT_SECRET:}
+    # Sign in with GitHub.
+    redirect-uri: ${GITHUB_OAUTH_REDIRECT_URI:http://localhost:3000/oauth/github/callback}
+    # Link GitHub to an account that is already signed in. Must be a DIFFERENT route from the one
+    # above, and both must be registered on the GitHub OAuth app. A GitHub code is single-use, so
+    # sharing one callback meant the login handler consumed the code the link flow needed and
+    # linking never worked (B23a).
+    link-redirect-uri: ${GITHUB_OAUTH_LINK_REDIRECT_URI:http://localhost:3000/settings/github/callback}
+
 # MoMo AIO v2 sandbox. partner-code/access-key/secret-key default to MoMo's own publicly
 # published test credentials (github.com/momo-wallet/payment) so this works out of the box
 # against test-payment.momo.vn; override once you have your own sandbox merchant.
@@ -128,3 +177,17 @@ momo:
   api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
+
+# Anonymous read surface (the discovery feed, a public post, a public profile and its posts,
+# trending, reputation, GitHub stats, books by author). Those endpoints have no user id to hold
+# responsible, so the only handle left for a bulk crawl is the caller's IP.
+#
+# trust-forwarded-for stays FALSE unless this service sits behind a reverse proxy that overwrites
+# X-Forwarded-For: any client can set that header itself, so trusting it without a proxy means a
+# scraper sends a fresh fake IP per request and the limit protects nothing.
+rate-limit:
+  guest:
+    enabled: ${GUEST_RATE_LIMIT_ENABLED:true}
+    requests: ${GUEST_RATE_LIMIT_REQUESTS:60}
+    window: ${GUEST_RATE_LIMIT_WINDOW:1m}
+    trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}

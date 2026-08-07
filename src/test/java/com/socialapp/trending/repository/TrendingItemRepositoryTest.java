@@ -176,11 +176,11 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
       // Given
       TrendingItemEntity match =
           trendingItemRepository.saveAndFlush(
-              item("c1", TrendingSource.REDDIT, TrendingCategory.MINDSET, 15, CUTOFF.plusDays(1)));
+              item("c1", TrendingSource.DEV_TO, TrendingCategory.MINDSET, 15, CUTOFF.plusDays(1)));
       trendingItemRepository.saveAndFlush(
-          item("c2", TrendingSource.REDDIT, TrendingCategory.CAREER, 15, CUTOFF.plusDays(1)));
+          item("c2", TrendingSource.DEV_TO, TrendingCategory.CAREER, 15, CUTOFF.plusDays(1)));
       trendingItemRepository.saveAndFlush(
-          item("c3", TrendingSource.REDDIT, TrendingCategory.MINDSET, 15, CUTOFF.minusDays(1)));
+          item("c3", TrendingSource.DEV_TO, TrendingCategory.MINDSET, 15, CUTOFF.minusDays(1)));
 
       // When
       Page<TrendingItemEntity> result =
@@ -203,11 +203,11 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
     void findsExistingItem() {
       // Given
       trendingItemRepository.saveAndFlush(
-          item("id-1", TrendingSource.MEDIUM, TrendingCategory.OTHER, 1, CUTOFF));
+          item("id-1", TrendingSource.DEV_TO, TrendingCategory.OTHER, 1, CUTOFF));
 
       // When
       Optional<TrendingItemEntity> result =
-          trendingItemRepository.findBySourceAndSourceId(TrendingSource.MEDIUM, "id-1");
+          trendingItemRepository.findBySourceAndSourceId(TrendingSource.DEV_TO, "id-1");
 
       // Then
       assertThat(result).isPresent();
@@ -218,11 +218,11 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
     void returnsEmptyWhenSourceDiffers() {
       // Given
       trendingItemRepository.saveAndFlush(
-          item("id-1", TrendingSource.MEDIUM, TrendingCategory.OTHER, 1, CUTOFF));
+          item("id-1", TrendingSource.DEV_TO, TrendingCategory.OTHER, 1, CUTOFF));
 
       // When
       Optional<TrendingItemEntity> result =
-          trendingItemRepository.findBySourceAndSourceId(TrendingSource.HBR, "id-1");
+          trendingItemRepository.findBySourceAndSourceId(TrendingSource.GITHUB, "id-1");
 
       // Then
       assertThat(result).isEmpty();

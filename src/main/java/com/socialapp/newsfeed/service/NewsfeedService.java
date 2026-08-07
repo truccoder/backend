@@ -5,19 +5,16 @@ import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_P
 
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Consumer;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.socialapp.bookstore.dto.RatingBreakdownDto;
-import com.socialapp.bookstore.entity.BookEntity;
-import com.socialapp.bookstore.repository.BookRepository;
-import com.socialapp.bookstore.service.BookReviewService;
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.utils.GoogleMapsUrlBuilder;
-import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -27,8 +24,7 @@ import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
-import com.socialapp.posts.entity.PostTagEntity;
-import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
@@ -49,12 +45,27 @@ public class NewsfeedService {
   private final PostRepository postRepository;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
-  private final BookRepository bookRepository;
-  private final BookReviewService bookReviewService;
+  private final FeedPostDataMapper feedPostDataMapper;
+  private final BlockQueryService blockQueryService;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
 
+  /**
+   * How much wider than {@code size} the feed window is read when the caller has blocks, so that
+   * removing blocked authors afterwards still usually fills the page. Three is a guess with a
+   * bounded cost (one Redis range read and up to 3× the cached-post deserialisation), not a
+   * measured optimum.
+   */
+  private static final int BLOCK_OVERFETCH_FACTOR = 3;
+
+  // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
+  // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
+  // spring.jpa.open-in-view off there is no session left over from the request to initialize them.
+  // Every caller today happens to be @Transactional, so this only makes an existing unwritten
+  // requirement explicit — but it is the difference between a future non-transactional caller
+  // failing here and failing in production.
+  @Transactional
   public void fanOutPost(Integer postId) {
     PostEntity post =
         postRepository
@@ -66,33 +77,11 @@ public class NewsfeedService {
             .findById(post.getAuthorId())
             .orElseThrow(() -> new NotFoundException("Author not found: " + post.getAuthorId()));
 
-    List<Integer> taggedUserIds =
-        Objects.isNull(post.getTags())
-            ? List.of()
-            : post.getTags().stream().map(PostTagEntity::getTaggedUserId).toList();
-
-    FeedPostDataDto postData =
-        FeedPostDataDto.builder()
-            .postId(post.getId())
-            .authorId(post.getAuthorId())
-            .authorFullName(author.getFullName())
-            .authorProfilePictureUrl(author.getProfilePictureUrl())
-            .content(post.getContent())
-            .visibility(post.getVisibility())
-            .googlePlaceId(post.getGooglePlaceId())
-            .locationType(post.getLocationType())
-            .locationDetails(post.getLocationDetails())
-            .googleMapsUrl(
-                post.getLocationDetails() != null
-                    ? GoogleMapsUrlBuilder.build(
-                        post.getLocationDetails().getLatitude(),
-                        post.getLocationDetails().getLongitude())
-                    : null)
-            .postType(post.getPostType())
-            .eventDetails(post.getEventDetails())
-            .book(loadBookSummary(post))
-            .createdAt(post.getCreatedAt())
-            .build();
+    // The payload itself is built by FeedPostDataMapper, which the read-from-Postgres endpoints
+    // (permalink, an author's posts, the discovery feed) share — see that class for why this is
+    // not inlined here any more.
+    FeedPostDataDto postData = feedPostDataMapper.toFeedPostData(post, author);
+    List<Integer> taggedUserIds = postData.getTaggedUserIds();
 
     fanOutPost(postData, taggedUserIds);
     notifyTaggedUsers(post, author, taggedUserIds);
@@ -122,43 +111,6 @@ public class NewsfeedService {
     }
 
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
-  }
-
-  private FeedBookSummaryDto loadBookSummary(PostEntity post) {
-    if (!PostType.BOOK.equals(post.getPostType())) {
-      return null;
-    }
-
-    return bookRepository.findByPostId(post.getId()).stream()
-        .findFirst()
-        .map(this::toBookSummary)
-        .orElse(null);
-  }
-
-  private FeedBookSummaryDto toBookSummary(BookEntity book) {
-    RatingBreakdownDto ratings = bookReviewService.getRatingBreakdown(book.getId());
-
-    return FeedBookSummaryDto.builder()
-        .bookId(book.getId())
-        .title(book.getTitle())
-        .description(book.getDescription())
-        .coverImageUrl(book.getCoverImageUrl())
-        .fileFormat(book.getFileFormat())
-        .fileSizeBytes(book.getFileSizeBytes())
-        .totalPages(book.getTotalPages())
-        .previewPages(book.getPreviewPages())
-        .price(book.getPrice())
-        .currency(book.getCurrency())
-        .isFree(book.getIsFree())
-        .avgRating(book.getAvgRating())
-        .reviewCount(book.getReviewCount())
-        .oneStarCount(ratings.oneStarCount())
-        .twoStarsCount(ratings.twoStarsCount())
-        .threeStarsCount(ratings.threeStarsCount())
-        .fourStarsCount(ratings.fourStarsCount())
-        .fiveStarsCount(ratings.fiveStarsCount())
-        .totalRatings(ratings.totalRatings())
-        .build();
   }
 
   private void notifyTaggedUsers(PostEntity post, UserEntity author, List<Integer> taggedUserIds) {
@@ -192,6 +144,52 @@ public class NewsfeedService {
     cachePostData(String.valueOf(postData.getPostId()), postData);
   }
 
+  /**
+   * Rewrites the cached like count for one post.
+   *
+   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database
+   * is a counter the user never sees. Callers pass a count they have just read from their own
+   * repository rather than a delta: read-modify-write against Redis is not atomic, and under
+   * concurrent reactions a delta would drift permanently, whereas an absolute value taken from
+   * the authoritative table self-corrects on the very next interaction.
+   */
+  public void updateCachedLikeCount(Integer postId, int likeCount) {
+    mutateCachedPost(postId, post -> post.setLikeCount(likeCount));
+  }
+
+  /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
+  public void updateCachedCommentCount(Integer postId, int commentCount) {
+    mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
+  }
+
+  /**
+   * Rewrites the cached QNA block for one post — see {@link #updateCachedLikeCount}. Accepting an
+   * answer changes {@code isResolved}/{@code acceptedAnswerId}, and the feed would otherwise keep
+   * serving the pre-accept copy.
+   */
+  public void updateCachedQnaDetails(Integer postId, QnaDetails qnaDetails) {
+    mutateCachedPost(postId, post -> post.setQnaDetails(qnaDetails));
+  }
+
+  private void mutateCachedPost(Integer postId, Consumer<FeedPostDataDto> mutation) {
+    String key = POST_CACHE_KEY_PREFIX + postId;
+    String json = redisTemplate.opsForValue().get(key);
+
+    // A miss is normal, not an error: private posts and posts still in moderation never reach
+    // the cache, and reacting to one of those must not resurrect it into anybody's feed.
+    if (Objects.isNull(json)) {
+      return;
+    }
+
+    try {
+      FeedPostDataDto postData = objectMapper.readValue(json, FeedPostDataDto.class);
+      mutation.accept(postData);
+      cachePostData(String.valueOf(postId), postData);
+    } catch (Exception e) {
+      log.warn("Failed to update cached counters for post {}", postId, e);
+    }
+  }
+
   public void removePost(Integer postId, Integer authorId, List<Integer> taggedUserIds) {
     String postIdStr = String.valueOf(postId);
 
@@ -210,10 +208,28 @@ public class NewsfeedService {
     }
   }
 
+  /**
+   * The caller's own feed.
+   *
+   * <p>Blocked authors are removed <b>after</b> the page is read, unlike everywhere else, and that
+   * is forced by the storage: this feed is a Redis sorted set of post ids per user, so there is no
+   * query to add a predicate to. A post already fanned out to somebody's feed before the block was
+   * placed is still sitting in that set, and blocking does not walk every follower's list to prune
+   * it — that would be a write over an unbounded number of keys for something the read can filter.
+   *
+   * <p>The cost of filtering after the fact is that a page can come back short. To keep that from
+   * being visible for the ordinary case, the window read from Redis is widened only when the
+   * caller actually has blocks; a user with none — nearly everyone — reads exactly what they did
+   * before. It can still return fewer than {@code size} items for a user who has blocked heavily
+   * and whose feed is dense with those authors; that is a thin page, not a leak, and the next page
+   * still advances.
+   */
   public FeedResponseDto getFeed(Integer userId, int page, int size) {
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
+
     String feedKey = FEED_KEY_PREFIX + userId;
     long start = (long) (page - 1) * size;
-    long end = start + size;
+    long end = start + (blockedIds.isEmpty() ? size : (long) size * BLOCK_OVERFETCH_FACTOR);
 
     Set<String> postIds = redisTemplate.opsForZSet().reverseRange(feedKey, start, end);
 
@@ -227,6 +243,10 @@ public class NewsfeedService {
     }
 
     List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
+    if (!blockedIds.isEmpty()) {
+      posts = posts.stream().filter(post -> !blockedIds.contains(post.getAuthorId())).toList();
+    }
+    signBookCovers(posts);
 
     boolean hasMore = posts.size() > size;
     if (hasMore) {
@@ -236,6 +256,26 @@ public class NewsfeedService {
     return FeedResponseDto.builder().posts(posts).page(page).size(size).hasMore(hasMore).build();
   }
 
+  /**
+   * Records that {@code userId} engaged with a post by {@code authorId}.
+   *
+   * <p>This is the write half of feed affinity: {@code PostScoringService.loadAffinityMap} counts
+   * these rows per author over the last 30 days and boosts that author's posts by up to six hours
+   * of apparent freshness. It had no caller anywhere in production — only tests — so {@code
+   * t_user_interactions} was permanently empty, {@code loadAffinityMap} always returned an empty
+   * map, and the affinity term of the ranking formula was always exactly zero. The feed was
+   * ordered by recency and engagement alone while looking, from the code, like it personalised.
+   *
+   * <p>Callers must skip self-interaction: affinity with yourself would boost your own posts in
+   * your own feed, which is noise, and every other per-post side effect here (author notification,
+   * reputation award) already skips it.
+   *
+   * <p>Deliberately append-only — nothing deletes a row when a reaction is removed, unlike the
+   * reputation award it sits next to. Having clicked like is attention paid to that author whether
+   * or not the click was taken back, and the 30-day window in {@code loadAffinityMap} already ages
+   * the signal out. The cost is that repeated like/unlike on one post adds a row each time; it only
+   * skews the reordering of that user's own feed, so it is not worth a dedup index to prevent.
+   */
   public void trackInteraction(
       Integer userId, Integer postId, Integer authorId, InteractionType type) {
     UserInteractionEntity entity = new UserInteractionEntity();
@@ -244,6 +284,11 @@ public class NewsfeedService {
     entity.setAuthorId(authorId);
     entity.setType(type);
     userInteractionRepository.save(entity);
+  }
+
+  /** Signs each cached cover key as the feed is served — see {@code FeedPostDataMapper}. */
+  private void signBookCovers(List<FeedPostDataDto> posts) {
+    posts.forEach(feedPostDataMapper::signBookCover);
   }
 
   private List<FeedPostDataDto> loadPostsFromCache(Collection<String> postIds) {

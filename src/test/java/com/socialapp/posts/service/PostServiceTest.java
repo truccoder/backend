@@ -7,16 +7,18 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -47,13 +50,22 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.EventDetails;
+import com.socialapp.posts.entity.HashtagEntity;
+import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
+import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -88,6 +100,9 @@ class PostServiceTest {
   @Mock private ModerationProperties moderationProperties;
   @Mock private UserBanService userBanService;
   @Mock private BookService bookService;
+  @Mock private HashtagRepository hashtagRepository;
+  @Mock private CommentRepository commentRepository;
+  @Mock private ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private PostService postService;
 
@@ -298,7 +313,8 @@ class PostServiceTest {
       postService.createPost(AUTHOR_ID, request);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       PostEntity saved = postCaptor.getValue();
       assertThat(saved.getModerationStatus()).isEqualTo(ModerationStatus.APPROVED);
       assertThat(saved.getPostType()).isEqualTo(PostType.REGULAR);
@@ -306,6 +322,26 @@ class PostServiceTest {
       assertThat(saved.getTags()).extracting(PostTagEntity::getTaggedUserId).containsExactly(2, 3);
       verify(newsfeedService).fanOutPost(any());
       verifyNoInteractions(moderationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should flush the insert before fanning out so createdAt is populated")
+    void shouldFlushBeforeFanOut() {
+      // Given — @CreationTimestamp fills createdAt when the INSERT runs, and save() only
+      // schedules it. Fanning out before the flush cached posts with createdAt: null while the
+      // Postgres row had the real timestamp.
+      CreatePostRequestDto request = createRequest("Hello", PostVisibility.PUBLIC, null);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then — order matters, not just the call: a flush after the fan-out fixes nothing
+      InOrder inOrder = inOrder(postRepository, newsfeedService);
+      inOrder.verify(postRepository).saveAndFlush(any(PostEntity.class));
+      inOrder.verify(newsfeedService).fanOutPost(any());
     }
 
     @Test
@@ -323,7 +359,8 @@ class PostServiceTest {
       postService.createPost(AUTHOR_ID, request);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       PostEntity saved = postCaptor.getValue();
       assertThat(saved.getModerationStatus()).isEqualTo(ModerationStatus.APPROVED);
       assertThat(saved.getPostType()).isEqualTo(PostType.REGULAR);
@@ -346,7 +383,8 @@ class PostServiceTest {
       postService.createPost(AUTHOR_ID, request);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       assertThat(postCaptor.getValue().getVisibility()).isEqualTo(PostVisibility.PRIVATE);
       assertThat(postCaptor.getValue().getTags()).isEmpty();
       verify(newsfeedService).fanOutPost(any());
@@ -385,7 +423,8 @@ class PostServiceTest {
       postService.createPost(AUTHOR_ID, request);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       assertThat(postCaptor.getValue().getModerationStatus())
           .isEqualTo(ModerationStatus.PENDING_MODERATION);
       verify(moderationEventPublisher).publishForReview(any(PostEntity.class), isNull());
@@ -526,7 +565,8 @@ class PostServiceTest {
       postService.createPost(AUTHOR_ID, request);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       assertThat(postCaptor.getValue().getPostType()).isEqualTo(PostType.EVENT);
       verify(newsfeedService).fanOutPost(any());
     }
@@ -606,11 +646,58 @@ class PostServiceTest {
       postService.createBookPost(AUTHOR_ID, request, bookFile, coverFile);
 
       // Then
-      verify(postRepository, times(2)).save(postCaptor.capture());
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
       assertThat(postCaptor.getValue().getPostType()).isEqualTo(PostType.BOOK);
       verify(bookService)
           .createBookForPost(eq(AUTHOR_ID), isNull(), eq(bookDetails), eq(bookFile), eq(coverFile));
       verify(newsfeedService).fanOutPost(any());
+    }
+
+    @Test
+    @DisplayName("should create the book row before fanning out, not after")
+    void shouldFanOutAfterBookIsCreated() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest("Check out my book", PostVisibility.PUBLIC, null);
+      CreateBookRequestDto bookDetails = new CreateBookRequestDto();
+      bookDetails.setTitle("My First Book");
+      request.setBookDetails(bookDetails);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.createBookPost(AUTHOR_ID, request, bookFile, coverFile);
+
+      // Then — the feed entry embeds a book summary read from t_books by postId, so fanning out
+      // first caches book: null for the whole 7-day TTL.
+      InOrder ordered = inOrder(bookService, newsfeedService);
+      ordered.verify(bookService).createBookForPost(any(), any(), any(), any(), any());
+      ordered.verify(newsfeedService).fanOutPost(any());
+    }
+
+    @Test
+    @DisplayName("should not fan out at all when moderation is enabled")
+    void shouldNotFanOut_whenModerationEnabled() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest("Check out my book", PostVisibility.PUBLIC, null);
+      CreateBookRequestDto bookDetails = new CreateBookRequestDto();
+      bookDetails.setTitle("My First Book");
+      request.setBookDetails(bookDetails);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(true);
+      when(moderationRuleEngine.evaluate(eq(AUTHOR_ID), any())).thenReturn(approvedByRuleEngine());
+
+      // When
+      postService.createBookPost(AUTHOR_ID, request, bookFile, coverFile);
+
+      // Then — the post reaches the feed later, via ModerationEventListener.
+      verify(moderationEventPublisher).publishForReview(any(), any());
+      verify(bookService).createBookForPost(any(), any(), any(), any(), any());
+      verify(newsfeedService, never()).fanOutPost(any());
     }
   }
 
@@ -621,6 +708,147 @@ class PostServiceTest {
   @Nested
   @DisplayName("updatePost")
   class UpdatePostTests {
+
+    @Test
+    @DisplayName("should keep detail blocks, images and tags that the request did not mention")
+    void shouldKeepUnmentionedFields_whenRequestIsPartial() {
+      // Given — a caption-only edit, exactly what a client sends when it has nothing else to
+      // say. Before this, BeanUtils.copyProperties wrote null over every omitted column and one
+      // such edit erased the post's quiz, poll, images and tag list.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setQuizDetails(new QuizDetails());
+      post.setPollDetails(new PollDetails());
+      post.setImages(List.of("a.png"));
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("Only the caption changed");
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getContent()).isEqualTo("Only the caption changed");
+      assertThat(post.getQuizDetails()).isNotNull();
+      assertThat(post.getPollDetails()).isNotNull();
+      assertThat(post.getImages()).containsExactly("a.png");
+      assertThat(post.getVisibility()).isEqualTo(PostVisibility.PUBLIC);
+      assertThat(post.getTags()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should still replace fields the request does mention")
+    void shouldReplaceMentionedFields() {
+      // Given — "leave alone" must not turn into "ignore": a value that IS sent still wins
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setImages(List.of("old.png"));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setImages(List.of("new.png"));
+      request.setVisibility(PostVisibility.FRIENDS);
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getImages()).containsExactly("new.png");
+      assertThat(post.getVisibility()).isEqualTo(PostVisibility.FRIENDS);
+      assertThat(post.getContent()).isEqualTo("Old content");
+    }
+
+    @Test
+    @DisplayName("should clear the tag list when the request sends an empty one")
+    void shouldClearTags_whenRequestSendsEmptyList() {
+      // Given — an empty list is the escape hatch that null no longer provides
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setTaggedUserIds(List.of());
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      assertThat(post.getTags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should judge the privacy rule on the merged post, not on the request alone")
+    void shouldEnforcePrivacyRule_againstExistingTags() {
+      // Given — the post already tags someone and the request only flips it to PRIVATE. The
+      // tags are never mentioned, yet the merged post would be a private post with tags.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setVisibility(PostVisibility.PRIVATE);
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.updatePost(AUTHOR_ID, POST_ID, request))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Private posts cannot tag other users");
+    }
+
+    @Test
+    @DisplayName("should not apply the placeholder rule to tags the request never sent")
+    void shouldSkipPlaceholderRule_whenTagsAreNotSent() {
+      // Given — editing the caption of a tagged post. The new text carries no @[i] placeholder,
+      // but the caller is not touching the tags, so the rule does not apply to them.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), 42));
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("A caption with no placeholders");
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When / Then — rejecting this edit would be no better than silently dropping the tags
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+      assertThat(post.getTags()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should still apply the placeholder rule to a tag list the request does send")
+    void shouldApplyPlaceholderRule_whenTagsAreSent() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+
+      UpdatePostRequestDto request = new UpdatePostRequestDto();
+      request.setContent("No placeholder here");
+      request.setTaggedUserIds(List.of(42));
+
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.updatePost(AUTHOR_ID, POST_ID, request))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Missing placeholder");
+    }
 
     @Test
     @DisplayName("should reject when the actor is currently banned")
@@ -855,6 +1083,489 @@ class PostServiceTest {
       // When / Then
       assertThatCode(() -> postService.deletePost(AUTHOR_ID, POST_ID)).doesNotThrowAnyException();
       verify(postRepository).delete(post);
+    }
+
+    @Test
+    @DisplayName("should delete the attached book before the post when the post is a BOOK post")
+    void shouldDeleteAttachedBook_whenPostIsBookPost() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.BOOK);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then — the book must go first, so a refusal from BookService stops the post delete too.
+      InOrder ordered = inOrder(bookService, postRepository);
+      ordered.verify(bookService).deleteBooksForPost(POST_ID);
+      ordered.verify(postRepository).delete(post);
+    }
+
+    @Test
+    @DisplayName("should not look for a book when the post is not a BOOK post")
+    void shouldNotTouchBookService_whenPostIsNotBookPost() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then
+      verifyNoInteractions(bookService);
+    }
+
+    @Test
+    @DisplayName("should keep the post when the attached book refuses to be deleted")
+    void shouldNotDeletePost_whenBookDeletionIsRefused() {
+      // Given — a sold book cannot be deleted, and the post is the only page it has.
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.BOOK);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      doThrow(new ValidationException("This book has been purchased and can no longer be deleted"))
+          .when(bookService)
+          .deleteBooksForPost(POST_ID);
+
+      // When / Then
+      assertThatThrownBy(() -> postService.deletePost(AUTHOR_ID, POST_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("has been purchased");
+      verify(postRepository, never()).delete(any());
+      verifyNoInteractions(newsfeedService);
+    }
+  }
+
+  // =====================================================================
+  // acceptAnswer
+  // =====================================================================
+
+  @Nested
+  @DisplayName("acceptAnswer")
+  class AcceptAnswerTests {
+
+    private static final Integer COMMENT_ID = 500;
+    private static final Integer COMMENTER_ID = 2;
+
+    private PostEntity qnaPost() {
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.QNA);
+      post.setQnaDetails(new QnaDetails(false, null, null));
+      return post;
+    }
+
+    private CommentEntity comment(Integer authorId) {
+      CommentEntity comment = new CommentEntity();
+      comment.setId(COMMENT_ID);
+      comment.setPostId(POST_ID);
+      comment.setAuthorId(authorId);
+      comment.setContent("The answer");
+      return comment;
+    }
+
+    @Test
+    @DisplayName("should accept the answer and award reputation to a different comment author")
+    void shouldAcceptAnswerAndAwardRep_whenCommenterIsNotTheAuthor() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(COMMENTER_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isEqualTo(COMMENT_ID);
+      // B10: isResolved was never written by anything, so an answered question kept the
+      // "unanswered" label forever
+      assertThat(post.getQnaDetails().getIsResolved()).isTrue();
+      verify(postRepository).save(post);
+      verify(reputationEventPublisher)
+          .award(COMMENTER_ID, RepSourceType.ACCEPTED_ANSWER, COMMENT_ID.toString());
+    }
+
+    @Test
+    @DisplayName("should refresh the cached QNA block so the feed stops saying unanswered")
+    void shouldRefreshCachedQnaDetails() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(COMMENTER_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then — the feed reads qnaDetails out of Redis and never falls back to Postgres
+      verify(newsfeedService).updateCachedQnaDetails(POST_ID, post.getQnaDetails());
+    }
+
+    @Test
+    @DisplayName("should not award reputation when the author accepts their own answer")
+    void shouldNotAwardRep_whenAuthorAcceptsOwnAnswer() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(AUTHOR_ID)));
+
+      // When
+      postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isEqualTo(COMMENT_ID);
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the actor is not the post author")
+    void shouldThrowForbiddenException_whenActorIsNotAuthor() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(999, POST_ID, COMMENT_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the post is not a QNA post")
+    void shouldThrowValidationException_whenPostIsNotQna() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.REGULAR);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Only QNA posts");
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when an answer has already been accepted")
+    void shouldThrowValidationException_whenAnswerAlreadyAccepted() {
+      // Given
+      PostEntity post = qnaPost();
+      post.getQnaDetails().setAcceptedAnswerId(COMMENT_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("already been accepted");
+      verifyNoInteractions(commentRepository, reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the comment does not exist")
+    void shouldThrowNotFoundException_whenCommentDoesNotExist() {
+      // Given
+      PostEntity post = qnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("Comment not found");
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the comment belongs to a different post")
+    void shouldThrowValidationException_whenCommentBelongsToDifferentPost() {
+      // Given
+      PostEntity post = qnaPost();
+      CommentEntity foreignComment = comment(COMMENTER_ID);
+      foreignComment.setPostId(POST_ID + 1);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(foreignComment));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.acceptAnswer(AUTHOR_ID, POST_ID, COMMENT_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("does not belong to this post");
+      verifyNoInteractions(reputationEventPublisher);
+    }
+  }
+
+  // =====================================================================
+  // unacceptAnswer
+  // =====================================================================
+
+  @Nested
+  @DisplayName("unacceptAnswer")
+  class UnacceptAnswerTests {
+
+    private static final Integer COMMENT_ID = 500;
+    private static final Integer COMMENTER_ID = 2;
+
+    private PostEntity resolvedQnaPost() {
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.QNA);
+      post.setQnaDetails(new QnaDetails(true, null, COMMENT_ID));
+      return post;
+    }
+
+    private CommentEntity comment(Integer authorId) {
+      CommentEntity entity = new CommentEntity();
+      entity.setId(COMMENT_ID);
+      entity.setPostId(POST_ID);
+      entity.setAuthorId(authorId);
+      entity.setContent("The answer");
+      return entity;
+    }
+
+    @Test
+    @DisplayName("should clear the pick, reopen the question and take the reputation back")
+    void shouldClearAcceptedAnswerAndRevokeRep() {
+      // Given — before this endpoint existed the first pick was permanent, because acceptAnswer
+      // refuses to run twice
+      PostEntity post = resolvedQnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(COMMENTER_ID)));
+
+      // When
+      postService.unacceptAnswer(AUTHOR_ID, POST_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isNull();
+      assertThat(post.getQnaDetails().getIsResolved()).isFalse();
+      verify(postRepository).save(post);
+      verify(newsfeedService).updateCachedQnaDetails(POST_ID, post.getQnaDetails());
+      // Same sourceId the award used, or accept/un-accept in a loop would mint points
+      verify(reputationEventPublisher)
+          .revoke(COMMENTER_ID, RepSourceType.ACCEPTED_ANSWER, COMMENT_ID.toString());
+    }
+
+    @Test
+    @DisplayName("should not revoke reputation that was never granted for a self-answer")
+    void shouldNotRevokeRep_whenAuthorHadAcceptedOwnAnswer() {
+      // Given — acceptAnswer skips the award when the author accepts themselves
+      PostEntity post = resolvedQnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.of(comment(AUTHOR_ID)));
+
+      // When
+      postService.unacceptAnswer(AUTHOR_ID, POST_ID);
+
+      // Then
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isNull();
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should still clear the pick when the accepted comment has since been deleted")
+    void shouldClearAcceptedAnswer_whenCommentIsGone() {
+      // Given
+      PostEntity post = resolvedQnaPost();
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.empty());
+
+      // When
+      postService.unacceptAnswer(AUTHOR_ID, POST_ID);
+
+      // Then — a deleted comment must not strand the post as resolved
+      assertThat(post.getQnaDetails().getAcceptedAnswerId()).isNull();
+      assertThat(post.getQnaDetails().getIsResolved()).isFalse();
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should reject when the actor is not the post author")
+    void shouldThrowForbiddenException_whenActorIsNotAuthor() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(resolvedQnaPost()));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.unacceptAnswer(999, POST_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verifyNoInteractions(commentRepository, reputationEventPublisher, newsfeedService);
+    }
+
+    @Test
+    @DisplayName("should reject when the post does not exist")
+    void shouldThrowNotFoundException_whenPostDoesNotExist() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> postService.unacceptAnswer(AUTHOR_ID, POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should reject when the post is not a QNA post")
+    void shouldThrowValidationException_whenPostIsNotQna() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.REGULAR);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.unacceptAnswer(AUTHOR_ID, POST_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("Only QNA posts");
+      verifyNoInteractions(commentRepository, reputationEventPublisher, newsfeedService);
+    }
+
+    @Test
+    @DisplayName("should reject when no answer has been accepted yet")
+    void shouldThrowValidationException_whenNothingAccepted() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      post.setPostType(PostType.QNA);
+      post.setQnaDetails(new QnaDetails(false, null, null));
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When / Then
+      assertThatThrownBy(() -> postService.unacceptAnswer(AUTHOR_ID, POST_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("No answer has been accepted");
+      verify(postRepository, never()).save(any());
+      verifyNoInteractions(commentRepository, reputationEventPublisher, newsfeedService);
+    }
+  }
+
+  // =====================================================================
+
+  @Nested
+  @DisplayName("Hashtag Extraction (processHashtags)")
+  class HashtagExtractionTests {
+
+    @Test
+    @DisplayName("should not interact with hashtag repository when content has no hashtags")
+    void shouldNotInteract_whenNoHashtags() {
+      // Given
+      CreatePostRequestDto request = createRequest("Hello world", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verifyNoInteractions(hashtagRepository);
+    }
+
+    @Test
+    @DisplayName("should extract, save and link new hashtags case-insensitively")
+    void shouldExtractAndSaveNewHashtags() {
+      // Given
+      CreatePostRequestDto request =
+          createRequest(
+              "Learning #Java and #Spring today! Also #JAVA", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
+
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      Set<HashtagEntity> hashtags = savedPost.getHashtags();
+      assertThat(hashtags).hasSize(2); // java and spring
+      assertThat(hashtags)
+          .extracting(HashtagEntity::getName)
+          .containsExactlyInAnyOrder("java", "spring");
+
+      assertThat(hashtags).extracting(HashtagEntity::getUsageCount).containsOnly(1);
+    }
+
+    @Test
+    @DisplayName("should increment usage count of existing hashtags")
+    void shouldIncrementExistingHashtags() {
+      // Given
+      CreatePostRequestDto request = createRequest("I love #java", PostVisibility.PUBLIC, null);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      HashtagEntity existingTag = new HashtagEntity();
+      existingTag.setName("java");
+      existingTag.setUsageCount(5);
+
+      when(hashtagRepository.findByNameIn(any()))
+          .thenReturn(new java.util.ArrayList<>(List.of(existingTag)));
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.createPost(AUTHOR_ID, request);
+
+      // Then
+      verify(postRepository).save(postCaptor.capture());
+      verify(postRepository).saveAndFlush(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      assertThat(savedPost.getHashtags()).hasSize(1);
+      HashtagEntity tag = savedPost.getHashtags().iterator().next();
+      assertThat(tag.getName()).isEqualTo("java");
+      assertThat(tag.getUsageCount()).isEqualTo(6); // 5 + 1
+    }
+
+    @Test
+    @DisplayName("should decrement old tags and increment new tags when updating a post")
+    void shouldDecrementOldAndIncrementNewTags_whenUpdatingPost() {
+      // Given
+      UpdatePostRequestDto request =
+          updateRequest("Now I learn #react", PostVisibility.PUBLIC, null);
+
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      HashtagEntity oldTag = new HashtagEntity();
+      oldTag.setName("java");
+      oldTag.setUsageCount(2);
+      post.setHashtags(new HashSet<>(List.of(oldTag)));
+
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
+      when(moderationProperties.isEnabled()).thenReturn(false);
+
+      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
+      when(hashtagRepository.saveAll(any()))
+          .thenAnswer(
+              invocation -> {
+                Iterable<HashtagEntity> args = invocation.getArgument(0);
+                List<HashtagEntity> list = new java.util.ArrayList<>();
+                args.forEach(list::add);
+                return list;
+              });
+
+      // When
+      postService.updatePost(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      // verify old tag was decremented
+      assertThat(oldTag.getUsageCount()).isEqualTo(1);
+
+      verify(postRepository).save(postCaptor.capture());
+      PostEntity savedPost = postCaptor.getValue();
+
+      assertThat(savedPost.getHashtags()).hasSize(1);
+      HashtagEntity newTag = savedPost.getHashtags().iterator().next();
+      assertThat(newTag.getName()).isEqualTo("react");
+      assertThat(newTag.getUsageCount()).isEqualTo(1);
     }
   }
 }

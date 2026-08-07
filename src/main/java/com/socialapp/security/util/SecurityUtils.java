@@ -29,4 +29,21 @@ public class SecurityUtils {
   public static Integer getCurrentUserId() {
     return requireCurrentUser().getId();
   }
+
+  /**
+   * The caller's id, or {@code null} when nobody is signed in.
+   *
+   * <p>For the endpoints that guests may read (the discovery feed, a public post, a public
+   * profile's posts). {@link #getCurrentUserId} <em>throws</em> for an anonymous request, which is
+   * the right behaviour everywhere it is used today — but on an endpoint that is deliberately open,
+   * that throw turns a legitimate guest request into a 401 in a place Spring Security has already
+   * decided to allow.
+   *
+   * <p>Callers must treat {@code null} as the "stranger" relationship level, never as an error —
+   * see {@code PostVisibilityService}, which takes the null case explicitly rather than letting it
+   * reach a repository as a null parameter.
+   */
+  public static Integer getCurrentUserIdOrNull() {
+    return getCurrentUser().map(UserEntity::getId).orElse(null);
+  }
 }

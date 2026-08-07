@@ -58,6 +58,47 @@ public class UserBanService {
     evaluateAndBanIfNeeded(userId, postId);
   }
 
+  /**
+   * Erases one violation and re-decides whether the user should still be banned.
+   *
+   * <p>Called when an appeal is upheld. Deleting the row rather than flagging it: the row exists to
+   * be counted toward {@link #VIOLATIONS_BEFORE_BAN}, and a violation that has been judged wrong
+   * must not keep counting. {@code UserViolationEntity} has no "voided" state to set, and adding
+   * one would mean every count query in this class has to remember to exclude it — a filter that is
+   * easy to forget in the next query someone writes.
+   *
+   * <p>Lifting the ban is not automatic: it is lifted only if what remains no longer reaches the
+   * threshold. A user with three violations who successfully appeals one still has two, and two is
+   * what got them banned.
+   */
+  @Transactional
+  public void revokeViolation(Long violationId) {
+    UserViolationEntity violation = violationRepository.findById(violationId).orElse(null);
+    if (violation == null) {
+      return;
+    }
+
+    Integer userId = violation.getUserId();
+    violationRepository.delete(violation);
+    // Flushed before recounting, or countRecentViolations still sees the row just deleted and the
+    // ban is never lifted.
+    violationRepository.flush();
+
+    long remaining =
+        violationRepository.countRecentViolations(userId, getViolationCountStartDate(userId));
+
+    if (remaining < VIOLATIONS_BEFORE_BAN) {
+      userRepository
+          .findById(userId)
+          .ifPresent(
+              user -> {
+                user.setBannedUntil(null);
+                userRepository.save(user);
+              });
+      log.warn("Ban lifted for user {} after a violation was revoked ({} left)", userId, remaining);
+    }
+  }
+
   private void evaluateAndBanIfNeeded(Integer userId, Integer triggeringPostId) {
     OffsetDateTime countSince = getViolationCountStartDate(userId);
     long recentViolationCount = violationRepository.countRecentViolations(userId, countSince);

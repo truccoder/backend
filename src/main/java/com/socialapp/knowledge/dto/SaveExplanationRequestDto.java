@@ -12,5 +12,12 @@ public class SaveExplanationRequestDto {
   @NotNull private String explanationContent;
   private List<String> concepts;
   private List<String> prerequisites;
+
+  /**
+   * Sent straight back from the generate response. Without this field the client had no way to
+   * return what it had just been shown, so saving quietly discarded the "Read more" list.
+   */
+  private List<ExplanationResponseDto.ExternalLink> externalLinks;
+
   private Integer complexityScore;
 }

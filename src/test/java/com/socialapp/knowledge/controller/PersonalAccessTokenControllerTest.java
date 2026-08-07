@@ -28,9 +28,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.dto.CreateTokenResponseDto;
-import com.socialapp.knowledge.entity.PersonalAccessTokenEntity;
+import com.socialapp.knowledge.dto.PersonalAccessTokenResponseDto;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.service.PersonalAccessTokenService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -58,6 +59,11 @@ class PersonalAccessTokenControllerTest {
 
   @MockBean private PersonalAccessTokenService tokenService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String TOKENS_URL = "/v1/api/tokens";
@@ -203,11 +209,9 @@ class PersonalAccessTokenControllerTest {
     @DisplayName("shouldReturn200AndTokenList_happyPath")
     void shouldReturn200AndTokenList_happyPath() throws Exception {
       // Given
-      PersonalAccessTokenEntity token =
-          PersonalAccessTokenEntity.builder()
+      PersonalAccessTokenResponseDto token =
+          PersonalAccessTokenResponseDto.builder()
               .id(1)
-              .userId(currentUser.getId())
-              .tokenHash("hashed")
               .name("My CLI Token")
               .vaultPermission(VaultPermission.WRITE_ONLY)
               .build();
@@ -218,7 +222,8 @@ class PersonalAccessTokenControllerTest {
           .perform(authed(get(TOKENS_URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$[0].id").value(1))
-          .andExpect(jsonPath("$[0].name").value("My CLI Token"));
+          .andExpect(jsonPath("$[0].name").value("My CLI Token"))
+          .andExpect(jsonPath("$[0].tokenHash").doesNotExist());
     }
 
     @Test

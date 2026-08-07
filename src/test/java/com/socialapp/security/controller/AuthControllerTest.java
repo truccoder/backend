@@ -4,8 +4,10 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,6 +34,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.dto.BanDetailsDto;
+import com.socialapp.moderation.enums.ViolationType;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -41,6 +46,7 @@ import com.socialapp.security.dto.AuthResponseDto;
 import com.socialapp.security.exception.AccountBannedException;
 import com.socialapp.security.repository.UserRepository;
 import com.socialapp.security.service.AuthService;
+import com.socialapp.security.service.OAuthAuthService;
 
 /**
  * System/API integration tests for {@link AuthController}, per ISTQB CTFL v4.0.1 Section 2.2.2
@@ -74,10 +80,16 @@ class AuthControllerTest {
   @Autowired private ObjectMapper objectMapper;
 
   @MockBean private AuthService authService;
+  @MockBean private OAuthAuthService oAuthAuthService;
 
   // JwtAuthenticationFilter's own dependencies — mocked so the real filter chain in
   // SecurityConfig can be wired up without needing a live JWT signing key or database.
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String REGISTER_URL = "/v1/api/auth/register";
@@ -91,7 +103,8 @@ class AuthControllerTest {
   private static final String LOGOUT_URL = "/v1/api/auth/logout";
 
   private static AuthResponseDto sampleAuthResponse() {
-    return new AuthResponseDto("access-token-abc", "refresh-token-xyz", "Bearer", 3600L);
+    return new AuthResponseDto(
+        "access-token-abc", "refresh-token-xyz", "Bearer", 3600L, false, false);
   }
 
   // =====================================================================
@@ -176,7 +189,14 @@ class AuthControllerTest {
     void shouldReturn403_whenLoginThrowsAccountBannedException() throws Exception {
       // Given
       OffsetDateTime bannedUntil = OffsetDateTime.parse("2026-12-31T00:00:00Z");
-      when(authService.login(any())).thenThrow(new AccountBannedException(bannedUntil));
+      when(authService.login(any()))
+          .thenThrow(
+              new AccountBannedException(
+                  BanDetailsDto.builder()
+                      .bannedUntil(bannedUntil)
+                      .violationType(ViolationType.SPAM)
+                      .reason("Admin manual review: repeated advertising")
+                      .build()));
       String requestJson =
           """
           { "email": "banned@example.com", "password": "12345678a" }
@@ -188,7 +208,13 @@ class AuthControllerTest {
           .andExpect(status().isForbidden())
           .andExpect(jsonPath("$.code").value(403))
           .andExpect(jsonPath("$.error").value("Account Banned"))
-          .andExpect(jsonPath("$.message").value(containsString("banned until")));
+          .andExpect(jsonPath("$.message").value(containsString("banned until")))
+          // The structured half (E2): the end date used to be readable only by parsing it back
+          // out of the English sentence above.
+          .andExpect(jsonPath("$.banDetails.bannedUntil").exists())
+          .andExpect(jsonPath("$.banDetails.violationType").value("SPAM"))
+          .andExpect(
+              jsonPath("$.banDetails.reason").value("Admin manual review: repeated advertising"));
     }
 
     @Test
@@ -260,6 +286,21 @@ class AuthControllerTest {
           .perform(post(LOGIN_URL).content(requestJson))
           .andExpect(status().isUnsupportedMediaType())
           .andExpect(jsonPath("$.message").value("Content-Type must be application/json"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn405_whenMethodIsNotSupported")
+    void shouldReturn405_whenMethodIsNotSupported() throws Exception {
+      // Given — /auth/login exists but only answers POST
+
+      // When / Then — HttpRequestMethodNotSupportedException now has its own @ExceptionHandler
+      // (previously fell through to the generic Exception handler and was misreported as 500).
+      // RFC 9110 §15.5.6 makes the Allow header mandatory on a 405, hence the header assertion.
+      mockMvc
+          .perform(delete(LOGIN_URL))
+          .andExpect(status().isMethodNotAllowed())
+          .andExpect(jsonPath("$.message").value(containsString("DELETE")))
+          .andExpect(header().string("Allow", containsString("POST")));
     }
   }
 

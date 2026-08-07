@@ -41,7 +41,14 @@ public class BookEntity {
    */
   private String previewFileKey;
 
-  private String coverImageUrl;
+  /**
+   * MinIO object key, never a URL.
+   *
+   * <p>It used to hold the presigned URL produced at upload time, which expires after 24h, so
+   * every cover in the app died a day old. Presigning belongs to the read path, next to where
+   * {@code fileKey} and {@code previewFileKey} are signed.
+   */
+  private String coverImageKey;
 
   @Enumerated(EnumType.STRING)
   private FileFormat fileFormat;

@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -55,6 +56,11 @@ class TrendingControllerTest {
 
   @MockBean private TrendingService trendingService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String TRENDING_URL = "/v1/api/trending";
@@ -154,11 +160,24 @@ class TrendingControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
-    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
-      // When / Then — endpoint still requires authentication even though the controller method
-      // never reads the current user
-      mockMvc.perform(get(TRENDING_URL)).andExpect(status().isUnauthorized());
+    @DisplayName("shouldReturn200_whenCalledByAGuestWithNoAuthorizationHeader")
+    void shouldServeGuests() throws Exception {
+      // Given
+      when(trendingService.getTrending(null, "week", 1, 10))
+          .thenReturn(
+              TrendingPageResponseDto.builder()
+                  .items(java.util.List.of())
+                  .page(1)
+                  .size(10)
+                  .totalElements(0)
+                  .totalPages(0)
+                  .hasNext(false)
+                  .build());
+
+      // Given: no Authorization header at all
+      // When / Then — opened to guests when the product moved from closed to open;
+      // this assertion is what stops a later SecurityConfig tidy-up closing it again.
+      mockMvc.perform(get(TRENDING_URL)).andExpect(status().isOk());
     }
   }
 }

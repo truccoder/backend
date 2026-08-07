@@ -10,11 +10,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.newsfeed.entity.enums.InteractionType;
+import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -38,12 +41,30 @@ public class CommentService {
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
+  private final NewsfeedService newsfeedService;
+  private final BlockQueryService blockQueryService;
 
+  /**
+   * The comments on a post, as {@code viewerId} is allowed to see them.
+   *
+   * <p>Takes a viewer — it used to take only the post id — because comments by a blocked user have
+   * to be hidden. A comment thread is the one place where somebody who has been blocked can still
+   * talk directly at the person who blocked them, so leaving this unfiltered would undo much of
+   * what the block is for.
+   *
+   * <p>Hidden, not deleted, and hidden only for this reader: the comment stays visible to everyone
+   * else, including its author, who is not told. That asymmetry is deliberate — a block that
+   * announced itself would invite retaliation.
+   */
   @Transactional(readOnly = true)
-  public List<CommentResponseDto> getComments(Integer postId) {
+  public List<CommentResponseDto> getComments(Integer viewerId, Integer postId) {
     verifyPostExists(postId);
 
-    List<CommentEntity> comments = commentRepository.findByPostIdOrderByCreatedAtAsc(postId);
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(viewerId);
+    List<CommentEntity> comments =
+        commentRepository.findByPostIdOrderByCreatedAtAsc(postId).stream()
+            .filter(comment -> !blockedIds.contains(comment.getAuthorId()))
+            .toList();
     Set<Integer> authorIds =
         comments.stream().map(CommentEntity::getAuthorId).collect(Collectors.toSet());
     Map<Integer, UserEntity> authorsById =
@@ -85,8 +106,27 @@ public class CommentService {
     comment.setContent(request.getContent());
     comment.setParentId(request.getParentId());
     commentRepository.save(comment);
+    refreshCachedCommentCount(postId);
 
     notifyPostAuthor(post, authorId);
+    trackCommentInteraction(post, authorId);
+  }
+
+  /**
+   * Feeds the comment into feed affinity — see {@code NewsfeedService#trackInteraction}, which
+   * until now had no caller at all. Skips commenting on your own post, as the notification does.
+   *
+   * <p>Every comment counts, including replies and repeat comments on the same post: unlike a
+   * reaction there is no "already engaged" state to compare against, and somebody arguing in a
+   * thread all afternoon genuinely is more engaged with that author than somebody who commented
+   * once.
+   */
+  private void trackCommentInteraction(PostEntity post, Integer authorId) {
+    if (post.getAuthorId().equals(authorId)) {
+      return;
+    }
+    newsfeedService.trackInteraction(
+        authorId, post.getId(), post.getAuthorId(), InteractionType.COMMENT);
   }
 
   @Transactional
@@ -113,6 +153,17 @@ public class CommentService {
     verifyAuthor(actorId, comment);
 
     commentRepository.delete(comment);
+    refreshCachedCommentCount(postId);
+  }
+
+  /**
+   * Pushes the new comment total into the feed cache.
+   *
+   * <p>The feed reads only from Redis and never falls back to Postgres, so a count left alone
+   * here is a count the user never sees change — it sat at 0 for every post in the app.
+   */
+  private void refreshCachedCommentCount(Integer postId) {
+    newsfeedService.updateCachedCommentCount(postId, (int) commentRepository.countByPostId(postId));
   }
 
   private void validateParentComment(Integer parentId, Integer postId) {

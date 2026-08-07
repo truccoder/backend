@@ -1,24 +1,17 @@
 package com.socialapp.bookstore.service;
 
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
 
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 
-import com.socialapp.bookstore.config.MomoProperties;
 import com.socialapp.bookstore.dto.PaymentResponseDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.BookPurchaseEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.exception.PaymentException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -26,51 +19,29 @@ import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Integrates MoMo's "AIO v2" payment gateway using the payWithATM request type — the hosted
- * payUrl page has the buyer pick a bank and type in their domestic ATM card details directly,
- * rather than scanning a QR code with the MoMo app (captureWallet). See
- * https://developers.momo.vn/v3/docs/payment/api/wallet/onetimepayment and the official sample at
- * https://github.com/momo-wallet/payment/blob/master/nodejs/pay-with-ATM.js, which is what the
- * exact field names/order below (both request bodies and the HMAC-SHA256 rawSignature strings)
- * are taken from — the request/signature shape is identical across requestTypes, so switching
- * back only means changing REQUEST_TYPE.
+ * Business orchestration for MoMo "AIO v2" payments — idempotency, purchase state transitions,
+ * and author notification. See {@link MomoApiClient} for the MoMo protocol mechanics (signing,
+ * request shaping, the raw HTTP call) this class delegates to.
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class MomoService {
-  private final MomoProperties momoProperties;
+  private final MomoApiClient momoApiClient;
   private final BookPurchaseRepository purchaseRepository;
   private final BookService bookService;
-  private final WebClient momoWebClient;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
 
-  private static final String REQUEST_TYPE = "payWithATM";
   private static final String DEFAULT_PAYMENT_METHOD = "ATM";
   private static final int SUCCESS_RESULT_CODE = 0;
   // MoMo's hosted payWithATM link is short-lived; matches the window we're willing to assume a
   // pending transactionRef might still be paid against before treating it as abandoned.
   private static final long PENDING_PAYMENT_STALE_MINUTES = 15;
-
-  public MomoService(
-      MomoProperties momoProperties,
-      BookPurchaseRepository purchaseRepository,
-      BookService bookService,
-      @Qualifier("momoWebClient") WebClient momoWebClient,
-      UserRepository userRepository,
-      NotificationService notificationService) {
-    this.momoProperties = momoProperties;
-    this.purchaseRepository = purchaseRepository;
-    this.bookService = bookService;
-    this.momoWebClient = momoWebClient;
-    this.userRepository = userRepository;
-    this.notificationService = notificationService;
-  }
 
   @Transactional
   public PaymentResponseDto createPayment(Integer buyerId, Integer bookId) {
@@ -107,10 +78,10 @@ public class MomoService {
               + "). Please complete it, or try again in a few minutes if it expired.");
     }
 
-    String orderId = momoProperties.getPartnerCode() + System.currentTimeMillis();
+    String orderId = momoApiClient.createOrderId();
     String requestId = orderId;
     String amount = String.valueOf(book.getPrice());
-    String orderInfo = truncateOrderInfo("Mua sach: " + book.getTitle());
+    String orderInfo = "Mua sach: " + book.getTitle();
     String extraData = "";
 
     if (purchase == null) {
@@ -128,7 +99,8 @@ public class MomoService {
         buyerId,
         orderId);
 
-    Map<String, Object> data = requestPaymentLink(orderId, requestId, amount, orderInfo, extraData);
+    Map<String, Object> data =
+        momoApiClient.requestPaymentLink(orderId, requestId, amount, orderInfo, extraData);
 
     return PaymentResponseDto.builder()
         .paymentUrl((String) data.get("payUrl"))
@@ -143,10 +115,8 @@ public class MomoService {
   @Transactional
   public boolean handleWebhook(Map<String, Object> payload) {
     String orderId = String.valueOf(payload.get("orderId"));
-    String computedSignature = buildIpnSignature(payload);
-    String receivedSignature = String.valueOf(payload.get("signature"));
 
-    if (!computedSignature.equalsIgnoreCase(receivedSignature)) {
+    if (!momoApiClient.verifyIpnSignature(payload)) {
       log.warn("[orderId={}] MoMo IPN signature mismatch, ignoring payload", orderId);
       return false;
     }
@@ -175,33 +145,7 @@ public class MomoService {
   public boolean syncPaymentStatus(String transactionRef) {
     findPurchaseOrThrow(transactionRef);
 
-    String requestId = transactionRef;
-    String rawSignature =
-        "accessKey="
-            + momoProperties.getAccessKey()
-            + "&orderId="
-            + transactionRef
-            + "&partnerCode="
-            + momoProperties.getPartnerCode()
-            + "&requestId="
-            + requestId;
-
-    Map<String, Object> requestBody =
-        Map.of(
-            "partnerCode",
-            momoProperties.getPartnerCode(),
-            "accessKey",
-            momoProperties.getAccessKey(),
-            "requestId",
-            requestId,
-            "orderId",
-            transactionRef,
-            "lang",
-            "vi",
-            "signature",
-            hmacSHA256(momoProperties.getSecretKey(), rawSignature));
-
-    Map<String, Object> response = postForMap("/v2/gateway/api/query", requestBody);
+    Map<String, Object> response = momoApiClient.queryPaymentStatus(transactionRef);
 
     log.info(
         "[orderId={}] syncPaymentStatus: MoMo resultCode={}",
@@ -213,55 +157,6 @@ public class MomoService {
         asInt(response.get("resultCode")),
         String.valueOf(response.getOrDefault("transId", "")),
         null);
-  }
-
-  private Map<String, Object> requestPaymentLink(
-      String orderId, String requestId, String amount, String orderInfo, String extraData) {
-    String rawSignature =
-        "accessKey="
-            + momoProperties.getAccessKey()
-            + "&amount="
-            + amount
-            + "&extraData="
-            + extraData
-            + "&ipnUrl="
-            + momoProperties.getIpnUrl()
-            + "&orderId="
-            + orderId
-            + "&orderInfo="
-            + orderInfo
-            + "&partnerCode="
-            + momoProperties.getPartnerCode()
-            + "&redirectUrl="
-            + momoProperties.getRedirectUrl()
-            + "&requestId="
-            + requestId
-            + "&requestType="
-            + REQUEST_TYPE;
-    String signature = hmacSHA256(momoProperties.getSecretKey(), rawSignature);
-
-    Map<String, Object> requestBody = new LinkedHashMap<>();
-    requestBody.put("partnerCode", momoProperties.getPartnerCode());
-    requestBody.put("accessKey", momoProperties.getAccessKey());
-    requestBody.put("requestId", requestId);
-    requestBody.put("amount", amount);
-    requestBody.put("orderId", orderId);
-    requestBody.put("orderInfo", orderInfo);
-    requestBody.put("redirectUrl", momoProperties.getRedirectUrl());
-    requestBody.put("ipnUrl", momoProperties.getIpnUrl());
-    requestBody.put("extraData", extraData);
-    requestBody.put("requestType", REQUEST_TYPE);
-    requestBody.put("signature", signature);
-    requestBody.put("lang", "vi");
-
-    Map<String, Object> response = postForMap("/v2/gateway/api/create", requestBody);
-
-    if (asInt(response.get("resultCode")) != SUCCESS_RESULT_CODE) {
-      log.error("[orderId={}] MoMo create-payment failed: {}", orderId, response);
-      throw new ValidationException("Failed to create MoMo payment link");
-    }
-
-    return response;
   }
 
   private boolean applyResult(String orderId, int resultCode, String transId, String payType) {
@@ -318,90 +213,11 @@ public class MomoService {
         .orElse("Someone");
   }
 
-  private String buildIpnSignature(Map<String, Object> payload) {
-    String rawSignature =
-        "accessKey="
-            + momoProperties.getAccessKey()
-            + "&amount="
-            + stringify(payload.get("amount"))
-            + "&extraData="
-            + stringify(payload.get("extraData"))
-            + "&message="
-            + stringify(payload.get("message"))
-            + "&orderId="
-            + stringify(payload.get("orderId"))
-            + "&orderInfo="
-            + stringify(payload.get("orderInfo"))
-            + "&orderType="
-            + stringify(payload.get("orderType"))
-            + "&partnerCode="
-            + stringify(payload.get("partnerCode"))
-            + "&payType="
-            + stringify(payload.get("payType"))
-            + "&requestId="
-            + stringify(payload.get("requestId"))
-            + "&responseTime="
-            + stringify(payload.get("responseTime"))
-            + "&resultCode="
-            + stringify(payload.get("resultCode"))
-            + "&transId="
-            + stringify(payload.get("transId"));
-    return hmacSHA256(momoProperties.getSecretKey(), rawSignature);
-  }
-
-  private String stringify(Object value) {
-    return value == null ? "" : String.valueOf(value);
-  }
-
   private int asInt(Object value) {
     if (value instanceof Number number) {
       return number.intValue();
     }
     return Integer.parseInt(String.valueOf(value));
-  }
-
-  private String truncateOrderInfo(String orderInfo) {
-    int maxLength = 100;
-    return orderInfo.length() <= maxLength ? orderInfo : orderInfo.substring(0, maxLength);
-  }
-
-  @SuppressWarnings("unchecked")
-  private Map<String, Object> postForMap(String uri, Map<String, Object> requestBody) {
-    Map<String, Object> response;
-    try {
-      response =
-          momoWebClient
-              .post()
-              .uri(uri)
-              .bodyValue(requestBody)
-              .retrieve()
-              .bodyToMono(Map.class)
-              .block();
-    } catch (Exception e) {
-      throw new PaymentException("Failed to reach MoMo for " + uri, e);
-    }
-
-    if (Objects.isNull(response)) {
-      throw new ValidationException("MoMo returned no response for " + uri);
-    }
-    return response;
-  }
-
-  private String hmacSHA256(String key, String data) {
-    try {
-      Mac hmac = Mac.getInstance("HmacSHA256");
-      SecretKeySpec secretKey =
-          new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
-      hmac.init(secretKey);
-      byte[] hash = hmac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-      StringBuilder sb = new StringBuilder();
-      for (byte b : hash) {
-        sb.append(String.format("%02x", b));
-      }
-      return sb.toString();
-    } catch (Exception e) {
-      throw new PaymentException("Failed to generate HMAC", e);
-    }
   }
 
   private BookPurchaseEntity findPurchaseOrThrow(String transactionRef) {

@@ -2,6 +2,7 @@ package com.socialapp.friendships.controller;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.friendships.dto.FriendListResponseDto;
@@ -41,6 +42,19 @@ public class FriendshipController {
   @GetMapping("/requests/sent")
   public List<SentFriendRequestDto> getSentRequests() {
     return friendshipService.getSentRequests(SecurityUtils.getCurrentUserId());
+  }
+
+  /**
+   * Unfriend. 204 even when the two were not friends — see {@code FriendshipService#unfriend} for
+   * why this is idempotent rather than a 404.
+   *
+   * <p>{@code /{userId}} and not {@code /requests/{id}}: what is being deleted is the friendship,
+   * which is identified by the other person, not the request row that once created it.
+   */
+  @DeleteMapping("/{userId}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void unfriend(@PathVariable Integer userId) {
+    friendshipService.unfriend(SecurityUtils.getCurrentUserId(), userId);
   }
 
   @PostMapping("/requests/{addresseeId}")

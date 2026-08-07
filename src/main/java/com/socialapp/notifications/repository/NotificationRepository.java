@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 import com.socialapp.notifications.entity.NotificationEntity;
+import com.socialapp.notifications.entity.enums.NotificationType;
 
 public interface NotificationRepository extends JpaRepository<NotificationEntity, Integer> {
 
@@ -18,6 +19,14 @@ public interface NotificationRepository extends JpaRepository<NotificationEntity
   List<NotificationEntity> findByRecipientIdAndIsReadFalseOrderByCreatedAtDesc(Integer recipientId);
 
   int countByRecipientIdAndIsReadFalse(Integer recipientId);
+
+  /**
+   * Whether this exact notification has already been written. The event reminder job uses it as
+   * its "already sent" record, which is why it needs no table of its own: a reminder IS a row in
+   * here, keyed by recipient, type and the post it points at.
+   */
+  boolean existsByRecipientIdAndTypeAndReferenceId(
+      Integer recipientId, NotificationType type, Integer referenceId);
 
   @Modifying
   @Query(

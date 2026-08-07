@@ -47,6 +47,38 @@ services:
     networks:
       - backend-network
     restart: always
+    # Needed so neo4j-seed waits for a Neo4j that actually answers queries. "Container started"
+    # is not the same thing here: Bolt refuses connections for several seconds after boot.
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neo4j_password 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # Friendship reads (GET /v1/api/friendships, /suggestions) come from Neo4j, but Flyway only
+  # manages Postgres, so nothing ever created the graph: a `docker compose down -v` left every
+  # dev with an empty friends list and empty suggestions, and the graph was rebuilt by hand three
+  # times before this existed. The two scripts have been in the repo all along with "run me by
+  # hand" in their headers — this service is what makes them actually run.
+  #
+  # The waiting is done inside seed.sh, not by depends_on alone: see the comment there.
+  neo4j-seed:
+    image: neo4j:5.20
+    container_name: neo4j-seed
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./docker/neo4j/seed:/seed:ro
+      - ./docker/neo4j/seed.sh:/seed.sh:ro
+    networks:
+      - backend-network
+    # Invoked through bash rather than executed directly, so the script does not need an exec
+    # bit — one less thing to lose on a Windows checkout.
+    entrypoint: ["/bin/bash", "/seed.sh"]
+    # One-shot: it seeds and exits. Without this it would be restarted forever by the default.
+    restart: "no"
 
   redis:
     image: redis:7-alpine

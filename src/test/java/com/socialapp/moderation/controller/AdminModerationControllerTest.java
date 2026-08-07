@@ -1,6 +1,7 @@
 package com.socialapp.moderation.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -23,11 +24,17 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.dto.AppealDto;
 import com.socialapp.moderation.dto.BannedUserDto;
 import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
+import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.enums.ModerationStatus;
+import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.service.AdminModerationService;
+import com.socialapp.moderation.service.AppealService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -62,7 +69,13 @@ class AdminModerationControllerTest {
   @Autowired private MockMvc mockMvc;
 
   @MockBean private AdminModerationService adminModerationService;
+  @MockBean private AppealService appealService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String ADMIN_URL = "/v1/api/admin/moderation";
@@ -297,7 +310,7 @@ class AdminModerationControllerTest {
       // Given
       org.mockito.Mockito.doThrow(new IllegalStateException("Post is not in PENDING_REVIEW status"))
           .when(adminModerationService)
-          .reviewPost(org.mockito.ArgumentMatchers.anyInt(), any(), any());
+          .reviewPost(org.mockito.ArgumentMatchers.anyInt(), any(), any(), any());
       String requestJson =
           """
           { "decision": "LIKELY" }
@@ -364,6 +377,117 @@ class AdminModerationControllerTest {
               asRegularUser(post(ADMIN_URL + "/posts/1/review"))
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
+          .andExpect(status().isForbidden());
+    }
+  }
+
+  // =====================================================================
+  // Appeals (E3) — admin side
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/admin/moderation/appeals")
+  class AppealQueueTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheQueue_whenCalledByAdmin_happyPath")
+    void shouldReturnQueue() throws Exception {
+      when(appealService.getAppeals(any(), any()))
+          .thenReturn(
+              new PageImpl<>(
+                  List.of(
+                      AppealDto.builder()
+                          .id(1L)
+                          .userId(9001)
+                          .userFullName("User 9001")
+                          .violationType(ViolationType.SPAM)
+                          .status(AppealStatus.PENDING)
+                          .build())));
+
+      mockMvc
+          .perform(asAdmin(get(ADMIN_URL + "/appeals")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.content[0].userFullName").value("User 9001"))
+          .andExpect(jsonPath("$.content[0].violationType").value("SPAM"));
+    }
+
+    @Test
+    @DisplayName("shouldDefaultToPending_whenNoStatusIsGiven")
+    void shouldDefaultToPending() throws Exception {
+      when(appealService.getAppeals(any(), any())).thenReturn(new PageImpl<>(List.of()));
+
+      mockMvc.perform(asAdmin(get(ADMIN_URL + "/appeals"))).andExpect(status().isOk());
+
+      // PENDING is the only status with anything to do; the parameter exists so a decided appeal
+      // can still be looked up.
+      verify(appealService)
+          .getAppeals(org.mockito.ArgumentMatchers.eq(AppealStatus.PENDING), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotAnAdmin")
+    void shouldReturn403ForNonAdmin() throws Exception {
+      mockMvc.perform(asRegularUser(get(ADMIN_URL + "/appeals"))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc.perform(get(ADMIN_URL + "/appeals")).andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("POST /v1/api/admin/moderation/appeals/{appealId}/approve|reject")
+  class AppealDecisionTests {
+
+    @Test
+    @DisplayName("shouldReturn200_whenApprovingWithANote")
+    void shouldApprove() throws Exception {
+      when(appealService.approve(org.mockito.ArgumentMatchers.eq(1L), any(), any()))
+          .thenReturn(AppealDto.builder().id(1L).status(AppealStatus.APPROVED).build());
+
+      mockMvc
+          .perform(
+              asAdmin(post(ADMIN_URL + "/appeals/1/approve"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"reviewerNote\": \"You were right\" }"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.status").value("APPROVED"));
+    }
+
+    @Test
+    @DisplayName("shouldAcceptNoBodyAtAll_becauseTheNoteIsOptional")
+    void shouldAcceptMissingBody() throws Exception {
+      when(appealService.reject(org.mockito.ArgumentMatchers.eq(1L), any(), any()))
+          .thenReturn(AppealDto.builder().id(1L).status(AppealStatus.REJECTED).build());
+
+      // An admin who just wants to reject should not have to POST "{}".
+      mockMvc
+          .perform(asAdmin(post(ADMIN_URL + "/appeals/1/reject")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.status").value("REJECTED"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenTheAppealWasAlreadyDecided")
+    void shouldReturn400OnAlreadyDecided() throws Exception {
+      // Deciding twice would go looking for a violation the first approval deleted.
+      when(appealService.approve(org.mockito.ArgumentMatchers.eq(1L), any(), any()))
+          .thenThrow(new ValidationException("This appeal has already been approved"));
+
+      mockMvc
+          .perform(asAdmin(post(ADMIN_URL + "/appeals/1/approve")))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotAnAdmin")
+    void shouldReturn403ForNonAdmin() throws Exception {
+      // A banned admin is not exempted into this path either — the appeal exemption covers only
+      // /v1/api/moderation/*, never /v1/api/admin/**.
+      mockMvc
+          .perform(asRegularUser(post(ADMIN_URL + "/appeals/1/approve")))
           .andExpect(status().isForbidden());
     }
   }

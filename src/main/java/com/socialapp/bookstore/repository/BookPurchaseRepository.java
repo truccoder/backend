@@ -14,4 +14,11 @@ public interface BookPurchaseRepository extends JpaRepository<BookPurchaseEntity
 
   boolean existsByBookIdAndBuyerIdAndPaymentStatus(
       Integer bookId, Integer buyerId, com.socialapp.bookstore.entity.enums.PaymentStatus status);
+
+  /**
+   * Whether anyone has paid for this book. Guards deletion: {@code t_book_purchases.book_id} is ON
+   * DELETE CASCADE, so removing the row would take the payment records with it.
+   */
+  boolean existsByBookIdAndPaymentStatus(
+      Integer bookId, com.socialapp.bookstore.entity.enums.PaymentStatus status);
 }

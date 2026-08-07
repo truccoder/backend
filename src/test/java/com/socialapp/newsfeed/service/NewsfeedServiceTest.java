@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -16,13 +17,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -30,12 +31,15 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.dto.RatingBreakdownDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.FileFormat;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
+import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -43,12 +47,21 @@ import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.entity.ArticleDetails;
+import com.socialapp.posts.entity.CodeSnippetDetails;
+import com.socialapp.posts.entity.LinkDetails;
 import com.socialapp.posts.entity.LocationDetails;
+import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.QuizDetails;
+import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.repository.CommentRepository;
+import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
@@ -78,11 +91,47 @@ class NewsfeedServiceTest {
   @Mock private NotificationService notificationService;
   @Mock private BookRepository bookRepository;
   @Mock private BookReviewService bookReviewService;
+  @Mock private BookStorageService bookStorageService;
+  @Mock private PostReactionRepository postReactionRepository;
+  @Mock private CommentRepository commentRepository;
 
   @Mock private ZSetOperations<String, String> zSetOperations;
   @Mock private ValueOperations<String, String> valueOperations;
 
-  @InjectMocks private NewsfeedService newsfeedService;
+  @Mock private BlockQueryService blockQueryService;
+
+  private NewsfeedService newsfeedService;
+
+  /**
+   * The payload builder is wired up for real, not mocked.
+   *
+   * <p>{@link FeedPostDataMapper} was carved out of this class so the read-from-Postgres endpoints
+   * could return the same shape as the feed; the behaviour it took with it — which detail blocks
+   * are copied, where the counts come from, how a book summary is attached — is still behaviour
+   * fan-out is responsible for, and the assertions below are the ones that catch a field being
+   * dropped from that payload. Mocking the mapper would have deleted that coverage in the name of
+   * unit purity. Its own edge cases are covered separately in {@code FeedPostDataMapperTest}.
+   */
+  @BeforeEach
+  void wireService() {
+    newsfeedService =
+        new NewsfeedService(
+            redisTemplate,
+            objectMapper,
+            friendshipQueryService,
+            userInteractionRepository,
+            postRepository,
+            userRepository,
+            notificationService,
+            new FeedPostDataMapper(
+                userRepository,
+                bookRepository,
+                bookReviewService,
+                bookStorageService,
+                postReactionRepository,
+                commentRepository),
+            blockQueryService);
+  }
 
   @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
@@ -103,6 +152,18 @@ class NewsfeedServiceTest {
     user.setId(id);
     user.setFullName(fullName);
     return user;
+  }
+
+  private static QuizDetails quizWithAnswers() {
+    QuizQuestion question = new QuizQuestion();
+    question.setQuestion("2 + 2?");
+    question.setOptions(List.of("3", "4"));
+    question.setCorrectOptionIndex(1);
+    question.setExplanation("Two plus two is four");
+
+    QuizDetails quiz = new QuizDetails();
+    quiz.setQuestions(List.of(question));
+    return quiz;
   }
 
   private static FeedPostDataDto feedPost(
@@ -354,6 +415,198 @@ class NewsfeedServiceTest {
       // Then
       verify(friendshipQueryService, never()).getFriendIds(any());
     }
+
+    @Test
+    @DisplayName("should copy all six detail blocks, images and tagged users into the feed entry")
+    void shouldCopyAllDetailBlocks_intoFeedEntry() throws Exception {
+      // Given — a post carrying every optional block at once. Only one of these can really be
+      // set on a single post in practice, but the point of the test is that no block is dropped.
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.QNA);
+      post.setQuizDetails(quizWithAnswers());
+      post.setCodeSnippetDetails(new CodeSnippetDetails());
+      post.setArticleDetails(new ArticleDetails());
+      post.setQnaDetails(new QnaDetails());
+      post.setPollDetails(new PollDetails());
+      post.setLinkDetails(new LinkDetails());
+      post.setImages(List.of("img-1.png", "img-2.png"));
+      post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
+
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then — a null here is data loss, not a display gap: updatePost copies nulls back over
+      // the row, so whatever the feed omits gets erased on the author's first edit (B2)
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      FeedPostDataDto data = cached.getValue();
+
+      assertThat(data.getQuizDetails()).isNotNull();
+      // B5: the feed carries the quiz, but never its answers — see PublicQuizDetailsDto
+      assertThat(data.getQuizDetails().getQuestions().get(0).getQuestion()).isEqualTo("2 + 2?");
+      assertThat(data.getCodeSnippetDetails()).isNotNull();
+      assertThat(data.getArticleDetails()).isNotNull();
+      assertThat(data.getQnaDetails()).isNotNull();
+      assertThat(data.getPollDetails()).isNotNull();
+      assertThat(data.getLinkDetails()).isNotNull();
+      assertThat(data.getImages()).containsExactly("img-1.png", "img-2.png");
+      assertThat(data.getTaggedUserIds()).containsExactly(TAGGED_ID);
+    }
+
+    @Test
+    @DisplayName("should label the author's elite score with the matching reputation level")
+    void shouldCacheAuthorLevelName() throws Exception {
+      // Given — B15: the feed carried the raw score only, so the chip had no level suffix to show
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      UserEntity author = user(AUTHOR_ID, "Alice");
+      author.setEliteScore(5_000);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(author));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then — 5,000 is exactly the EXPERT floor
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      assertThat(cached.getValue().getAuthorEliteScore()).isEqualTo(5_000);
+      assertThat(cached.getValue().getAuthorLevelName()).isEqualTo("Expert");
+    }
+
+    @Test
+    @DisplayName("should read like and comment counts from the database, not assume zero")
+    void shouldReadCounters_fromDatabase() throws Exception {
+      // Given — fan-out also runs on edit and on a late moderation approval, by which time the
+      // post can already carry reactions and comments (B7)
+      PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(7L);
+      when(commentRepository.countByPostId(POST_ID)).thenReturn(3L);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.fanOutPost(POST_ID);
+
+      // Then
+      ArgumentCaptor<FeedPostDataDto> cached = ArgumentCaptor.forClass(FeedPostDataDto.class);
+      verify(objectMapper).writeValueAsString(cached.capture());
+      assertThat(cached.getValue().getLikeCount()).isEqualTo(7);
+      assertThat(cached.getValue().getCommentCount()).isEqualTo(3);
+    }
+  }
+
+  // =====================================================================
+  // updateCachedLikeCount / updateCachedCommentCount
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updateCachedLikeCount / updateCachedCommentCount")
+  class UpdateCachedCountersTests {
+
+    @Test
+    @DisplayName("should rewrite the cached like count in place")
+    void shouldRewriteCachedLikeCount() throws Exception {
+      // Given
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"likeCount\":5}");
+
+      // When
+      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+
+      // Then
+      assertThat(cachedPost.getLikeCount()).isEqualTo(5);
+      verify(valueOperations)
+          .set(eq("feedpost:" + POST_ID), eq("{\"likeCount\":5}"), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should rewrite the cached comment count in place")
+    void shouldRewriteCachedCommentCount() throws Exception {
+      // Given
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"commentCount\":2}");
+
+      // When
+      newsfeedService.updateCachedCommentCount(POST_ID, 2);
+
+      // Then
+      assertThat(cachedPost.getCommentCount()).isEqualTo(2);
+      verify(valueOperations).set(eq("feedpost:" + POST_ID), anyString(), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should rewrite the cached QNA block in place")
+    void shouldRewriteCachedQnaDetails() throws Exception {
+      // Given — accepting an answer flips isResolved in Postgres, and the feed only ever reads
+      // Redis (B10)
+      FeedPostDataDto cachedPost = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      cachedPost.setQnaDetails(new QnaDetails(false, null, null));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("{\"postId\":100}");
+      when(objectMapper.readValue("{\"postId\":100}", FeedPostDataDto.class))
+          .thenReturn(cachedPost);
+      when(objectMapper.writeValueAsString(any())).thenReturn("{\"qnaDetails\":{}}");
+
+      // When
+      newsfeedService.updateCachedQnaDetails(POST_ID, new QnaDetails(true, null, 500));
+
+      // Then
+      assertThat(cachedPost.getQnaDetails().getIsResolved()).isTrue();
+      assertThat(cachedPost.getQnaDetails().getAcceptedAnswerId()).isEqualTo(500);
+      verify(valueOperations).set(eq("feedpost:" + POST_ID), anyString(), eq(Duration.ofDays(7)));
+    }
+
+    @Test
+    @DisplayName("should do nothing when the post is not cached")
+    void shouldDoNothing_whenPostIsNotCached() {
+      // Given — private posts and posts awaiting moderation are never cached; reacting to one
+      // must not write it into the feed
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn(null);
+
+      // When
+      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+
+      // Then
+      verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("should swallow the error when the cached entry cannot be deserialized")
+    void shouldSwallowError_whenCachedEntryIsCorrupt() throws Exception {
+      // Given
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.get("feedpost:" + POST_ID)).thenReturn("not-json");
+      when(objectMapper.readValue("not-json", FeedPostDataDto.class))
+          .thenThrow(new RuntimeException("boom"));
+
+      // When / Then — a broken cache entry must not fail the user's like
+      assertThatCode(() -> newsfeedService.updateCachedLikeCount(POST_ID, 5))
+          .doesNotThrowAnyException();
+      verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
+    }
   }
 
   // =====================================================================
@@ -494,6 +747,54 @@ class NewsfeedServiceTest {
   // =====================================================================
 
   @Nested
+  @DisplayName("getFeed — book cover signing")
+  class GetFeedCoverSigningTests {
+
+    @Test
+    @DisplayName("should sign the cached cover key when the feed is served")
+    void shouldSignCoverKey_onRead() throws Exception {
+      // Given — the cache holds the key, never a URL (B4): a signature lives 24h and a cache
+      // entry lives 7 days, so a URL signed at fan-out time is dead for most of its life
+      FeedPostDataDto cached = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+      cached.setBook(
+          FeedBookSummaryDto.builder().bookId(5).coverImageKey("covers/1/a.jpg").build());
+
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange(anyString(), anyLong(), anyLong()))
+          .thenReturn(Set.of(String.valueOf(POST_ID)));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(any())).thenReturn(List.of("{}"));
+      when(objectMapper.readValue("{}", FeedPostDataDto.class)).thenReturn(cached);
+      when(bookStorageService.getCoverUrl("covers/1/a.jpg")).thenReturn("https://cdn/signed");
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10);
+
+      // Then
+      assertThat(result.getPosts().get(0).getBook().getCoverImageUrl())
+          .isEqualTo("https://cdn/signed");
+    }
+
+    @Test
+    @DisplayName("should leave posts without a book alone")
+    void shouldSkipPostsWithoutBook() throws Exception {
+      // Given
+      FeedPostDataDto cached = feedPost(POST_ID, AUTHOR_ID, OffsetDateTime.now());
+
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange(anyString(), anyLong(), anyLong()))
+          .thenReturn(Set.of(String.valueOf(POST_ID)));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(any())).thenReturn(List.of("{}"));
+      when(objectMapper.readValue("{}", FeedPostDataDto.class)).thenReturn(cached);
+
+      // When / Then — most posts are not book posts
+      assertThatCode(() -> newsfeedService.getFeed(AUTHOR_ID, 1, 10)).doesNotThrowAnyException();
+      verify(bookStorageService, never()).getCoverUrl(any());
+    }
+  }
+
+  @Nested
   @DisplayName("getFeed")
   class GetFeedTests {
 
@@ -611,6 +912,51 @@ class NewsfeedServiceTest {
       assertThat(captor.getValue().getPostId()).isEqualTo(POST_ID);
       assertThat(captor.getValue().getAuthorId()).isEqualTo(AUTHOR_ID);
       assertThat(captor.getValue().getType()).isEqualTo(InteractionType.LIKE);
+    }
+  }
+
+  @Nested
+  @DisplayName("getFeed — block filtering")
+  class GetFeedBlockFilteringTests {
+
+    @Test
+    @DisplayName("should drop posts by anyone in the caller's block set")
+    void shouldDropBlockedAuthorsPosts() throws Exception {
+      // Given: the feed's Redis entry still holds a post fanned out before the block was placed
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of(FRIEND_ID));
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      // The window is widened when the caller has blocks, so that filtering afterwards still
+      // usually fills the page — see NewsfeedService#getFeed.
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 6))
+          .thenReturn(new java.util.LinkedHashSet<>(List.of("1", "2")));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(List.of("feedpost:1", "feedpost:2")))
+          .thenReturn(List.of("json-1", "json-2"));
+      when(objectMapper.readValue("json-1", FeedPostDataDto.class))
+          .thenReturn(FeedPostDataDto.builder().postId(1).authorId(AUTHOR_ID).build());
+      when(objectMapper.readValue("json-2", FeedPostDataDto.class))
+          .thenReturn(FeedPostDataDto.builder().postId(2).authorId(FRIEND_ID).build());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("should read the ordinary window when the caller has blocked nobody")
+    void shouldNotWidenWindowWithoutBlocks() {
+      // Given
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 2)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then — nearly every user is in this case, and they must keep paying the old cost
+      assertThat(result.getPosts()).isEmpty();
     }
   }
 }

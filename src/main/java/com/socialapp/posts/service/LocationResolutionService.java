@@ -156,7 +156,6 @@ public class LocationResolutionService {
     } catch (ValidationException e) {
       throw e;
     } catch (Exception e) {
-      log.error("Failed to reverse geocode ({}, {}): {}", latitude, longitude, e.getMessage());
       throw new ValidationException("Could not resolve location for the given coordinates");
     }
   }
@@ -191,7 +190,6 @@ public class LocationResolutionService {
     } catch (ValidationException e) {
       throw e;
     } catch (Exception e) {
-      log.error("Failed to resolve location for '{}': {}", query, e.getMessage());
       throw new ValidationException("Could not resolve location: " + query);
     }
   }

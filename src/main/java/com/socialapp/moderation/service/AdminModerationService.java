@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
 import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
@@ -59,8 +60,23 @@ public class AdminModerationService {
     return new PageImpl<>(dtos, pageable, userIds.getTotalElements());
   }
 
+  /**
+   * Records an admin's decision on a post awaiting review.
+   *
+   * <p>{@code violationType} is the type the admin picked, and it is stored as picked. It used to
+   * be hardcoded to {@code HATE_SPEECH} in both places below, which meant a post taken down for
+   * spam was recorded against its author as hate speech — and since {@code
+   * UserBanService.determineSeverity} rates HATE_SPEECH as CRITICAL, that wrong label carried real
+   * weight toward the seven-day ban. It is also the label the user is now shown when they are
+   * locked out, which is why it has to be the true one.
+   *
+   * @throws ValidationException when the decision rejects the post but no type was given. Refusing
+   *     is the point: defaulting to some "other" value would quietly recreate the same problem
+   *     with a different constant.
+   */
   @Transactional
-  public void reviewPost(Integer postId, Likelihood decision, String feedback) {
+  public void reviewPost(
+      Integer postId, Likelihood decision, ViolationType violationType, String feedback) {
     PostEntity post =
         postRepository
             .findById(postId)
@@ -73,16 +89,24 @@ public class AdminModerationService {
     boolean isViolation = decision.isAtLeast(Likelihood.LIKELY);
 
     if (isViolation) {
+      if (violationType == null) {
+        throw new ValidationException("violationType is required when rejecting a post");
+      }
+
       post.setModerationStatus(ModerationStatus.REJECTED);
       postRepository.save(post);
 
       userBanService.recordViolation(
           post.getAuthorId(),
           post.getId(),
-          ViolationType.HATE_SPEECH,
+          violationType,
           "Admin manual review: " + Optional.ofNullable(feedback).orElse("content violation"));
 
-      log.info("Admin rejected post {} (decision={})", postId, decision);
+      log.info(
+          "Admin rejected post {} (decision={}, violationType={})",
+          postId,
+          decision,
+          violationType);
     } else {
       post.setModerationStatus(ModerationStatus.APPROVED);
       postRepository.save(post);
@@ -94,7 +118,9 @@ public class AdminModerationService {
     saveModerationLog(
         postId,
         isViolation ? ModerationStatus.REJECTED : ModerationStatus.APPROVED,
-        isViolation ? ViolationType.HATE_SPEECH : null);
+        // Null on approval: an approved post has no violation, and writing a type here would put
+        // a violation row in the log for a post that was cleared.
+        isViolation ? violationType : null);
   }
 
   private void saveModerationLog(

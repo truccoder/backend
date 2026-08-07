@@ -4,11 +4,16 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.CreatePostRequestDto;
+import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -16,27 +21,71 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class PostController {
   private final PostService postService;
+  private final PostQueryService postQueryService;
 
   @PostMapping
-  public void createPost(@RequestBody CreatePostRequestDto request) {
+  public void createPost(@Valid @RequestBody CreatePostRequestDto request) {
     postService.createPost(SecurityUtils.getCurrentUserId(), request);
+  }
+
+  /**
+   * The discovery feed: everyone's public posts.
+   *
+   * <p>Declared before {@code /{postId}} on purpose. Spring maps the literal segment ahead of the
+   * template regardless of declaration order, so this is documentation rather than load-bearing —
+   * but a reader scanning the file should see immediately that {@code /posts/public} is not a post
+   * whose id is "public".
+   */
+  @GetMapping("/public")
+  public PostPageResponseDto getPublicFeed(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = "20") @Positive int limit) {
+    // OrNull, not getCurrentUserId(): this endpoint is open to guests, and the throwing variant
+    // would turn an allowed anonymous request into a 401 after Spring Security let it through.
+    return postQueryService.getPublicFeed(SecurityUtils.getCurrentUserIdOrNull(), cursor, limit);
+  }
+
+  /** Permalink. A post the caller may not see is reported as missing — see PostQueryService. */
+  @GetMapping("/{postId}")
+  public FeedPostDataDto getPost(@PathVariable Integer postId) {
+    return postQueryService.getPost(SecurityUtils.getCurrentUserIdOrNull(), postId);
   }
 
   @PostMapping(value = "/books", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public void createBookPost(
-      @RequestPart("metadata") CreatePostRequestDto request,
+      @Valid @RequestPart("metadata") CreatePostRequestDto request,
       @RequestPart("file") MultipartFile bookFile,
       @RequestPart(value = "cover", required = false) MultipartFile coverFile) {
     postService.createBookPost(SecurityUtils.getCurrentUserId(), request, bookFile, coverFile);
   }
 
   @PutMapping("/{postId}")
-  public void updatePost(@PathVariable Integer postId, @RequestBody UpdatePostRequestDto request) {
+  public void updatePost(
+      @PathVariable Integer postId, @Valid @RequestBody UpdatePostRequestDto request) {
     postService.updatePost(SecurityUtils.getCurrentUserId(), postId, request);
   }
 
   @DeleteMapping("/{postId}")
   public void deletePost(@PathVariable Integer postId) {
     postService.deletePost(SecurityUtils.getCurrentUserId(), postId);
+  }
+
+  // POST, not PATCH: state-transition actions are POST project-wide (friend requests, project
+  // applications, skill verifications), and this is not a partial update of anything. The path is
+  // left as-is so it stays the sibling of the DELETE below.
+  @PostMapping("/{postId}/qna/accept-answer/{commentId}")
+  public void acceptAnswer(@PathVariable Integer postId, @PathVariable Integer commentId) {
+    postService.acceptAnswer(SecurityUtils.getCurrentUserId(), postId, commentId);
+  }
+
+  /**
+   * Takes back the accepted answer. No comment id in the path: a post has at most one accepted
+   * answer, so the post alone identifies what is being undone. Switching answers is this call
+   * followed by {@link #acceptAnswer} — {@code acceptAnswer} refuses to overwrite a pick that is
+   * still standing.
+   */
+  @DeleteMapping("/{postId}/qna/accept-answer")
+  public void unacceptAnswer(@PathVariable Integer postId) {
+    postService.unacceptAnswer(SecurityUtils.getCurrentUserId(), postId);
   }
 }

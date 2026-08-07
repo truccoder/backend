@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,6 +27,7 @@ import com.socialapp.common.exception.StorageException;
 
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
+import io.minio.RemoveObjectArgs;
 
 /**
  * Component (unit) tests for {@link BookStorageService}, per ISTQB CTFL v4.0.1 (Section 2.2.1
@@ -182,19 +184,19 @@ class BookStorageServiceTest {
   class UploadCoverTests {
 
     @Test
-    @DisplayName("should upload the cover and return its presigned URL")
-    void shouldUploadAndReturnPresignedUrl_whenSuccessful() throws Exception {
+    @DisplayName("should upload the cover and return its object key, not a URL")
+    void shouldUploadAndReturnObjectKey_whenSuccessful() throws Exception {
       // Given
       MultipartFile file = mockCoverFile("cover.jpg");
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
-          .thenReturn("https://cdn/cover-url");
 
       // When
-      String url = bookStorageService.uploadCover(AUTHOR_ID, file);
+      String key = bookStorageService.uploadCover(AUTHOR_ID, file);
 
-      // Then
-      assertThat(url).isEqualTo("https://cdn/cover-url");
-      verify(minIOService).uploadFile(eq("book-covers"), anyString(), eq(file));
+      // Then — B4: returning a presigned URL here is what got persisted and died after 24h
+      assertThat(key).startsWith("covers/1/").endsWith(".jpg");
+      assertThat(key).doesNotContain("X-Amz-Signature").doesNotContain("http");
+      verify(minIOService).uploadFile(eq("book-covers"), eq(key), eq(file));
+      verify(minioClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
 
     @Test
@@ -211,22 +213,93 @@ class BookStorageServiceTest {
           .hasMessageContaining("Failed to upload cover image")
           .hasCauseInstanceOf(IOException.class);
     }
+  }
+
+  // =====================================================================
+  // getCoverUrl
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getCoverUrl")
+  class GetCoverUrlTests {
 
     @Test
-    @DisplayName("should wrap a presigned URL generation failure as a StorageException")
-    void shouldThrowStorageException_whenPresignedUrlGenerationFails() throws Exception {
+    @DisplayName("should sign the key against the covers bucket")
+    void shouldSignCoverKey() throws Exception {
       // Given
-      MultipartFile file = mockCoverFile("cover.jpg");
       when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
-          .thenThrow(new IOException("network fail"));
+          .thenReturn("https://cdn/cover-url");
+
+      // When
+      String url = bookStorageService.getCoverUrl("covers/1/abc.jpg");
+
+      // Then
+      assertThat(url).isEqualTo("https://cdn/cover-url");
+    }
+
+    @Test
+    @DisplayName("should return null for a missing key rather than signing nothing")
+    void shouldReturnNull_whenKeyIsAbsent() throws Exception {
+      // When / Then — most books have no cover
+      assertThat(bookStorageService.getCoverUrl(null)).isNull();
+      assertThat(bookStorageService.getCoverUrl("  ")).isNull();
+      verify(minioClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+    }
+
+    @Test
+    @DisplayName("should return null instead of throwing when signing fails")
+    void shouldReturnNull_whenSigningFails() throws Exception {
+      // Given — a missing bucket is an ordinary state on a freshly reset MinIO
+      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+          .thenThrow(new IOException("no such bucket"));
+
+      // When / Then — this runs on the feed read path, so throwing here would take the whole
+      // feed down over a missing picture
+      assertThat(bookStorageService.getCoverUrl("covers/1/abc.jpg")).isNull();
+    }
+  }
+
+  // =====================================================================
+  // deleteQuietly
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deleteQuietly")
+  class DeleteQuietlyTests {
+
+    @Test
+    @DisplayName("should remove the object from the given bucket")
+    void shouldRemoveObject() throws Exception {
+      // When
+      bookStorageService.deleteQuietly("books", "books/1/abc.pdf");
+
+      // Then
+      verify(minioClient).removeObject(any(RemoveObjectArgs.class));
+    }
+
+    @Test
+    @DisplayName("should do nothing when there is no key to remove")
+    void shouldDoNothing_whenKeyIsAbsent() throws Exception {
+      // When
+      bookStorageService.deleteQuietly("books", null);
+      bookStorageService.deleteQuietly("books", "  ");
+
+      // Then — nothing was uploaded at that step, so there is nothing to undo
+      verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
+    }
+
+    @Test
+    @DisplayName("should swallow a removal failure rather than mask the original error")
+    void shouldSwallowRemovalFailure() throws Exception {
+      // Given — the caller is already unwinding an exception when this runs
+      org.mockito.Mockito.doThrow(new IOException("minio down"))
+          .when(minioClient)
+          .removeObject(any(RemoveObjectArgs.class));
 
       // When / Then
-      assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
-          .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload cover image")
-          .cause()
-          .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to generate download URL");
+      org.assertj.core.api.Assertions.assertThatCode(
+              () -> bookStorageService.deleteQuietly("books", "books/1/abc.pdf"))
+          .doesNotThrowAnyException();
     }
   }
 

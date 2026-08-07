@@ -29,6 +29,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
 import com.socialapp.knowledge.service.ExplanationService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -61,6 +62,11 @@ class ExplanationControllerTest {
 
   @MockBean private ExplanationService explanationService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String KNOWLEDGE_URL = "/v1/api/knowledge";

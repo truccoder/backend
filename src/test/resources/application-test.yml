@@ -41,3 +41,9 @@ gemini:
 
 jwt:
   secret: testSecretKeyForIntegrationTestsOnlyDoNotUseInProduction123456
+
+# Off for tests: the limiter counts in Redis, and a @WebMvcTest slice has no Redis. The filter's
+# own behaviour is covered by GuestRateLimitFilterTest, which drives it directly.
+rate-limit:
+  guest:
+    enabled: false

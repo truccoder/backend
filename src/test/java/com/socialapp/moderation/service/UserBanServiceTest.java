@@ -278,4 +278,72 @@ class UserBanServiceTest {
       assertThat(violationCaptor.getValue().getSeverity()).isEqualTo(ViolationSeverity.LOW);
     }
   }
+
+  // =====================================================================
+  // revokeViolation  (E3 — an upheld appeal has to undo something)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("revokeViolation")
+  class RevokeViolationTests {
+
+    @Test
+    @DisplayName("should delete the violation and lift the ban when the count drops below two")
+    void shouldLiftBanWhenBelowThreshold() {
+      // Given
+      UserViolationEntity violation =
+          UserViolationEntity.builder().id(5L).userId(1).violationType(ViolationType.SPAM).build();
+      UserEntity user = new UserEntity();
+      user.setId(1);
+      user.setBannedUntil(OffsetDateTime.now().plusDays(7));
+
+      when(violationRepository.findById(5L)).thenReturn(Optional.of(violation));
+      when(userRepository.findById(1)).thenReturn(Optional.of(user));
+      when(violationRepository.countRecentViolations(eq(1), any())).thenReturn(1L);
+
+      // When
+      userBanService.revokeViolation(5L);
+
+      // Then
+      verify(violationRepository).delete(violation);
+      assertThat(user.getBannedUntil()).isNull();
+    }
+
+    @Test
+    @DisplayName("should keep the ban when the remaining violations still reach the threshold")
+    void shouldKeepBanWhenStillOverThreshold() {
+      // Given: a user with three violations who successfully appeals one still has two, and two
+      // is what got them banned
+      UserViolationEntity violation =
+          UserViolationEntity.builder().id(5L).userId(1).violationType(ViolationType.SPAM).build();
+      OffsetDateTime bannedUntil = OffsetDateTime.now().plusDays(7);
+      UserEntity user = new UserEntity();
+      user.setId(1);
+      user.setBannedUntil(bannedUntil);
+
+      when(violationRepository.findById(5L)).thenReturn(Optional.of(violation));
+      when(userRepository.findById(1)).thenReturn(Optional.of(user));
+      when(violationRepository.countRecentViolations(eq(1), any())).thenReturn(2L);
+
+      // When
+      userBanService.revokeViolation(5L);
+
+      // Then
+      verify(violationRepository).delete(violation);
+      assertThat(user.getBannedUntil()).isEqualTo(bannedUntil);
+    }
+
+    @Test
+    @DisplayName("should do nothing for a violation that no longer exists")
+    void shouldNoOpForMissingViolation() {
+      // Given
+      when(violationRepository.findById(5L)).thenReturn(Optional.empty());
+
+      // When
+      userBanService.revokeViolation(5L);
+
+      // Then
+      verify(violationRepository, never()).delete(any());
+    }
+  }
 }

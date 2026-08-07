@@ -3,32 +3,30 @@ package com.socialapp.bookstore.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.bookstore.dto.BookPageResponseDto;
 import com.socialapp.bookstore.dto.BookResponseDto;
 import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.bookstore.entity.BookEntity;
-import com.socialapp.bookstore.entity.enums.FileFormat;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
@@ -62,8 +60,28 @@ class BookServiceTest {
   @Mock private BookPurchaseRepository purchaseRepository;
   @Mock private BookStorageService bookStorageService;
   @Mock private BookPreviewGenerator bookPreviewGenerator;
+  @Mock private BookIngestionService bookIngestionService;
 
-  @InjectMocks private BookService bookService;
+  /**
+   * A <b>real</b> mapper over the same mocks, not a mock of it. The download-vs-preview rule these
+   * tests assert moved into {@link BookResponseMapper}; mocking it would leave those assertions
+   * checking a stub instead of the rule.
+   */
+  private BookResponseMapper bookResponseMapper;
+
+  private BookService bookService;
+
+  @BeforeEach
+  void wireService() {
+    bookResponseMapper = new BookResponseMapper(purchaseRepository, bookStorageService);
+    bookService =
+        new BookService(
+            bookRepository,
+            purchaseRepository,
+            bookStorageService,
+            bookIngestionService,
+            bookResponseMapper);
+  }
 
   @Captor private ArgumentCaptor<BookEntity> bookCaptor;
 
@@ -97,330 +115,6 @@ class BookServiceTest {
         .previewFileKey(previewFileKey)
         .downloadCount(3)
         .build();
-  }
-
-  // =====================================================================
-  // createBookForPost
-  // =====================================================================
-
-  @Nested
-  @DisplayName("createBookForPost")
-  class CreateBookForPostTests {
-
-    @Test
-    @DisplayName("should reject a null book file before touching any dependency")
-    void shouldThrowValidationException_whenBookFileIsNull() {
-      // Given / When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), null, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Book file is required");
-      verifyNoInteractions(
-          bookRepository, purchaseRepository, bookStorageService, bookPreviewGenerator);
-    }
-
-    @Test
-    @DisplayName("should reject an empty book file")
-    void shouldThrowValidationException_whenBookFileIsEmpty() {
-      // Given
-      MultipartFile bookFile = mock(MultipartFile.class);
-      when(bookFile.isEmpty()).thenReturn(true);
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Book file is required");
-      verifyNoInteractions(bookRepository, bookStorageService, bookPreviewGenerator);
-    }
-
-    @Test
-    @DisplayName("should reject a filename with an unsupported extension")
-    void shouldThrowValidationException_whenFileFormatNotAllowed() {
-      // Given
-      MultipartFile bookFile = mockFile("book.txt");
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Only PDF and EPUB formats are supported");
-      verifyNoInteractions(bookRepository, bookStorageService, bookPreviewGenerator);
-    }
-
-    @Test
-    @DisplayName("should reject a filename with no extension at all")
-    void shouldThrowValidationException_whenFilenameHasNoExtension() {
-      // Given
-      MultipartFile bookFile = mockFile("book");
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Only PDF and EPUB formats are supported");
-    }
-
-    @Test
-    @DisplayName("should reject a null filename")
-    void shouldThrowValidationException_whenFilenameIsNull() {
-      // Given
-      MultipartFile bookFile = mockFile(null);
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Only PDF and EPUB formats are supported");
-    }
-
-    @Test
-    @DisplayName("should save a free PDF book, counting its pages, with no cover file")
-    void shouldSucceed_withFreePdfBookAndNoCoverFile() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      byte[] bytes = {1, 2, 3};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(bytes);
-      when(bookPreviewGenerator.countPdfPages(bytes)).thenReturn(42);
-
-      // When
-      BookEntity result =
-          bookService.createBookForPost(
-              AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null);
-
-      // Then
-      verify(bookRepository).save(bookCaptor.capture());
-      BookEntity saved = bookCaptor.getValue();
-      assertThat(saved).isSameAs(result);
-      assertThat(saved.getIsFree()).isTrue();
-      assertThat(saved.getFileFormat()).isEqualTo(FileFormat.PDF);
-      assertThat(saved.getTotalPages()).isEqualTo(42);
-      assertThat(saved.getPreviewPages()).isZero();
-      assertThat(saved.getPrice()).isZero();
-      assertThat(saved.getPreviewFileKey()).isNull();
-      assertThat(saved.getCoverImageUrl()).isNull();
-      assertThat(saved.getFileKey()).isEqualTo("book-key");
-      verify(bookStorageService, never()).uploadCover(any(), any());
-    }
-
-    @Test
-    @DisplayName("should skip cover upload when the cover file is present but empty")
-    void shouldSkipCoverUpload_whenCoverFileIsEmpty() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      MultipartFile coverFile = mock(MultipartFile.class);
-      when(coverFile.isEmpty()).thenReturn(true);
-      byte[] bytes = {1, 2, 3};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(bytes);
-      when(bookPreviewGenerator.countPdfPages(bytes)).thenReturn(10);
-
-      // When
-      bookService.createBookForPost(
-          AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, coverFile);
-
-      // Then
-      verify(bookStorageService, never()).uploadCover(any(), any());
-    }
-
-    @Test
-    @DisplayName("should upload the cover when a non-empty cover file is provided")
-    void shouldUploadCover_whenCoverFileProvidedAndNotEmpty() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      MultipartFile coverFile = mock(MultipartFile.class);
-      when(coverFile.isEmpty()).thenReturn(false);
-      byte[] bytes = {1, 2, 3};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookStorageService.uploadCover(AUTHOR_ID, coverFile)).thenReturn("cover-key");
-      when(bookFile.getBytes()).thenReturn(bytes);
-      when(bookPreviewGenerator.countPdfPages(bytes)).thenReturn(10);
-
-      // When
-      bookService.createBookForPost(
-          AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, coverFile);
-
-      // Then
-      verify(bookRepository).save(bookCaptor.capture());
-      assertThat(bookCaptor.getValue().getCoverImageUrl()).isEqualTo("cover-key");
-    }
-
-    @Test
-    @DisplayName("should treat a zero price as free and count EPUB chapters")
-    void shouldCountEpubChapters_whenPriceIsZero() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.epub");
-      byte[] bytes = {9, 9};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(bytes);
-      when(bookPreviewGenerator.countEpubChapters(bytes)).thenReturn(7);
-
-      // When
-      bookService.createBookForPost(AUTHOR_ID, POST_ID, bookRequest(0L, null), bookFile, null);
-
-      // Then
-      verify(bookRepository).save(bookCaptor.capture());
-      BookEntity saved = bookCaptor.getValue();
-      assertThat(saved.getIsFree()).isTrue();
-      assertThat(saved.getFileFormat()).isEqualTo(FileFormat.EPUB);
-      assertThat(saved.getTotalPages()).isEqualTo(7);
-    }
-
-    @Test
-    @DisplayName("should wrap an IOException as a ValidationException when counting pages fails")
-    void shouldThrowValidationException_whenCountingPagesFails() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenThrow(new IOException("disk read failure"));
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(null, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("corrupted or not a valid")
-          .hasCauseInstanceOf(IOException.class);
-      verify(bookRepository, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("should reject a paid book with no preview pages configured")
-    void shouldThrowValidationException_whenPaidBookMissingPreviewPages() {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(1000L, null), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Paid books must have preview pages configured");
-      verify(bookRepository, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("should reject a paid book with a non-positive preview page count")
-    void shouldThrowValidationException_whenPaidBookHasNonPositivePreviewPages() {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(1000L, 0), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("Paid books must have preview pages configured");
-    }
-
-    @Test
-    @DisplayName("should generate a PDF preview for a paid PDF book")
-    void shouldGeneratePdfPreview_whenPaidBookIsPdf() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      byte[] original = {1, 2, 3};
-      byte[] previewBytes = {4, 5};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(original);
-      when(bookPreviewGenerator.generatePdfPreview(original, 5))
-          .thenReturn(new BookPreviewResult(previewBytes, 20));
-      when(bookStorageService.uploadPreview(AUTHOR_ID, previewBytes, "pdf"))
-          .thenReturn("preview-key");
-
-      // When
-      bookService.createBookForPost(AUTHOR_ID, POST_ID, bookRequest(1000L, 5), bookFile, null);
-
-      // Then
-      verify(bookRepository).save(bookCaptor.capture());
-      BookEntity saved = bookCaptor.getValue();
-      assertThat(saved.getIsFree()).isFalse();
-      assertThat(saved.getPreviewFileKey()).isEqualTo("preview-key");
-      assertThat(saved.getTotalPages()).isEqualTo(20);
-      assertThat(saved.getPreviewPages()).isEqualTo(5);
-      assertThat(saved.getPrice()).isEqualTo(1000L);
-    }
-
-    @Test
-    @DisplayName("should generate an EPUB preview for a paid EPUB book")
-    void shouldGenerateEpubPreview_whenPaidBookIsEpub() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.epub");
-      byte[] original = {1, 2, 3};
-      byte[] previewBytes = {4, 5};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(original);
-      when(bookPreviewGenerator.generateEpubPreview(original, 3))
-          .thenReturn(new BookPreviewResult(previewBytes, 10));
-      when(bookStorageService.uploadPreview(AUTHOR_ID, previewBytes, "epub"))
-          .thenReturn("preview-key-epub");
-
-      // When
-      bookService.createBookForPost(AUTHOR_ID, POST_ID, bookRequest(1000L, 3), bookFile, null);
-
-      // Then
-      verify(bookRepository).save(bookCaptor.capture());
-      assertThat(bookCaptor.getValue().getFileFormat()).isEqualTo(FileFormat.EPUB);
-      assertThat(bookCaptor.getValue().getPreviewFileKey()).isEqualTo("preview-key-epub");
-    }
-
-    @Test
-    @DisplayName(
-        "should reject when the requested preview size is not smaller than the book's total")
-    void shouldThrowValidationException_whenPreviewPagesGreaterOrEqualTotalUnits()
-        throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      byte[] original = {1, 2, 3};
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenReturn(original);
-      when(bookPreviewGenerator.generatePdfPreview(original, 10))
-          .thenReturn(new BookPreviewResult(new byte[] {1}, 10));
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(1000L, 10), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("must be less than the book's total");
-      verify(bookRepository, never()).save(any());
-      verify(bookStorageService, never()).uploadPreview(any(), any(), anyString());
-    }
-
-    @Test
-    @DisplayName(
-        "should wrap an IOException as a ValidationException when generating the preview fails")
-    void shouldThrowValidationException_whenGeneratingPreviewFails() throws IOException {
-      // Given
-      MultipartFile bookFile = mockFile("book.pdf");
-      when(bookStorageService.uploadBook(AUTHOR_ID, bookFile)).thenReturn("book-key");
-      when(bookFile.getBytes()).thenThrow(new IOException("disk read failure"));
-
-      // When / Then
-      assertThatThrownBy(
-              () ->
-                  bookService.createBookForPost(
-                      AUTHOR_ID, POST_ID, bookRequest(1000L, 5), bookFile, null))
-          .isInstanceOf(ValidationException.class)
-          .hasMessageContaining("corrupted or not a valid")
-          .hasCauseInstanceOf(IOException.class);
-    }
   }
 
   // =====================================================================
@@ -671,6 +365,10 @@ class BookServiceTest {
           .isInstanceOf(ForbiddenException.class)
           .hasMessageContaining("You must purchase this book before downloading");
       verify(bookRepository, never()).save(any());
+      // B11: nothing may reach MinIO on a rejected book — Postgres rolls back, the bucket does not
+      verify(bookStorageService, never()).uploadBook(any(), any());
+      verify(bookStorageService, never()).uploadCover(any(), any());
+      verify(bookStorageService, never()).uploadPreview(any(), any(), any());
     }
   }
 
@@ -770,6 +468,152 @@ class BookServiceTest {
 
       // Then
       verify(bookRepository).delete(ownBook);
+    }
+
+    @Test
+    @DisplayName("should refuse to delete a book somebody has paid for")
+    void shouldThrowValidationException_whenBookHasCompletedPurchase() {
+      // Given — t_book_purchases cascades on book_id, so this delete would erase the buyer's
+      // payment record along with the book they paid for.
+      BookEntity soldBook = book(BOOK_ID, AUTHOR_ID, false, "file-key", "preview-key");
+      when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(soldBook));
+      when(purchaseRepository.existsByBookIdAndPaymentStatus(BOOK_ID, PaymentStatus.COMPLETED))
+          .thenReturn(true);
+
+      // When / Then
+      assertThatThrownBy(() -> bookService.deleteBook(AUTHOR_ID, BOOK_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("has been purchased");
+      verify(bookRepository, never()).delete(any());
+      verify(bookStorageService, never()).deleteQuietly(any(), any());
+    }
+
+    @Test
+    @DisplayName("should remove the book's file, preview and cover from storage")
+    void shouldDeleteStorageObjects_whenBookIsDeleted() {
+      // Given
+      BookEntity ownBook =
+          BookEntity.builder()
+              .id(BOOK_ID)
+              .authorId(AUTHOR_ID)
+              .isFree(false)
+              .fileKey("file-key")
+              .previewFileKey("preview-key")
+              .coverImageKey("cover-key")
+              .build();
+      when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(ownBook));
+      when(bookStorageService.booksBucket()).thenReturn("books");
+      when(bookStorageService.coversBucket()).thenReturn("book-covers");
+
+      // When
+      bookService.deleteBook(AUTHOR_ID, BOOK_ID);
+
+      // Then — leaving these behind is how the bucket filled up with files no row points at.
+      verify(bookStorageService).deleteQuietly("books", "file-key");
+      verify(bookStorageService).deleteQuietly("books", "preview-key");
+      verify(bookStorageService).deleteQuietly("book-covers", "cover-key");
+    }
+  }
+
+  // =====================================================================
+  // deleteBooksForPost
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deleteBooksForPost")
+  class DeleteBooksForPostTests {
+
+    @Test
+    @DisplayName("should delete the book attached to the post")
+    void shouldDeleteAttachedBook() {
+      // Given
+      BookEntity attached = book(BOOK_ID, AUTHOR_ID, true, "file-key", null);
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of(attached));
+
+      // When
+      bookService.deleteBooksForPost(POST_ID);
+
+      // Then — otherwise the FK's ON DELETE SET NULL leaves it orphaned once the post goes.
+      verify(bookRepository).delete(attached);
+    }
+
+    @Test
+    @DisplayName("should do nothing when the post has no book")
+    void shouldDoNothing_whenPostHasNoBook() {
+      // Given
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of());
+
+      // When
+      bookService.deleteBooksForPost(POST_ID);
+
+      // Then
+      verify(bookRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should refuse when the attached book has been sold")
+    void shouldThrowValidationException_whenAttachedBookIsSold() {
+      // Given
+      BookEntity sold = book(BOOK_ID, AUTHOR_ID, false, "file-key", "preview-key");
+      when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of(sold));
+      when(purchaseRepository.existsByBookIdAndPaymentStatus(BOOK_ID, PaymentStatus.COMPLETED))
+          .thenReturn(true);
+
+      // When / Then — this is what stops the enclosing deletePost from going through.
+      assertThatThrownBy(() -> bookService.deleteBooksForPost(POST_ID))
+          .isInstanceOf(ValidationException.class);
+      verify(bookRepository, never()).delete(any());
+    }
+  }
+
+  // =====================================================================
+  // getLibraryPage  (D2 — the Library front page)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getLibraryPage")
+  class GetLibraryPageTests {
+
+    @Test
+    @DisplayName("should trim the look-ahead row and report hasMore")
+    void shouldTrimLookaheadRow() {
+      // Given: the repository is asked for limit + 1 so hasMore costs no COUNT(*) per scroll
+      BookEntity b30 = new BookEntity();
+      b30.setId(30);
+      b30.setAuthorId(1);
+      b30.setIsFree(true);
+      BookEntity b29 = new BookEntity();
+      b29.setId(29);
+      b29.setAuthorId(1);
+      b29.setIsFree(true);
+      BookEntity b28 = new BookEntity();
+      b28.setId(28);
+      b28.setAuthorId(1);
+      b28.setIsFree(true);
+      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of(b30, b29, b28));
+
+      // When
+      BookPageResponseDto result = bookService.getLibraryPage(null, 2, 1);
+
+      // Then
+      assertThat(result.items()).hasSize(2);
+      assertThat(result.hasMore()).isTrue();
+      assertThat(result.nextCursor()).isEqualTo(29);
+    }
+
+    @Test
+    @DisplayName("should return a null cursor and hasMore=false for an empty library")
+    void shouldHandleEmptyPage() {
+      // Given
+      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of());
+
+      // When
+      BookPageResponseDto result = bookService.getLibraryPage(null, 10, 1);
+
+      // Then
+      assertThat(result.items()).isEmpty();
+      assertThat(result.nextCursor()).isNull();
+      assertThat(result.hasMore()).isFalse();
     }
   }
 }

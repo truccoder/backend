@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Optional;
@@ -22,8 +23,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.posts.config.GoogleCalendarProperties;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.GoogleCalendarTokenEntity;
@@ -47,6 +54,8 @@ class GoogleCalendarServiceTest {
 
   @Mock private GoogleCalendarTokenRepository tokenRepository;
   @Mock private WebClient.Builder webClientBuilder;
+  @Mock private StringRedisTemplate redisTemplate;
+  @Mock private ValueOperations<String, String> valueOperations;
 
   private GoogleCalendarProperties properties;
   private GoogleCalendarService googleCalendarService;
@@ -66,7 +75,9 @@ class GoogleCalendarServiceTest {
     properties.setScope("https://www.googleapis.com/auth/calendar.events");
 
     googleCalendarService =
-        new GoogleCalendarService(properties, tokenRepository, webClientBuilder);
+        new GoogleCalendarService(properties, tokenRepository, webClientBuilder, redisTemplate);
+
+    lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
     webClient = mock(WebClient.class);
     uriSpec = mock(WebClient.RequestBodyUriSpec.class);
@@ -111,8 +122,8 @@ class GoogleCalendarServiceTest {
   class GetAuthorizationUrlTests {
 
     @Test
-    @DisplayName("should build the Google OAuth consent URL with the user id as state")
-    void shouldBuildAuthorizationUrl_withUserIdAsState() {
+    @DisplayName("should build the Google OAuth consent URL with an opaque nonce as state")
+    void shouldBuildAuthorizationUrl_withOpaqueNonceAsState() {
       // When
       String url = googleCalendarService.getAuthorizationUrl(USER_ID);
 
@@ -123,9 +134,92 @@ class GoogleCalendarServiceTest {
           .contains("redirect_uri=https://app.example/oauth/callback")
           .contains("response_type=code")
           .contains("access_type=offline")
-          .contains("prompt=consent")
-          .contains("state=" + USER_ID);
+          .contains("prompt=consent");
+
+      // Then — the user id must NOT be discoverable in the URL the browser carries around;
+      // leaking it there is what let an attacker forge a callback for someone else's account.
+      assertThat(stateParamOf(url)).isNotEqualTo(String.valueOf(USER_ID));
     }
+
+    @Test
+    @DisplayName("should store the state nonce against the user id with a bounded TTL")
+    void shouldStoreStateNonce_withTtl() {
+      // When
+      String url = googleCalendarService.getAuthorizationUrl(USER_ID);
+
+      // Then
+      verify(valueOperations)
+          .set(
+              "gcal:oauth:state:" + stateParamOf(url),
+              String.valueOf(USER_ID),
+              Duration.ofMinutes(10));
+    }
+
+    @Test
+    @DisplayName("should mint a different state on every call")
+    void shouldMintDifferentStateEveryCall() {
+      // When
+      String first = stateParamOf(googleCalendarService.getAuthorizationUrl(USER_ID));
+      String second = stateParamOf(googleCalendarService.getAuthorizationUrl(USER_ID));
+
+      // Then — a reused nonce would be replayable across sessions
+      assertThat(first).isNotEqualTo(second);
+    }
+  }
+
+  // =====================================================================
+  // consumeOAuthState
+  // =====================================================================
+
+  @Nested
+  @DisplayName("consumeOAuthState")
+  class ConsumeOAuthStateTests {
+
+    @Test
+    @DisplayName("should return the user id the nonce was issued to and burn the nonce")
+    void shouldReturnUserId_andBurnNonce() {
+      // Given
+      when(valueOperations.getAndDelete("gcal:oauth:state:nonce-abc")).thenReturn("42");
+
+      // When
+      Integer userId = googleCalendarService.consumeOAuthState("nonce-abc");
+
+      // Then — GETDEL, not GET: the nonce is spent by the act of reading it
+      assertThat(userId).isEqualTo(42);
+      verify(valueOperations).getAndDelete("gcal:oauth:state:nonce-abc");
+    }
+
+    @Test
+    @DisplayName("should reject a guessed state such as a bare user id")
+    void shouldRejectGuessedState() {
+      // Given — nothing was ever issued under this value
+      when(valueOperations.getAndDelete("gcal:oauth:state:9001")).thenReturn(null);
+
+      // When / Then — this is the exact attack from B1: callback with state=<victim id>
+      assertThatThrownBy(() -> googleCalendarService.consumeOAuthState("9001"))
+          .isInstanceOf(ForbiddenException.class)
+          .hasMessageContaining("Invalid or expired OAuth state");
+    }
+
+    @Test
+    @DisplayName("should reject a nonce that was already redeemed")
+    void shouldRejectAlreadyRedeemedNonce() {
+      // Given — first redemption wins, second sees the key gone
+      when(valueOperations.getAndDelete("gcal:oauth:state:nonce-abc"))
+          .thenReturn("42")
+          .thenReturn(null);
+
+      // When
+      googleCalendarService.consumeOAuthState("nonce-abc");
+
+      // Then
+      assertThatThrownBy(() -> googleCalendarService.consumeOAuthState("nonce-abc"))
+          .isInstanceOf(ForbiddenException.class);
+    }
+  }
+
+  private static String stateParamOf(String url) {
+    return UriComponentsBuilder.fromUriString(url).build().getQueryParams().getFirst("state");
   }
 
   // =====================================================================
@@ -189,14 +283,14 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when Google's token endpoint returns nothing")
+    @DisplayName("should throw ExternalApiException when Google's token endpoint returns nothing")
     void shouldThrowRuntimeException_whenTokenResponseIsNull() {
       // Given
       stubPost(properties.getTokenUrl(), false, Mono.empty());
 
       // When / Then
       assertThatThrownBy(() -> googleCalendarService.handleOAuthCallback(USER_ID, "auth-code"))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to exchange OAuth code for tokens");
     }
   }
@@ -293,7 +387,7 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when the token refresh call returns nothing")
+    @DisplayName("should throw ExternalApiException when the token refresh call returns nothing")
     void shouldThrowRuntimeException_whenRefreshResponseIsNull() {
       // Given
       GoogleCalendarTokenEntity token =
@@ -309,12 +403,12 @@ class GoogleCalendarServiceTest {
       // When / Then
       assertThatThrownBy(
               () -> googleCalendarService.addEventToCalendar(USER_ID, sampleEvent("Asia/Bangkok")))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(ExternalApiException.class)
           .hasMessageContaining("Failed to refresh Google Calendar token");
     }
 
     @Test
-    @DisplayName("should throw RuntimeException when the user has not connected Google Calendar")
+    @DisplayName("should throw NotFoundException when the user has not connected Google Calendar")
     void shouldThrowRuntimeException_whenNotConnected() {
       // Given
       when(tokenRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
@@ -322,7 +416,7 @@ class GoogleCalendarServiceTest {
       // When / Then
       assertThatThrownBy(
               () -> googleCalendarService.addEventToCalendar(USER_ID, sampleEvent("Asia/Bangkok")))
-          .isInstanceOf(RuntimeException.class)
+          .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Google Calendar not connected");
     }
   }

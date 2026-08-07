@@ -1,12 +1,14 @@
 package com.socialapp.friendships.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -26,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.neo4j.core.Neo4jClient;
 
+import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -34,6 +37,7 @@ import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.friendships.dto.FriendListResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.dto.MutualFriendCountDto;
+import com.socialapp.friendships.dto.PendingFriendRequestDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
@@ -63,6 +67,7 @@ class FriendshipServiceTest {
 
   private static final Integer ACTOR_ID = 1;
   private static final Integer OTHER_ID = 2;
+  private static final Integer THIRD_ID = 3;
   private static final Integer REQUEST_ID = 10;
 
   @Mock private FriendRequestRepository friendRequestRepository;
@@ -73,6 +78,7 @@ class FriendshipServiceTest {
   @Mock private FriendSuggestionCache friendSuggestionCache;
   @Mock private UserProfessionalProfileRepository professionalProfileRepository;
   @Mock private Neo4jClient neo4jClient;
+  @Mock private BlockQueryService blockQueryService;
 
   @InjectMocks private FriendshipService friendshipService;
 
@@ -126,6 +132,38 @@ class FriendshipServiceTest {
       // When / Then
       assertThatThrownBy(() -> friendshipService.sendFriendRequest(ACTOR_ID, OTHER_ID))
           .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse a request across a block, without saying it is a block")
+    void shouldThrowValidationException_whenBlocked() {
+      // Given: the block may have been placed by either side
+      when(userRepository.existsById(OTHER_ID)).thenReturn(true);
+      when(blockQueryService.isBlockedEitherWay(ACTOR_ID, OTHER_ID)).thenReturn(true);
+
+      // When / Then — blocking cancels the request in flight, but nothing stopped the blocked user
+      // sending a new one, which landed straight back in the blocker's pending list. The message
+      // refuses without confirming why.
+      assertThatThrownBy(() -> friendshipService.sendFriendRequest(ACTOR_ID, OTHER_ID))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("cannot send a friend request to this user")
+          .hasMessageNotContaining("block");
+      verify(friendRequestRepository, never()).saveAndFlush(any());
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should check for a block before touching the friendship graph")
+    void shouldCheckBlockBeforeGraphLookup() {
+      // Given
+      when(userRepository.existsById(OTHER_ID)).thenReturn(true);
+      when(blockQueryService.isBlockedEitherWay(ACTOR_ID, OTHER_ID)).thenReturn(true);
+
+      // When / Then — a blocked pair is not friends by definition, so the Neo4j round trip is
+      // wasted work on a request that is going to be refused either way
+      assertThatThrownBy(() -> friendshipService.sendFriendRequest(ACTOR_ID, OTHER_ID))
+          .isInstanceOf(ValidationException.class);
+      verify(friendshipRepository, never()).areFriends(ACTOR_ID, OTHER_ID);
     }
 
     @Test
@@ -709,6 +747,128 @@ class FriendshipServiceTest {
       profile.setPrimaryRole(role);
       profile.setKnownTechStack(techStack);
       return profile;
+    }
+  }
+
+  @Nested
+  @DisplayName("unfriend")
+  class UnfriendTests {
+
+    @Test
+    @DisplayName("should delete the friendship from BOTH Neo4j and Postgres")
+    void shouldDeleteFromBothStores() {
+      // Given / When
+      friendshipService.unfriend(1, 2);
+
+      // Then — clearing one store and not the other leaves the pair friends according to
+      // whichever one was missed: Neo4j is what getFriends and fan-out read, the accepted row is
+      // the record that produced it.
+      verify(friendshipRepository).deleteFriendship(1, 2);
+      verify(friendRequestRepository).deleteAcceptedBetween(1, 2);
+    }
+
+    @Test
+    @DisplayName("should evict the suggestion cache of both users")
+    void shouldEvictBothSuggestionCaches() {
+      // Given / When
+      friendshipService.unfriend(1, 2);
+
+      // Then — each is a candidate for the other again, and both mutual-friend counts changed
+      verify(friendSuggestionCache).evict(1);
+      verify(friendSuggestionCache).evict(2);
+    }
+
+    @Test
+    @DisplayName("should be idempotent when the two are not friends")
+    void shouldBeIdempotent() {
+      // Given: nothing to delete — the repositories simply match no rows
+      // When / Then: no exception, because the caller asked for a state that is already true
+      assertThatCode(() -> friendshipService.unfriend(1, 2)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("should reject unfriending yourself")
+    void shouldRejectSelfUnfriend() {
+      // When / Then
+      assertThatThrownBy(() -> friendshipService.unfriend(1, 1))
+          .isInstanceOf(ValidationException.class);
+      verify(friendshipRepository, never()).deleteFriendship(1, 1);
+    }
+  }
+
+  @Nested
+  @DisplayName("areFriends")
+  class AreFriendsTests {
+
+    @Test
+    @DisplayName("should answer from a single graph lookup")
+    void shouldDelegateToRepository() {
+      // Given
+      when(friendshipRepository.areFriends(1, 2)).thenReturn(true);
+
+      // When / Then
+      assertThat(friendshipService.areFriends(1, 2)).isTrue();
+    }
+  }
+
+  @Nested
+  @DisplayName("getSuggestions — block filtering")
+  class GetSuggestionsBlockFilteringTests {
+
+    @Test
+    @DisplayName("should drop blocked users from the suggestion pool")
+    void shouldDropBlockedCandidates() {
+      // Given: two candidates, one of whom is on the caller's block set (either direction)
+      when(friendSuggestionCache.getOrLoad(eq(1), any()))
+          .thenReturn(List.of(new MutualFriendCountDto(2, 5L), new MutualFriendCountDto(3, 4L)));
+      when(blockQueryService.blockedPairIds(1)).thenReturn(java.util.Set.of(2));
+      when(professionalProfileRepository.findById(1)).thenReturn(Optional.empty());
+      when(userProfileCache.getOrLoadAll(eq(java.util.Set.of(3)), any()))
+          .thenReturn(Map.of(3, new UserProfileDto(3, "u3", "Three", null)));
+
+      // When
+      List<FriendSuggestionDto> suggestions = friendshipService.getSuggestions(1, 10);
+
+      // Then — suggesting someone who blocked you is a particularly bad way to find out
+      assertThat(suggestions).extracting(s -> s.profile().userId()).containsExactly(3);
+    }
+  }
+
+  @Nested
+  @DisplayName("getPendingRequests — block filtering")
+  class GetPendingRequestsBlockFilteringTests {
+
+    @Test
+    @DisplayName("should hide a pending request sent by someone in the caller's block set")
+    void shouldHideRequestFromBlockedUser() {
+      // Given: a row written before sendFriendRequest learned to refuse these
+      FriendRequestEntity fromBlocked = new FriendRequestEntity();
+      fromBlocked.setId(1);
+      fromBlocked.setRequesterId(OTHER_ID);
+      fromBlocked.setAddresseeId(ACTOR_ID);
+      fromBlocked.setStatus(FriendRequestStatus.PENDING);
+
+      FriendRequestEntity fromStranger = new FriendRequestEntity();
+      fromStranger.setId(2);
+      fromStranger.setRequesterId(THIRD_ID);
+      fromStranger.setAddresseeId(ACTOR_ID);
+      fromStranger.setStatus(FriendRequestStatus.PENDING);
+
+      when(friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(
+              ACTOR_ID, FriendRequestStatus.PENDING))
+          .thenReturn(List.of(fromBlocked, fromStranger));
+      when(blockQueryService.blockedPairIds(ACTOR_ID)).thenReturn(Set.of(OTHER_ID));
+      when(userProfileCache.getOrLoadAll(eq(Set.of(THIRD_ID)), any()))
+          .thenReturn(Map.of(THIRD_ID, new UserProfileDto(THIRD_ID, "u3", "Three", null)));
+
+      // When
+      List<PendingFriendRequestDto> pending = friendshipService.getPendingRequests(ACTOR_ID);
+
+      // Then — this screen is where a leftover row would put a blocked user's name back in front
+      // of the person who blocked them
+      assertThat(pending)
+          .extracting(PendingFriendRequestDto::requesterId)
+          .containsExactly(THIRD_ID);
     }
   }
 }

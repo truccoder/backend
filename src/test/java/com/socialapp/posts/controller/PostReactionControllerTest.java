@@ -29,7 +29,9 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.posts.dto.MyReactionResponseDto;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.service.PostReactionService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -37,6 +39,7 @@ import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.config.SecurityConfig;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.entity.UserRole;
 import com.socialapp.security.repository.UserRepository;
@@ -66,6 +69,11 @@ class PostReactionControllerTest {
 
   @MockBean private PostReactionService postReactionService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String VALID_TOKEN = "a-valid-jwt-token";
@@ -314,6 +322,117 @@ class PostReactionControllerTest {
     void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
       // When / Then
       mockMvc.perform(delete(reactionsUrl(1))).andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/posts/{postId}/reactions/summary  and  GET .../reactions
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}/reactions/summary")
+  class GetReactionSummaryTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndCountsPerType_happyPath")
+    void shouldReturnCounts() throws Exception {
+      // Given
+      when(postReactionService.getReactionSummary(1, 1))
+          .thenReturn(java.util.Map.of(ReactionType.LIKE, 4L, ReactionType.LOVE, 2L));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(1) + "/summary")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.LIKE").value(4))
+          .andExpect(jsonPath("$.LOVE").value(2));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenTheViewerMayNotSeeThePost")
+    void shouldReturn404() throws Exception {
+      // Given
+      when(postReactionService.getReactionSummary(1, 999))
+          .thenThrow(new NotFoundException("Post not found with ID: 999"));
+
+      // When / Then
+      mockMvc.perform(authed(get(reactionsUrl(999) + "/summary"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401() throws Exception {
+      // When / Then
+      mockMvc.perform(get(reactionsUrl(1) + "/summary")).andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}/reactions")
+  class GetReactorsTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheReactorPage_happyPath")
+    void shouldReturnReactors() throws Exception {
+      // Given
+      when(postReactionService.getReactors(1, 1, null, null, 20))
+          .thenReturn(
+              new ReactorPageResponseDto(
+                  java.util.List.of(
+                      new PublicUserResponse(
+                          5,
+                          "ada",
+                          "Ada",
+                          null,
+                          0,
+                          java.time.OffsetDateTime.parse("2026-01-01T00:00:00Z"))),
+                  null,
+                  false,
+                  1));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(1))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.reactors[0].id").value(5))
+          .andExpect(jsonPath("$.reactors[0].email").doesNotExist())
+          .andExpect(jsonPath("$.totalCount").value(1));
+    }
+
+    @Test
+    @DisplayName("shouldPassTypeAndCursorThrough_whenProvided")
+    void shouldPassFiltersThrough() throws Exception {
+      // Given
+      when(postReactionService.getReactors(1, 1, ReactionType.LOVE, 4, 2))
+          .thenReturn(new ReactorPageResponseDto(java.util.List.of(), null, false, 0));
+
+      // When
+      mockMvc
+          .perform(
+              authed(get(reactionsUrl(1)))
+                  .param("type", "LOVE")
+                  .param("cursor", "4")
+                  .param("limit", "2"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(postReactionService).getReactors(1, 1, ReactionType.LOVE, 4, 2);
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenTypeIsNotAKnownReaction")
+    void shouldReturn400ForUnknownType() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(1))).param("type", "SHRUG"))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401() throws Exception {
+      // When / Then
+      mockMvc.perform(get(reactionsUrl(1))).andExpect(status().isUnauthorized());
     }
   }
 }

@@ -24,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.SyncResponseDto;
 import com.socialapp.knowledge.service.KnowledgeSyncService;
+import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -56,6 +57,11 @@ class KnowledgeSyncControllerTest {
 
   @MockBean private KnowledgeSyncService syncService;
   @MockBean private JwtProvider jwtProvider;
+
+  @MockBean
+  private BanDetailsService
+      banDetailsService; // JwtAuthenticationFilter builds the banned-account 403 through it
+
   @MockBean private UserRepository userRepository;
 
   private static final String SYNC_URL = "/v1/api/knowledge/sync";

@@ -10,6 +10,7 @@ import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.service.CommentService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -20,12 +21,12 @@ public class CommentController {
 
   @GetMapping
   public List<CommentResponseDto> getComments(@PathVariable Integer postId) {
-    return commentService.getComments(postId);
+    return commentService.getComments(SecurityUtils.getCurrentUserId(), postId);
   }
 
   @PostMapping
   public void createComment(
-      @PathVariable Integer postId, @RequestBody CreateCommentRequestDto request) {
+      @PathVariable Integer postId, @Valid @RequestBody CreateCommentRequestDto request) {
     commentService.createComment(SecurityUtils.getCurrentUserId(), postId, request);
   }
 
@@ -33,7 +34,7 @@ public class CommentController {
   public void updateComment(
       @PathVariable Integer postId,
       @PathVariable Integer commentId,
-      @RequestBody UpdateCommentRequestDto request) {
+      @Valid @RequestBody UpdateCommentRequestDto request) {
     commentService.updateComment(SecurityUtils.getCurrentUserId(), postId, commentId, request);
   }
 
