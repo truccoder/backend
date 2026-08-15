@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -24,8 +25,22 @@ import com.socialapp.common.ratelimit.GuestRateLimitProperties;
 
 import lombok.RequiredArgsConstructor;
 
+/**
+ * <b>{@link EnableMethodSecurity} is load-bearing.</b> Spring Boot does not turn method security on
+ * by itself, and for a long time nothing here did either — so every {@code @PreAuthorize} in the
+ * codebase parsed fine, started fine, and enforced nothing. The only five were on {@code
+ * RoadmapController} and {@code SkillVerificationController}, which left roadmap authoring, the
+ * moderation queue (with the submitters' private proof links) and approve/reject open to any
+ * signed-in user: a user could file a {@code MOD_VERIFIED} claim and then approve it themselves for
+ * the badge and the reputation points.
+ *
+ * <p>Deleting that annotation re-opens all of it silently, with nothing failing at startup. The
+ * role rules below therefore repeat the same decisions as path matchers, so the surface fails
+ * closed even if the annotation goes missing again.
+ */
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 @EnableConfigurationProperties({
   JwtProperties.class,
   CorsProperties.class,
@@ -119,6 +134,31 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/v1/api/trending")
                         .permitAll()
                         // ---- end guest-readable surface ---------------------------------------
+                        // ---- Roadmap authoring + skill moderation -----------------------------
+                        // Belt and braces, and the belt is the @PreAuthorize on the two
+                        // controllers. These matchers say the same thing a second time because the
+                        // annotations are only as good as @EnableMethodSecurity on this class —
+                        // which was absent, so all five enforced nothing (see the class javadoc).
+                        // An annotation that silently stops working is a bad single point of
+                        // failure for "can a user approve their own skill claim".
+                        //
+                        // Pinned by method and by exact segment, for the same reason the guest
+                        // surface above is: "/v1/api/skills/**" would also cover /skills/verify.
+                        // That one is deliberately absent — claiming a skill is what an ordinary
+                        // user does, and it takes the claimant from the security context, not from
+                        // the request body. GET /v1/api/roadmaps and its /nodes are likewise
+                        // absent: reading the catalogue only needs a signed-in caller.
+                        .requestMatchers(HttpMethod.POST, "/v1/api/roadmaps")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/v1/api/roadmaps/*/nodes")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/v1/api/skills/pending")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/v1/api/skills/*/approve")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/v1/api/skills/*/reject")
+                        .hasRole("ADMIN")
+                        // ---- end roadmap authoring + skill moderation -------------------------
                         .requestMatchers("/v1/api/admin/**")
                         .hasRole("ADMIN")
                         .anyRequest()

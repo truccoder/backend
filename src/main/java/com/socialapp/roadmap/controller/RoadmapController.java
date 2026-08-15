@@ -12,6 +12,14 @@ import com.socialapp.roadmap.service.RoadmapService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+/**
+ * The roadmap catalogue: readable by any signed-in user, authored by admins only.
+ *
+ * <p>The two {@code @PreAuthorize} guards below enforced nothing until {@code @EnableMethodSecurity}
+ * was added to {@code SecurityConfig} — any signed-in user could create roadmaps and nodes. They are
+ * duplicated as path rules there; see the note on that class for why the annotation is not trusted
+ * as the only control.
+ */
 @RestController
 @RequestMapping("/v1/api/roadmaps")
 @RequiredArgsConstructor
