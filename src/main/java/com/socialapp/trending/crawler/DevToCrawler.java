@@ -18,8 +18,8 @@ import lombok.extern.slf4j.Slf4j;
 public class DevToCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://dev.to/api";
 
-  public DevToCrawler() {
-    super(WebClient.builder().baseUrl(BASE_URL).build());
+  public DevToCrawler(WebClient.Builder builder) {
+    super(builder.baseUrl(BASE_URL).build());
   }
 
   @Override

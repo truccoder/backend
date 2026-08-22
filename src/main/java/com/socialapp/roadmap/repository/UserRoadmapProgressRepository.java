@@ -43,6 +43,22 @@ public interface UserRoadmapProgressRepository
           + "ORDER BY p.node.orderIndex ASC, p.node.id ASC")
   List<UserRoadmapProgressEntity> findByUserIdWithNode(@Param("userId") Integer userId);
 
+  /**
+   * Just the node names of one user's verified skills, in the order the roadmap lists them.
+   *
+   * <p>A projection rather than {@link #findByUserIdWithNode} filtered in Java: the public profile
+   * header renders a strip of names and nothing else, and loading whole progress rows to read one
+   * column off each also loads {@code proofUrl} — a private link submitted to a moderator — into a
+   * service that serves guests. What is never fetched cannot be leaked by a later edit to a
+   * mapper.
+   */
+  @Query(
+      "SELECT p.node.name FROM UserRoadmapProgressEntity p "
+          + "WHERE p.user.id = :userId AND p.status = :status "
+          + "ORDER BY p.node.orderIndex ASC, p.node.id ASC")
+  List<String> findSkillNamesByUserIdAndStatus(
+      @Param("userId") Integer userId, @Param("status") VerificationStatus status);
+
   Optional<UserRoadmapProgressEntity> findByUserIdAndNodeId(Integer userId, Integer nodeId);
 
   boolean existsByUserIdAndStatus(Integer userId, VerificationStatus status);

@@ -38,6 +38,7 @@ import com.socialapp.notifications.entity.enums.NotificationChannel;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.repository.NotificationPreferenceRepository;
 import com.socialapp.notifications.repository.NotificationRepository;
+import com.socialapp.notifications.sse.NotificationStreamService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -58,6 +59,7 @@ class NotificationServiceTest {
   @Mock private MailService mailService;
   @Mock private UserRepository userRepository;
   @Mock private BlockQueryService blockQueryService;
+  @Mock private NotificationStreamService streamService;
 
   @InjectMocks private NotificationService notificationService;
 
@@ -682,6 +684,9 @@ class NotificationServiceTest {
       // Given: a notification with no actor cannot be "from" anyone to block
       when(preferenceRepository.findByUserId(RECIPIENT_ID))
           .thenReturn(Optional.of(preference(false, false, null, null)));
+      // save() has to hand the row back: send() pushes the stored notification to any open SSE
+      // stream, so a mock returning null here is not a stand-in for the real repository.
+      when(notificationRepository.save(any())).thenAnswer(call -> call.getArgument(0));
 
       // When
       notificationService.send(baseRequest(NotificationChannel.PUSH).actorId(null).build());

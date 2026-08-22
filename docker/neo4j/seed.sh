@@ -34,11 +34,9 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
   sleep 2
 done
 
-# Order matters only in that friend-graph.cypher creates the 25 User nodes the second file
-# extends. Both are MERGE-only, so re-running on every `up` is a no-op once the graph exists.
-for script in friend-graph.cypher friend-graph-nguyen-truc.cypher; do
-  echo "neo4j-seed: applying $script"
-  run_cypher -f "$SEED_DIR/$script"
-done
+# One file, generated together with V52__seed_social_graph.sql by scripts/seed/generate_friend_graph.py
+# so Postgres and Neo4j cannot drift. MERGE-only, so re-running on every `up` is a no-op.
+echo "neo4j-seed: applying friend-graph.cypher"
+run_cypher -f "$SEED_DIR/friend-graph.cypher"
 
 echo "neo4j-seed: done"

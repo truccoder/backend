@@ -7,7 +7,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Configuration
 public class ModerationConfig {
   @Bean
-  public WebClient cloudVisionWebClient() {
-    return WebClient.builder().baseUrl("https://vision.googleapis.com/v1").build();
+  public WebClient cloudVisionWebClient(WebClient.Builder builder) {
+    return builder.baseUrl("https://vision.googleapis.com/v1").build();
   }
 }

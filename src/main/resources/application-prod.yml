@@ -1,0 +1,93 @@
+# Cấu hình chỉ áp dụng khi SPRING_PROFILES_ACTIVE=prod.
+#
+# Vì sao cần file này: trước đây toàn bộ cấu hình production nằm ở ~40 biến môi trường trong
+# docker-compose.prod.yml của repo DATN-infra. Nghĩa là muốn biết production đang chạy với thiết
+# lập gì thì phải mở một repo khác, và bất kỳ biến nào bị quên sẽ âm thầm rơi về giá trị mặc định
+# dành cho máy dev. Những thiết lập KHÔNG BAO GIỜ được khác đi ở production thì thuộc về image,
+# không thuộc về file compose.
+#
+# ⚠️ File này chỉ có tác dụng khi profile `prod` thực sự được kích hoạt. docker-compose.prod.yml
+# đặt SPRING_PROFILES_ACTIVE từ .env, và một .env thiếu biến đó sẽ khiến Compose thay bằng chuỗi
+# rỗng mà không báo lỗi. logback-spring.xml cũng chọn appender theo đúng profile này, nên nếu nó
+# không được kích hoạt thì log cũng đã sai — xem docker/.env.example trong repo DATN-infra.
+
+spring:
+  jpa:
+    # Hibernate `show_sql` ghi thẳng ra System.out, KHÔNG đi qua logback, nên mức WARN của profile
+    # prod trong logback-spring.xml không chặn được nó. Bật ở production nghĩa là mọi câu lệnh SQL
+    # của mọi request đổ vào docker logs: vừa tốn đĩa, vừa chậm, vừa lộ cấu trúc dữ liệu.
+    show-sql: false
+    properties:
+      hibernate:
+        # Tắt luôn cả đường ghi SQL đã định dạng, phòng trường hợp có ai bật lại show-sql qua
+        # biến môi trường.
+        format_sql: false
+
+  flyway:
+    # Bật ở production, trái với mặc định của application.yml.
+    #
+    # validate-on-migrate so khớp checksum của các migration đã chạy với nội dung file hiện tại.
+    # Tắt nó nghĩa là một file migration bị sửa sau khi đã apply sẽ trôi qua im lặng, và schema
+    # thật khác với thứ repo mô tả mà không có gì báo. Ở máy dev thì tiện; ở production thì đó
+    # đúng là loại sai lệch cần phát hiện sớm nhất.
+    #
+    # An toàn để bật nhờ ignore-migration-patterns "*:missing" trong application.yml, thứ xử lý
+    # các bản ghi seed cũ (V20/V21/V25/V29/V30) còn nằm trong flyway_schema_history.
+    validate-on-migrate: true
+
+    # Bắt buộc thứ tự version tăng dần. Một migration mang số nhỏ hơn số đã apply sẽ bị từ chối
+    # thay vì lặng lẽ bỏ qua — trường hợp này xảy ra khi hai nhánh cùng đặt số version và nhánh
+    # về sau mang số nhỏ hơn.
+    out-of-order: false
+
+    # Production CÓ nạp db/seed (quyết định 2026-08-21: cần dữ liệu demo trên môi trường thật).
+    #
+    # Điều làm việc này chấp nhận được: ba personal access token — credential dùng được ngay cho
+    # /v1/api/knowledge/sync/** — đã tách sang db/seed-dev, và thư mục đó KHÔNG có ở dòng dưới.
+    #
+    # Điều KHÔNG được che giấu: mật khẩu của 60 tài khoản seed vẫn nằm trong repo (xem V51 — tài
+    # khoản thường dùng "12345678", hai tài khoản ADMIN dùng một chuỗi riêng). Tách hai mật khẩu
+    # chỉ chặn được bot dò chuỗi phổ biến, KHÔNG chặn được người đọc repo. Muốn đóng hẳn thì đổi
+    # mật khẩu hai tài khoản ADMIN qua API ngay sau khi seed xong.
+    #
+    # Đừng thêm classpath:db/seed-dev vào dòng này.
+    locations: classpath:db/migration,classpath:db/seed
+
+# Đặc tả OpenAPI liệt kê mọi endpoint và mọi trường DTO, còn Swagger UI là một bảng điều khiển
+# gọi request trực tiếp. docker-compose.prod.yml cũng đặt SPRINGDOC_ENABLED=false; ghi lại ở đây
+# để việc tắt không phụ thuộc vào một biến môi trường có thể bị quên.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# Kiểm duyệt nội dung bật ở production. application.yml đã mặc định bật; pin lại để một biến
+# MODERATION_ENABLED bị đặt nhầm ở tầng compose không làm production chạy không kiểm duyệt.
+moderation:
+  enabled: true
+
+# Bộ đếm giới hạn ở production phải đếm theo IP thật của người gọi, không phải IP của Caddy.
+#
+# Backend nằm sau Caddy và không publish cổng nào ra host, nên Caddy là đường vào duy nhất và nó
+# ghi đè X-Forwarded-For thay vì nối thêm vào giá trị client gửi lên. Hai điều đó là thứ khiến
+# việc tin header này an toàn ở ĐÂY — và cả hai phải còn đúng thì nó mới còn an toàn.
+#
+# Nếu để false: mọi khách vãng lai trên Internet dùng chung một quota theo IP container Caddy, còn
+# người dò mật khẩu thì cũng chia quota đó với người dùng thật. Cả hai hạn mức đều trở nên vô nghĩa.
+rate-limit:
+  guest:
+    trust-forwarded-for: true
+  auth:
+    trust-forwarded-for: true
+
+logging:
+  level:
+    root: WARN
+    com.socialapp: INFO
+    # Ba dòng dưới đây chống lại việc vô tình bật log SQL: chúng ghi ra qua logback nên khác
+    # đường với show-sql ở trên, và ở mức DEBUG sẽ in cả tham số truy vấn — tức là dữ liệu người
+    # dùng thật nằm trong log.
+    org.hibernate.SQL: WARN
+    org.hibernate.orm.jdbc.bind: WARN
+    org.hibernate.type.descriptor.sql: WARN

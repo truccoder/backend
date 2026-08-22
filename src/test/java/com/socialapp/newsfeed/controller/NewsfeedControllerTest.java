@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
+import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -99,7 +100,7 @@ class NewsfeedControllerTest {
       // Given
       FeedPostDataDto post =
           FeedPostDataDto.builder().postId(1).authorId(2).content("Hello").build();
-      when(newsfeedService.getFeed(currentUser.getId(), 1, 10))
+      when(newsfeedService.getFeed(currentUser.getId(), 1, 10, FeedScope.ALL))
           .thenReturn(
               FeedResponseDto.builder()
                   .posts(List.of(post))
@@ -121,7 +122,7 @@ class NewsfeedControllerTest {
     @DisplayName("shouldPassPageAndSizeThrough_whenProvided")
     void shouldPassPageAndSizeThrough_whenProvided() throws Exception {
       // Given
-      when(newsfeedService.getFeed(currentUser.getId(), 3, 20))
+      when(newsfeedService.getFeed(currentUser.getId(), 3, 20, FeedScope.ALL))
           .thenReturn(
               FeedResponseDto.builder().posts(List.of()).page(3).size(20).hasMore(false).build());
 
@@ -130,7 +131,44 @@ class NewsfeedControllerTest {
           .perform(authed(get(FEED_URL)).param("page", "3").param("size", "20"))
           .andExpect(status().isOk());
 
-      verify(newsfeedService).getFeed(currentUser.getId(), 3, 20);
+      verify(newsfeedService).getFeed(currentUser.getId(), 3, 20, FeedScope.ALL);
+    }
+
+    @Test
+    @DisplayName("shouldPassTheSkillScopeThrough_whenProvided")
+    void shouldPassSkillScopeThrough() throws Exception {
+      // Given — the third tab the frontend designed and could not build
+      when(newsfeedService.getFeed(currentUser.getId(), 1, 10, FeedScope.SKILLS))
+          .thenReturn(
+              FeedResponseDto.builder().posts(List.of()).page(1).size(10).hasMore(false).build());
+
+      // When / Then
+      mockMvc.perform(authed(get(FEED_URL)).param("scope", "SKILLS")).andExpect(status().isOk());
+
+      verify(newsfeedService).getFeed(currentUser.getId(), 1, 10, FeedScope.SKILLS);
+    }
+
+    @Test
+    @DisplayName("shouldDefaultToTheAllScope_whenNoneIsGiven")
+    void shouldDefaultToAllScope() throws Exception {
+      // Given
+      when(newsfeedService.getFeed(currentUser.getId(), 1, 10, FeedScope.ALL))
+          .thenReturn(
+              FeedResponseDto.builder().posts(List.of()).page(1).size(10).hasMore(false).build());
+
+      // When / Then — the existing tab must keep behaving exactly as it did before the parameter
+      mockMvc.perform(authed(get(FEED_URL))).andExpect(status().isOk());
+
+      verify(newsfeedService).getFeed(currentUser.getId(), 1, 10, FeedScope.ALL);
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenScopeIsNotAValidEnumValue")
+    void shouldReturn400_whenScopeInvalid() throws Exception {
+      // When / Then — EP: scope must be one of FeedScope's constants
+      mockMvc
+          .perform(authed(get(FEED_URL)).param("scope", "FRIENDS"))
+          .andExpect(status().isBadRequest());
     }
 
     @Test

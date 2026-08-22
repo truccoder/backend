@@ -21,8 +21,8 @@ public class HackerNewsCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://hacker-news.firebaseio.com/v0";
   private static final int MAX_ITEMS = 30;
 
-  public HackerNewsCrawler() {
-    super(WebClient.builder().baseUrl(BASE_URL).build());
+  public HackerNewsCrawler(WebClient.Builder builder) {
+    super(builder.baseUrl(BASE_URL).build());
   }
 
   @Override

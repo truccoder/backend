@@ -18,9 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 public class GitHubTrendingCrawler extends AbstractTrendingCrawler {
   private static final String BASE_URL = "https://api.github.com";
 
-  public GitHubTrendingCrawler() {
+  public GitHubTrendingCrawler(WebClient.Builder builder) {
     super(
-        WebClient.builder()
+        builder
             .baseUrl(BASE_URL)
             .defaultHeader("Accept", "application/vnd.github.v3+json")
             .build());

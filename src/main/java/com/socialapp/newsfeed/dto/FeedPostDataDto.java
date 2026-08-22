@@ -62,6 +62,24 @@ public class FeedPostDataDto {
   private PollDetails pollDetails;
   private LinkDetails linkDetails;
   private OffsetDateTime createdAt;
+
+  /**
+   * When the post was last written to, or {@code null} for a post nobody has edited.
+   *
+   * <p>Not cosmetic. Three things in this system point at the body of a post and are only true of
+   * the body they were computed from: a skill verification whose proof is that post, a stored
+   * Gemini explanation of it, and the reputation its reactions awarded its author. An edit that
+   * arrives unannounced invalidates all three silently, and a reader has no way to tell that the
+   * text in front of them is not the text that was verified.
+   *
+   * <p>Null for an unedited post rather than equal to {@code createdAt}: the client shows "edited"
+   * from the presence of this value, and a mapper that always filled it in would mark every post
+   * in the feed as edited. {@code PostEntity.updatedAt} is written by Hibernate's {@code
+   * @UpdateTimestamp}, which fires on insert too, so the comparison against {@code createdAt}
+   * below is what separates "never edited" from "edited".
+   */
+  private OffsetDateTime updatedAt;
+
   private List<String> hashtags;
 
   /**

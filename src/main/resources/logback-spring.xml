@@ -22,13 +22,26 @@
         </root>
     </springProfile>
 
-    <!-- ─── Prod profile: Axiom only ─────────────────────────────────── -->
+    <!-- ─── Prod profile: Axiom + Console ────────────────────────────────
+
+         CONSOLE cố ý có mặt ở đây, không phải thừa.
+
+         Trước đây profile prod chỉ gắn AXIOM, nghĩa là Axiom là ĐƯỜNG LOG DUY NHẤT: một
+         AXIOM_TOKEN sai, hết hạn, hoặc Axiom gặp sự cố là không còn dòng log nào ở bất cứ đâu —
+         và đó chính là lúc cần log nhất. Tệ hơn, chế độ hỏng này im lặng: ứng dụng vẫn chạy bình
+         thường, chỉ là `docker compose logs backend` trả về rỗng, nên người trực rất dễ kết luận
+         nhầm là container chưa khởi động.
+
+         Chi phí gần như bằng không: stdout của container đằng nào cũng được Docker thu, và
+         `docker compose logs` là thứ đầu tiên người ta gõ khi SSH vào máy chủ. -->
     <springProfile name="prod">
         <root level="WARN">
             <appender-ref ref="AXIOM"/>
+            <appender-ref ref="CONSOLE"/>
         </root>
         <logger name="com.socialapp" level="INFO" additivity="false">
             <appender-ref ref="AXIOM"/>
+            <appender-ref ref="CONSOLE"/>
         </logger>
     </springProfile>
 

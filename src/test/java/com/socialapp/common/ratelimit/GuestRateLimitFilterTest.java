@@ -57,7 +57,7 @@ class GuestRateLimitFilterTest {
     properties = new GuestRateLimitProperties();
     properties.setRequests(3);
     properties.setWindow(Duration.ofMinutes(1));
-    filter = new GuestRateLimitFilter(redisTemplate, properties);
+    filter = new GuestRateLimitFilter(new FixedWindowRateLimiter(redisTemplate), properties);
     when(redisTemplate.opsForValue()).thenReturn(valueOperations);
   }
 

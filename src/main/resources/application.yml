@@ -22,7 +22,7 @@ spring:
     # GOOGLE_APP_PASSWORD is kept as the local-dev fallback.
     host: ${MAIL_HOST:smtp.gmail.com}
     port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:thanhtre3651@gmail.com}
+    username: ${MAIL_USERNAME:thinhtpts00865@fpt.edu.vn}
     password: ${MAIL_PASSWORD:${GOOGLE_APP_PASSWORD:}}
     properties:
       mail:
@@ -37,10 +37,65 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
 
+    hikari:
+      # Tất cả các giá trị dưới đây trước kia đều để mặc định. Mặc định của Hikari hợp lý cho một
+      # database chạy cùng máy; production thì đi qua pooler của Supabase ở đầu kia Internet, nơi
+      # mỗi kết nối đắt hơn và có thời hạn riêng.
+
+      # 10 kết nối cho 2 vCPU. Pool lớn hơn KHÔNG nhanh hơn: số truy vấn chạy song song bị chặn bởi
+      # số nhân CPU và đĩa của database, còn kết nối thừa chỉ thêm tranh chấp và chiếm chỗ trong
+      # hạn mức của pooler. Supabase giới hạn số kết nối theo gói, và đây không phải instance duy
+      # nhất nối vào đó.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+
+      # Chờ tối đa 10 giây để mượn được một kết nối. Mặc định là 30 giây, nghĩa là khi pool cạn thì
+      # request nằm im nửa phút rồi mới báo lỗi — người dùng đã bỏ đi từ lâu, mà thread vẫn bị giữ.
+      connection-timeout: 10000
+
+      # Phải NHỎ HƠN thời gian pooler/database tự đóng kết nối nhàn rỗi, nếu không Hikari sẽ đưa ra
+      # một kết nối mà đầu kia đã bỏ, và lỗi hiện ra dưới dạng "connection reset" ngẫu nhiên rất
+      # khó truy. 20 phút là mức thận trọng so với ngưỡng thường gặp.
+      max-lifetime: 1200000
+      idle-timeout: 300000
+      validation-timeout: 3000
+
+      # Ghi log kèm stack trace khi một kết nối bị giữ quá 30 giây mà chưa trả. Không tự sửa được
+      # gì, nhưng nó chỉ thẳng vào đoạn code làm rò rỉ — thứ mà nếu không có thì chỉ biểu hiện
+      # thành "pool cạn" ở một chỗ hoàn toàn khác.
+      leak-detection-threshold: 30000
+
+      # Đặt trần thời gian cho MỌI câu lệnh, ngay ở phía server. Đây là lớp bảo vệ cuối: một truy
+      # vấn thiếu index quét toàn bảng sẽ bị Postgres tự huỷ sau 15 giây thay vì giữ kết nối và
+      # kéo cả pool xuống theo.
+      connection-init-sql: SET statement_timeout = '15s'
+
   flyway:
     schemas: socialapp
     default-schema: socialapp
     validate-on-migrate: false
+
+    # Ba nhóm location, ba mức độ an toàn khác nhau:
+    #
+    #   db/migration  — schema. Chạy ở mọi nơi.
+    #   db/seed       — nội dung demo + 60 tài khoản. Chạy ở dev VÀ production (quyết định
+    #                   2026-08-21). An toàn ở production nhờ mật khẩu lấy từ placeholder bên dưới
+    #                   thay vì ghi cứng trong repo.
+    #   db/seed-dev   — personal access token, tức là CREDENTIAL DÙNG ĐƯỢC NGAY. Chỉ dev.
+    #
+    # Mặc định ở đây là migration-only, và đó vẫn là lựa chọn đúng: chạy app không cấu hình gì thì
+    # không nên tự đổ 60 tài khoản vào database. Mỗi môi trường tự khai mình muốn gì.
+    #
+    #   dev đầy đủ:
+    #     FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
+    #   production: xem application-prod.yml (migration + seed, KHÔNG có seed-dev)
+    locations: ${FLYWAY_LOCATIONS:classpath:db/migration}
+
+    # Any database seeded before this split still has V20/V21/V25/V29/V30 recorded in
+    # flyway_schema_history while no longer resolving them locally, which is exactly what
+    # validation reports as "applied migration not resolved locally". Ignoring *:missing keeps
+    # those databases migratable — and is what makes it safe to turn validate-on-migrate on.
+    ignore-migration-patterns: "*:missing"
 
   jpa:
     hibernate:
@@ -50,10 +105,17 @@ spring:
     # missing fetch joins and turning list endpoints into N+1 query storms. Off, so an
     # un-fetched association fails loudly in tests instead of quietly in production.
     open-in-view: false
-    show-sql: true
+    show-sql: ${JPA_SHOW_SQL:true}
     properties:
       hibernate:
         default_schema: socialapp
+        # Tran thoi gian o tang JDBC cho moi truy van JPA. Bo sung cho statement_timeout phia
+        # server o tren, khong thay the: cai kia do Postgres huy truy van, cai nay do driver bo
+        # cuoc. Co ca hai thi du truy van bi treo o dau cung co mot ben chiu trach nhiem ket thuc.
+        jakarta:
+          persistence:
+            query:
+              timeout: 15000
 
   data:
     redis:
@@ -86,6 +148,52 @@ springdoc:
     tags-sorter: alpha
     operations-sorter: alpha
 
+# Chỉ phơi ra endpoint sức khoẻ, và không kèm chi tiết.
+#
+# `include: health` là danh sách trắng: mọi endpoint actuator khác (env, beans, mappings,
+# configprops, heapdump, threaddump) đều không được đăng ký. Chúng phơi biến môi trường, chuỗi
+# kết nối và toàn bộ sơ đồ đường dẫn — không thứ nào nên có mặt trên một tiến trình production.
+#
+# Trên deployment thật, Caddy chỉ route /v1/* tới backend và backend không publish cổng nào ra
+# host, nên /actuator không tới được từ Internet. Cấu hình ở đây là lớp thứ hai, cho trường hợp
+# tuyến đường đó thay đổi.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      # never, không phải when-authorized: chi tiết sức khoẻ liệt kê từng thành phần phụ thuộc
+      # kèm thông tin phiên bản và lỗi kết nối — đó là bản đồ hạ tầng cho người dò quét.
+      show-details: never
+      show-components: never
+      # Bật /actuator/health/liveness và /actuator/health/readiness.
+      probes:
+        enabled: true
+      group:
+        # readiness = "container này nhận traffic được chưa". Đây là thứ HEALTHCHECK trong
+        # Dockerfile và `condition: service_healthy` trong compose hỏi tới.
+        #
+        # Có `db`, KHÔNG có redis/neo4j. Mất Postgres thì gần như mọi endpoint đều hỏng nên đưa
+        # vào là đúng. Còn Redis hoặc Neo4j hỏng chỉ làm hỏng một phần tính năng (bảng tin cá
+        # nhân, danh sách bạn bè) trong khi phần còn lại vẫn phục vụ được — để chúng vào nhóm này
+        # nghĩa là một cú chớp của Redis tự loại cả dịch vụ khỏi vòng phục vụ, biến một sự cố cục
+        # bộ thành sự cố toàn phần. Với deployment một instance, tự loại mình ra không cứu được ai.
+        readiness:
+          include: readinessState, db
+        # liveness = "tiến trình này còn cứu được không, hay phải khởi động lại". Cố ý KHÔNG có
+        # phụ thuộc ngoài nào: khởi động lại tiến trình không làm database sống lại, nó chỉ thêm
+        # một vòng khởi động vào giữa lúc đang có sự cố.
+        liveness:
+          include: livenessState
+  health:
+    # Health check của mail mở một kết nối SMTP thật tới Gmail mỗi lần được gọi. Với healthcheck
+    # chạy 30 giây một lần thì đó là hàng nghìn lượt bắt tay SMTP mỗi ngày chỉ để hỏi một câu mà
+    # không endpoint nào cần biết câu trả lời ngay lập tức.
+    mail:
+      enabled: false
+
 cache:
   default-ttl: 30m
   jitter-percent: 10
@@ -94,7 +202,21 @@ cache:
   lock-max-retries: 50
 
 moderation:
-  enabled: true
+  # Mặc định BẬT, và production phải để nguyên như vậy: tắt kiểm duyệt nghĩa là mọi nội dung lên
+  # thẳng feed công khai không qua lọc.
+  #
+  # Trước đây chỗ này bị sửa cứng thành `false` cho buổi demo 2026-08-09 rồi nằm lại trong working
+  # tree — một lần commit nhầm là production chạy không kiểm duyệt mà không ai thấy gì bất thường.
+  # Chuyển thành biến môi trường để việc tắt là một quyết định của môi trường cụ thể, có thời hạn,
+  # chứ không phải một dòng sửa trong file dùng chung:
+  #
+  #   demo/dev muốn tắt:  MODERATION_ENABLED=false
+  #
+  # Khi bật, bài viết được lưu ở PENDING_MODERATION và `publishSavedPost` return trước khi fan-out
+  # — bài chưa hiện ở `/posts/public` (đòi APPROVED) lẫn `/feed` (đọc Redis) cho tới khi
+  # `ModerationEventListener` chấm xong rồi mới gọi `fanOutPost`. Đây là độ trễ của một luồng
+  # @Async, không phải bài bị mất; nếu Gemini lỗi thì bài rơi về PENDING_REVIEW cho người duyệt.
+  enabled: ${MODERATION_ENABLED:true}
   text-moderation:
     toxicity-threshold: 0.7
     review-threshold: 0.5
@@ -105,6 +227,22 @@ moderation:
     review-likelihood: POSSIBLE
   rules:
     keyword-blacklist-path: classpath:moderation/blacklist.txt
+  reports:
+    # Bao nhiêu NGƯỜI khác nhau phải báo cáo trước khi bài bị đưa vào hàng chờ duyệt.
+    #
+    # Không để 1: `PostVisibilityService` giấu mọi bài không phải APPROVED khỏi tất cả trừ tác giả,
+    # nên ngưỡng 1 biến mỗi tài khoản thành một nút gỡ bài. Ràng buộc UNIQUE (post_id, reporter_id)
+    # ở V62 là thứ khiến con số này đếm người chứ không đếm lượt bấm.
+    #
+    # Môi trường demo có ít tài khoản có thể hạ xuống 2 bằng MODERATION_REPORT_THRESHOLD.
+    escalation-threshold: ${MODERATION_REPORT_THRESHOLD:3}
+
+notifications:
+  sse:
+    # Nhịp giữ kết nối SSE. Proxy và mạng di động cắt kết nối im lặng sau một tới hai phút, nên
+    # một khung dữ liệu định kỳ vừa giữ đường mở vừa làm lộ ra đường đã chết (ghi thất bại →
+    # emitter bị gỡ → client tự kết nối lại). Xem NotificationStreamService.
+    heartbeat-ms: ${NOTIFICATIONS_SSE_HEARTBEAT_MS:25000}
 
 jwt:
   secret: ${JWT_SECRET}
@@ -141,7 +279,7 @@ onesignal:
   rest-api-key: ${ONESIGNAL_REST_API_KEY:}
 
 mail:
-  from-email: ${MAIL_FROM_EMAIL:thanhtre3651@gmail.com}
+  from-email: ${MAIL_FROM_EMAIL:thinhtpts00865@fpt.edu.vn}
   from-name: ${MAIL_FROM_NAME:SocialApp}
 
 google:
@@ -191,3 +329,30 @@ rate-limit:
     requests: ${GUEST_RATE_LIMIT_REQUESTS:60}
     window: ${GUEST_RATE_LIMIT_WINDOW:1m}
     trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}
+
+  # Giới hạn cho /v1/api/auth/**, chặt hơn hẳn phần khách vãng lai ở trên.
+  #
+  # Cây đường dẫn này buộc phải permitAll — chưa đăng nhập thì lấy đâu ra token — và trước đây
+  # KHÔNG có gì giới hạn nó cả. Bộ lọc khách vãng lai không phủ tới: danh sách đường dẫn của nó là
+  # bề mặt ĐỌC công khai, còn auth không nằm trong đó. Nghĩa là những endpoint đáng tấn công nhất
+  # lại là những endpoint duy nhất không có trần: đoán mật khẩu ở /login, và gửi mail không giới
+  # hạn ở /forgot-password với /magic-link.
+  #
+  # Hai hạn mức, hai khoá đếm khác nhau, vì chúng chặn hai kiểu lạm dụng khác nhau:
+  #   requests/window          — theo IP nguồn, chặn dò mật khẩu
+  #   mail-requests/mail-window — theo ĐỊA CHỈ NHẬN, chặn việc dội mail vào hòm thư người khác
+  #                               từ nhiều IP mà mỗi IP đều nằm dưới hạn mức trên
+  auth:
+    enabled: ${AUTH_RATE_LIMIT_ENABLED:true}
+    requests: ${AUTH_RATE_LIMIT_REQUESTS:20}
+    window: ${AUTH_RATE_LIMIT_WINDOW:5m}
+    mail-requests: ${AUTH_RATE_LIMIT_MAIL_REQUESTS:3}
+    mail-window: ${AUTH_RATE_LIMIT_MAIL_WINDOW:15m}
+    trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}
+
+# Timeout cho mọi lời gọi HTTP đi ra ngoài. Xem WebClientTimeoutConfig — trước đây không WebClient
+# nào có timeout, nên một upstream nhận kết nối rồi im lặng sẽ giữ thread Tomcat vô hạn.
+http-client:
+  connect-timeout: ${HTTP_CONNECT_TIMEOUT:5s}
+  response-timeout: ${HTTP_RESPONSE_TIMEOUT:20s}
+  ai-response-timeout: ${HTTP_AI_RESPONSE_TIMEOUT:60s}

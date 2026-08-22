@@ -5,7 +5,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.socialapp.security.dto.PublicUserResponse;
+import com.socialapp.security.dto.PublicProfileResponse;
 import com.socialapp.security.service.ProfileService;
 
 import lombok.RequiredArgsConstructor;
@@ -25,8 +25,13 @@ import lombok.RequiredArgsConstructor;
  * exactly once here and uses the id for every other section of the profile.
  *
  * <p>Open to guests (see {@code SecurityConfig}), which is why the response type matters more
- * here than anywhere else: {@link PublicUserResponse} has no email, no role and no verification
+ * here than anywhere else: {@link PublicProfileResponse} has no email, no role and no verification
  * flag, and this endpoint is now readable by the whole internet.
+ *
+ * <p>It returns its own response type rather than the shared {@code PublicUserResponse} because
+ * the profile carries the reputation level and the verified-skill strip that the other six users
+ * of that record must not pay for; the two types share the same privacy boundary, not the same
+ * shape.
  */
 @RestController
 @RequestMapping("/v1/api/users/{username}/profile")
@@ -35,7 +40,7 @@ public class PublicProfileController {
   private final ProfileService profileService;
 
   @GetMapping
-  public PublicUserResponse getPublicProfile(@PathVariable String username) {
+  public PublicProfileResponse getPublicProfile(@PathVariable String username) {
     return profileService.getPublicProfile(username);
   }
 }

@@ -1,0 +1,173 @@
+# db/seed — dữ liệu mẫu, chạy ở CẢ dev lẫn production
+
+Từ 2026-08-21 production cũng nạp thư mục này (cần dữ liệu demo trên môi trường thật).
+Thư mục **`db/seed-dev`** thì không — xem phần cuối.
+
+| Môi trường | `FLYWAY_LOCATIONS` |
+|---|---|
+| mặc định (không cấu hình) | `classpath:db/migration` — chỉ schema |
+| máy dev | `classpath:db/migration,classpath:db/seed,classpath:db/seed-dev` |
+| production | `classpath:db/migration,classpath:db/seed` (đặt trong `application-prod.yml`) |
+
+## Bật seed ở máy dev
+
+```
+FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
+```
+
+Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. Sau đó chạy
+thêm hai bước không thuộc Flyway:
+
+```bash
+docker exec -i neo4j cypher-shell -u neo4j -p neo4j_password < docker/neo4j/seed/friend-graph.cypher
+bash scripts/seed/load-minio-objects.sh
+```
+
+Bỏ bước Neo4j thì danh sách bạn bè rỗng dù lịch sử lời mời đầy đủ. Bỏ bước MinIO thì gian sách
+hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
+
+## Tài khoản
+
+| | |
+|---|---|
+| Dải id | `9001`–`9060` |
+| Mật khẩu tài khoản thường | `12345678` |
+| Mật khẩu 2 tài khoản ADMIN | `SocialApp@Admin2026` |
+| Email | `<username>@seed.test` |
+| Quản trị viên | `admin_one@seed.test`, `admin_two@seed.test` (id 9059, 9060) |
+
+**Hai mật khẩu, và cả hai đều nằm trong repo.** `V51` gán mật khẩu bằng một `CASE`: tài khoản
+thường dùng `12345678`, hai tài khoản ADMIN dùng `SocialApp@Admin2026`.
+
+Việc tách ra chỉ chặn được một thứ: `12345678` là chuỗi đầu tiên mọi bot dò mật khẩu thử mà không
+cần đọc repo. Nó **không** chặn được người đọc được repo — họ vào được cả hai. Vì bộ seed này chạy
+cả trên production, muốn đóng hẳn đường đó thì đổi mật khẩu hai tài khoản ADMIN qua API ngay sau
+khi seed xong.
+
+Sinh hash mới cho mật khẩu khác (chỉ cần docker), rồi bỏ dấu `:` ở đầu chuỗi kết quả:
+
+```bash
+docker run --rm httpd:alpine htpasswd -bnBC 10 "" 'mat-khau-cua-ban'
+```
+
+Email dùng TLD `.test` — RFC 2606 dành riêng cho thử nghiệm, không định tuyến được và không ai
+đăng ký được. Ở production điều đó có nghĩa là các tài khoản này **không nhận được mail**, nên
+không khôi phục mật khẩu qua email được — đổi mật khẩu rồi quên là mất đường vào chúng.
+
+Đó cũng là lý do không dùng tên miền thật. Thế hệ seed trước dùng `@test.com` và
+`@socialapp.com`, cả hai đều do người khác sở hữu: ai kiểm soát hòm thư ở đó có thể bấm "quên mật
+khẩu" để chiếm tài khoản.
+
+Cụm vai trò (khớp `friend-graph.cypher`):
+
+| Vai trò | Id | | Vai trò | Id |
+|---|---|---|---|---|
+| BACKEND | 9001–9010 | | DATA_ML | 9037–9042 |
+| FRONTEND | 9011–9018 | | SECURITY | 9043–9046 |
+| FULLSTACK | 9019–9024 | | QA | 9047–9052 |
+| MOBILE | 9025–9030 | | OTHER | 9053–9058 |
+| DEVOPS | 9031–9036 | | ADMIN | 9059–9060 |
+
+Vài trạng thái đặc biệt để thử các nhánh xử lý:
+
+- `backend_ngoc_quan` (9007) — **đang bị cấm**, đủ 2 vi phạm, lệnh cấm 7 ngày còn hiệu lực
+- `mobile_huu_nghia` (9028) — đã từng bị cấm, lệnh cấm đã hết hạn
+- 9007, 9013, 9028, 9051 — `email_verified = false`, dùng thử luồng xác thực email
+- 9003, 9014, 9029, 9058 — đăng nhập qua GITHUB, có bản ghi thống kê GitHub
+- 9008, 9021, 9039 — đăng nhập qua GOOGLE
+
+## Các file
+
+| File | Nội dung |
+|---|---|
+| `V50__seed_reset.sql` | Dọn thế hệ seed cũ. Database sạch thì là no-op. |
+| `V51__seed_users.sql` | 60 tài khoản, hồ sơ nghề nghiệp, tuỳ chọn thông báo |
+| `V52__seed_social_graph.sql` | 240 quan hệ bạn bè, 26 lời mời chờ, 8 chặn — **sinh tự động** |
+| `V53__seed_posts.sql` | 169 bài đủ 8 `PostType`, 30 hashtag, gắn thẻ người |
+| `V54__seed_engagement.sql` | 2278 cảm xúc, 741 bình luận (có lồng nhau), RSVP, bài nộp quiz |
+| `V55__seed_bookstore.sql` | 20 sách, 257 đánh giá, 215 giao dịch đủ 4 trạng thái |
+| `V56__seed_knowledge.sql` | 329 bản giải thích, 76 ghi chú vault |
+| `V57__seed_projects.sql` | 12 dự án, 16 vị trí tuyển, 29 đơn ứng tuyển |
+| `V58__seed_roadmaps.sql` | 5 lộ trình, 44 nút, 144 bản ghi tiến độ |
+| `V59__seed_moderation.sql` | 167 log kiểm duyệt, vi phạm, lệnh cấm, khiếu nại |
+| `V60__seed_reputation_and_notifications.sql` | 2367 sự kiện uy tín, 984 thông báo |
+| `V61__seed_trending_and_github.sql` | 12 tin xu hướng, thống kê GitHub |
+
+Và một file ở thư mục riêng, **không** chạy ở production:
+
+| File | Nội dung |
+|---|---|
+| `db/seed-dev/V63__seed_dev_tokens.sql` | 3 personal access token — credential dùng được ngay |
+
+Kết quả: **34/39 bảng** có dữ liệu (33 nếu không nạp `db/seed-dev`).
+
+## Năm bảng cố ý để trống
+
+Không phải bỏ sót:
+
+- `t_refresh_tokens`, `t_password_reset_tokens`, `t_magic_link_tokens`,
+  `t_email_verification_tokens` — vật phẩm tạm của luồng xác thực, sống vài phút tới vài ngày.
+  Một refresh token nằm sẵn trong file SQL là một credential dùng được đã commit vào repo, đúng
+  loại vấn đề mà bộ seed cũ mắc phải với mật khẩu admin.
+- `t_google_calendar_tokens` — chứa token OAuth thật của Google, không bịa được. Điền giá trị
+  giả thì tài khoản hiện "đã kết nối" nhưng mọi lần đồng bộ đều thất bại, và người thử tính năng
+  sẽ đi tìm lỗi trong code.
+
+## File sinh tự động — đừng sửa tay
+
+`V52__seed_social_graph.sql` và `docker/neo4j/seed/friend-graph.cypher` đều do
+`scripts/seed/generate_friend_graph.py` sinh ra, từ **một** tập cạnh duy nhất:
+
+```bash
+python scripts/seed/generate_friend_graph.py
+```
+
+Quan hệ bạn bè nằm ở hai nơi với hai vai trò khác nhau: Neo4j giữ cạnh `FRIENDS_WITH` và là thứ
+app thực sự đọc; Postgres chỉ giữ nhật ký lời mời. Hai bên lệch nhau thì **không có gì báo lỗi**
+— chỉ là hồ sơ hiện "đã là bạn" trong khi danh sách bạn bè không có người đó. Vì vậy chúng được
+sinh cùng một lượt thay vì viết tay hai lần.
+
+## `db/seed-dev` — chỉ máy dev, KHÔNG BAO GIỜ ở production
+
+`V63__seed_dev_tokens.sql` tạo 3 personal access token dùng được ngay cho
+`/v1/api/knowledge/sync/**` (endpoint này `permitAll` ở Spring Security và tự xác thực bằng chính
+token đó). Đó là lý do nó nằm ở thư mục riêng: nội dung demo thì vô hại ở mọi môi trường, còn một
+API token thì không.
+
+| Token | Tài khoản | Quyền |
+|---|---|---|
+| `sk_seed_dev_vault_token_alpha` | 9003 | BIDIRECTIONAL, không hết hạn |
+| `sk_seed_dev_vault_token_beta` | 9021 | WRITE_ONLY, còn 90 ngày |
+| `sk_seed_dev_vault_token_gamma` | 9039 | BIDIRECTIONAL, **đã hết hạn** |
+
+Đừng bao giờ thêm `classpath:db/seed-dev` vào `FLYWAY_LOCATIONS` của production.
+
+## Quy ước khi thêm dữ liệu
+
+- Số version tiếp tục từ `V64`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
+  một dãy version, nên không được giẫm số của nhau: `V62` là schema
+  (`V62__create_post_reports.sql`), `V63` là `db/seed-dev/V63__seed_dev_tokens.sql`. Thêm file mới
+  ở bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
+- Seed phải đứng sau mọi migration schema **tạo bảng mà seed ghi vào**. Một migration số cao hơn
+  seed chỉ an toàn khi nó tạo bảng mới (như `V62`); nếu nó sửa bảng mà seed đã đổ dữ liệu thì
+  phải đánh số thấp hơn dải seed.
+- Id tường minh theo dải: người dùng `9001+`, bài viết `5001+`, bình luận `6001+`/`7001+`,
+  sách `3001+`, dự án `4001+`, lộ trình `2001+`, hashtag `1001+`. File nào cấp id tường minh thì
+  **bắt buộc** gọi `setval` ở cuối, nếu không bản ghi đầu tiên tạo qua API sẽ đụng khoá chính —
+  lỗi chỉ lộ ra khi có người bấm nút, không phải lúc nạp seed.
+- Khi lấy mẫu ngẫu nhiên bằng phép chia dư, điều kiện lọc và biểu thức chọn giá trị phải dùng
+  **hai modulo nguyên tố cùng nhau**. Dùng chung một modulo thì hai biểu thức tương quan và tập
+  kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55`, làm mất hẳn hai trạng thái thanh toán.
+- **Không đặt credential dùng được vào `db/seed`.** Thư mục đó chạy trên production. Token, khoá
+  API, hay bất cứ thứ gì đăng nhập được mà không cần mật khẩu thì thuộc về `db/seed-dev`.
+- Không seed cột trỏ tới object MinIO trừ khi `scripts/seed/load-minio-objects.sh` có nạp file
+  tương ứng. Ảnh đại diện, ảnh bài viết, banner dự án đều để `NULL` vì lý do này.
+
+## Database đã lỡ chạy seed cũ
+
+`flyway_schema_history` vẫn còn V20/V21/V25/V29/V30 trong khi file không còn resolve được.
+`spring.flyway.ignore-migration-patterns: "*:missing"` trong `application.yml` xử lý việc đó, và
+`V50__seed_reset.sql` dọn các hàng dữ liệu cũ. Không cần sửa bảng history bằng tay.
+
+Với **production**, các tài khoản do seed cũ tạo ra vẫn còn trong database — chạy
+`scripts/prod/remediate-seed-accounts.sql` để rà và vô hiệu hoá chúng.

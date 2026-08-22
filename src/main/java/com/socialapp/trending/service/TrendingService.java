@@ -12,6 +12,7 @@ import com.socialapp.trending.dto.TrendingItemDto;
 import com.socialapp.trending.dto.TrendingPageResponseDto;
 import com.socialapp.trending.entity.TrendingItemEntity;
 import com.socialapp.trending.entity.enums.TrendingCategory;
+import com.socialapp.trending.entity.enums.TrendingSource;
 import com.socialapp.trending.repository.TrendingItemRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -21,17 +22,26 @@ import lombok.RequiredArgsConstructor;
 public class TrendingService {
   private final TrendingItemRepository trendingItemRepository;
 
+  /**
+   * One page of trending items, optionally narrowed to a category and/or a single source.
+   *
+   * <p>Both filters are optional and independent, and neither changes how the remaining rows are
+   * ordered: ranking is per-source percent rank in every case — see {@code
+   * TrendingItemRepository.findTrendingNormalized} for why a raw score sort made two of the three
+   * sources invisible.
+   *
+   * <p>The enums are handed to the repository as {@code name()} strings because the query is
+   * native and the columns store the name as varchar; passing the enum itself would bind an
+   * ordinal.
+   */
   public TrendingPageResponseDto getTrending(
-      TrendingCategory category, String timeRange, int page, int size) {
+      TrendingCategory category, TrendingSource source, String timeRange, int page, int size) {
     Pageable pageable = PageRequest.of(page - 1, size);
     OffsetDateTime since = resolveTimeRange(timeRange);
 
-    Page<TrendingItemEntity> resultPage;
-    if (Objects.nonNull(category)) {
-      resultPage = trendingItemRepository.findTrendingByCategorySince(category, since, pageable);
-    } else {
-      resultPage = trendingItemRepository.findTrendingSince(since, pageable);
-    }
+    Page<TrendingItemEntity> resultPage =
+        trendingItemRepository.findTrendingNormalized(
+            since, nameOrNull(category), nameOrNull(source), pageable);
 
     return TrendingPageResponseDto.builder()
         .items(resultPage.getContent().stream().map(this::toDto).toList())
@@ -41,6 +51,10 @@ public class TrendingService {
         .totalPages(resultPage.getTotalPages())
         .hasNext(resultPage.hasNext())
         .build();
+  }
+
+  private String nameOrNull(Enum<?> value) {
+    return Objects.isNull(value) ? null : value.name();
   }
 
   private OffsetDateTime resolveTimeRange(String timeRange) {

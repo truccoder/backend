@@ -3,6 +3,7 @@ package com.socialapp.trending.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -24,6 +25,7 @@ import org.springframework.data.domain.PageRequest;
 import com.socialapp.trending.dto.TrendingPageResponseDto;
 import com.socialapp.trending.entity.TrendingItemEntity;
 import com.socialapp.trending.entity.enums.TrendingCategory;
+import com.socialapp.trending.entity.enums.TrendingSource;
 import com.socialapp.trending.repository.TrendingItemRepository;
 
 /**
@@ -58,13 +60,13 @@ class TrendingServiceTest {
     void shouldQueryByCategory_whenCategoryProvided() {
       // Given
       Page<TrendingItemEntity> page = new PageImpl<>(java.util.List.of(item(1, "A")));
-      when(trendingItemRepository.findTrendingByCategorySince(
-              eq(TrendingCategory.TOOL), any(), eq(PageRequest.of(0, 10))))
+      when(trendingItemRepository.findTrendingNormalized(
+              any(), eq(TrendingCategory.TOOL.name()), isNull(), eq(PageRequest.of(0, 10))))
           .thenReturn(page);
 
       // When
       TrendingPageResponseDto result =
-          trendingService.getTrending(TrendingCategory.TOOL, "week", 1, 10);
+          trendingService.getTrending(TrendingCategory.TOOL, null, "week", 1, 10);
 
       // Then
       assertThat(result.getItems()).hasSize(1);
@@ -76,11 +78,49 @@ class TrendingServiceTest {
     void shouldQueryAllCategories_whenCategoryIsNull() {
       // Given
       Page<TrendingItemEntity> page = new PageImpl<>(java.util.List.of(item(1, "A")));
-      when(trendingItemRepository.findTrendingSince(any(), eq(PageRequest.of(0, 10))))
+      when(trendingItemRepository.findTrendingNormalized(
+              any(), isNull(), isNull(), eq(PageRequest.of(0, 10))))
           .thenReturn(page);
 
       // When
-      TrendingPageResponseDto result = trendingService.getTrending(null, "week", 1, 10);
+      TrendingPageResponseDto result = trendingService.getTrending(null, null, "week", 1, 10);
+
+      // Then
+      assertThat(result.getItems()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should narrow to one source when one is provided")
+    void shouldQueryBySource_whenSourceProvided() {
+      // Given
+      Page<TrendingItemEntity> page = new PageImpl<>(java.util.List.of(item(1, "A")));
+      when(trendingItemRepository.findTrendingNormalized(
+              any(), isNull(), eq(TrendingSource.DEV_TO.name()), eq(PageRequest.of(0, 10))))
+          .thenReturn(page);
+
+      // When
+      TrendingPageResponseDto result =
+          trendingService.getTrending(null, TrendingSource.DEV_TO, "week", 1, 10);
+
+      // Then
+      assertThat(result.getItems()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("should apply the category and the source filter together")
+    void shouldCombineCategoryAndSource() {
+      // Given
+      Page<TrendingItemEntity> page = new PageImpl<>(java.util.List.of(item(1, "A")));
+      when(trendingItemRepository.findTrendingNormalized(
+              any(),
+              eq(TrendingCategory.TOOL.name()),
+              eq(TrendingSource.GITHUB.name()),
+              eq(PageRequest.of(0, 10))))
+          .thenReturn(page);
+
+      // When
+      TrendingPageResponseDto result =
+          trendingService.getTrending(TrendingCategory.TOOL, TrendingSource.GITHUB, "week", 1, 10);
 
       // Then
       assertThat(result.getItems()).hasSize(1);
@@ -92,11 +132,12 @@ class TrendingServiceTest {
       // Given
       Page<TrendingItemEntity> page =
           new PageImpl<>(java.util.List.of(item(1, "A")), PageRequest.of(0, 5), 12);
-      when(trendingItemRepository.findTrendingSince(any(), eq(PageRequest.of(0, 5))))
+      when(trendingItemRepository.findTrendingNormalized(
+              any(), isNull(), isNull(), eq(PageRequest.of(0, 5))))
           .thenReturn(page);
 
       // When
-      TrendingPageResponseDto result = trendingService.getTrending(null, "week", 1, 5);
+      TrendingPageResponseDto result = trendingService.getTrending(null, null, "week", 1, 5);
 
       // Then
       assertThat(result.getPage()).isEqualTo(1);
@@ -116,9 +157,10 @@ class TrendingServiceTest {
   class ResolveTimeRangeTests {
 
     private OffsetDateTime captureSince(String timeRange) {
-      when(trendingItemRepository.findTrendingSince(sinceCaptor.capture(), any()))
+      when(trendingItemRepository.findTrendingNormalized(
+              sinceCaptor.capture(), isNull(), isNull(), any()))
           .thenReturn(Page.empty());
-      trendingService.getTrending(null, timeRange, 1, 10);
+      trendingService.getTrending(null, null, timeRange, 1, 10);
       return sinceCaptor.getValue();
     }
 

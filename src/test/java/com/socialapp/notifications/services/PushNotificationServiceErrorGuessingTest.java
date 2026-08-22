@@ -55,7 +55,9 @@ class PushNotificationServiceErrorGuessingTest {
     properties.setRestApiKey("rest-key");
     properties.setBaseUrl("https://onesignal.example/api/v1");
 
-    pushNotificationService = new PushNotificationService(properties);
+    // WebClient.Builder that eventually gets replaced by the mock below; the constructor only
+    // needs something to build from.
+    pushNotificationService = new PushNotificationService(properties, WebClient.builder());
 
     webClient = mock(WebClient.class);
     Field field = PushNotificationService.class.getDeclaredField("webClient");

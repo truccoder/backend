@@ -11,10 +11,12 @@ import com.socialapp.moderation.dto.AppealDto;
 import com.socialapp.moderation.dto.BannedUserDto;
 import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
+import com.socialapp.moderation.dto.PostReportDto;
 import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.moderation.service.AdminModerationService;
 import com.socialapp.moderation.service.AppealService;
+import com.socialapp.moderation.service.PostReportService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
@@ -27,6 +29,7 @@ import lombok.RequiredArgsConstructor;
 public class AdminModerationController {
   private final AdminModerationService adminModerationService;
   private final AppealService appealService;
+  private final PostReportService postReportService;
 
   @GetMapping("/posts")
   public Page<PostModerationDetailDto> searchPosts(
@@ -62,6 +65,24 @@ public class AdminModerationController {
       @PathVariable Integer postId, @Valid @RequestBody AdminReviewRequestDto request) {
     adminModerationService.reviewPost(
         postId, request.getDecision(), request.getViolationType(), request.getFeedback());
+  }
+
+  /**
+   * The reports users have filed, newest first.
+   *
+   * <p>The queue of {@code PENDING_REVIEW} posts already tells an admin <i>that</i> something was
+   * escalated; this tells them who said what and why, which is the part a ruling needs. Admin-only
+   * because {@link com.socialapp.moderation.dto.PostReportDto} carries the reporter's id.
+   *
+   * <p>{@code postId} narrows it to one post — the natural read when the admin is looking at a post
+   * that reports put in front of them.
+   */
+  @GetMapping("/reports")
+  public Page<PostReportDto> getReports(
+      @RequestParam(required = false) Integer postId,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+    return postReportService.getReports(postId, PageRequest.of(page - 1, size));
   }
 
   /**

@@ -37,6 +37,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-mail'
 
+    // Health endpoint. Trước đây không có gì để hỏi "dịch vụ còn sống không": docker-compose
+    // dùng depends_on trần (chỉ đợi container khởi động, không đợi ứng dụng sẵn sàng), Dockerfile
+    // không có HEALTHCHECK, và Caddy thì cứ chuyển tiếp request tới backend dù nó đã chết.
+    // Chỉ endpoint `health` được phơi ra, không kèm chi tiết — xem khối `management` trong
+    // application.yml.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
     // OpenAPI spec + Swagger UI. The generated /v3/api-docs is the contract the frontend
     // generates its TypeScript types from, so a renamed DTO field breaks the FE build instead
     // of silently 404-ing at runtime. Disabled via SPRINGDOC_ENABLED=false in production.

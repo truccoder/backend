@@ -20,6 +20,8 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.socialapp.common.ratelimit.AuthRateLimitFilter;
+import com.socialapp.common.ratelimit.AuthRateLimitProperties;
 import com.socialapp.common.ratelimit.GuestRateLimitFilter;
 import com.socialapp.common.ratelimit.GuestRateLimitProperties;
 
@@ -44,7 +46,8 @@ import lombok.RequiredArgsConstructor;
 @EnableConfigurationProperties({
   JwtProperties.class,
   CorsProperties.class,
-  GuestRateLimitProperties.class
+  GuestRateLimitProperties.class,
+  AuthRateLimitProperties.class
 })
 @RequiredArgsConstructor
 public class SecurityConfig {
@@ -53,6 +56,7 @@ public class SecurityConfig {
   private final CustomAccessDeniedHandler accessDeniedHandler;
   private final JwtAuthenticationFilter jwtAuthenticationFilter;
   private final ObjectProvider<GuestRateLimitFilter> guestRateLimitFilter;
+  private final ObjectProvider<AuthRateLimitFilter> authRateLimitFilter;
   private final CorsProperties corsProperties;
 
   @Bean
@@ -87,6 +91,19 @@ public class SecurityConfig {
                         // handlers aren't registered at all, so these matchers hit a 404.
                         .requestMatchers(
                             "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**")
+                        .permitAll()
+                        // Health probes. Docker's HEALTHCHECK and compose's
+                        // "condition: service_healthy" run before any user exists and have no
+                        // token to present, so this has to be reachable unauthenticated.
+                        //
+                        // What that discloses is bounded by configuration, not by this matcher:
+                        // management.endpoints.web.exposure.include is an allow-list containing
+                        // only "health", and show-details/show-components are "never", so the
+                        // body is {"status":"UP"} and nothing else. Widening this to
+                        // "/actuator/**" would expose /actuator/env and /actuator/heapdump the
+                        // moment someone adds them to that allow-list, which is why it is pinned
+                        // to the health tree.
+                        .requestMatchers("/actuator/health", "/actuator/health/**")
                         .permitAll()
                         // ---- Guest-readable surface -------------------------------------------
                         // The product opened its read side to visitors who have not signed in: the
@@ -179,6 +196,15 @@ public class SecurityConfig {
     // change rather than a startup failure.
     guestRateLimitFilter.ifAvailable(
         filter -> chain.addFilterAfter(filter, JwtAuthenticationFilter.class));
+
+    // BEFORE the JWT filter, the opposite of the guest limiter above, and for the opposite reason.
+    // The guest limiter has to know whether the caller is signed in, so it must run after
+    // authentication. This one applies to everybody on /v1/api/auth/**, so there is nothing to
+    // look up — and a request that is about to be rejected should not first pay for a signature
+    // verification. Placing it after the JWT filter would also let a caller spend the auth budget
+    // on JWT parsing work.
+    authRateLimitFilter.ifAvailable(
+        filter -> chain.addFilterBefore(filter, JwtAuthenticationFilter.class));
 
     return chain.build();
   }
