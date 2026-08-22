@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -23,6 +24,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.entity.GithubStatsEntity;
 import com.socialapp.github.repository.GithubStatsRepository;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.PendingVerificationDto;
@@ -57,6 +61,9 @@ class SkillVerificationServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private GithubStatsRepository githubStatsRepository;
   @Mock private ReputationEventPublisher reputationEventPublisher;
+  @Mock private NotificationService notificationService;
+
+  @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
   @InjectMocks private SkillVerificationService skillVerificationService;
 
@@ -401,6 +408,47 @@ class SkillVerificationServiceTest {
       verify(reputationEventPublisher)
           .award(USER_ID, RepSourceType.ROADMAP_NODE_VERIFIED, USER_ID + ":" + NODE_ID);
     }
+
+    @Test
+    @DisplayName("should tell the claimant their skill was verified")
+    void shouldNotifyClaimantOnApproval() {
+      // Given — the loop this product is built around (real work → ledger → reputation) used to
+      // end here in silence: the points were awarded and nobody was told, so the only way to find
+      // out was to reopen the page and notice the score had moved.
+      UserRoadmapProgressEntity progress = pendingProgress();
+      when(progressRepository.findById(PROGRESS_ID)).thenReturn(Optional.of(progress));
+      when(userRepository.findById(MODERATOR_ID)).thenReturn(Optional.of(user(MODERATOR_ID)));
+
+      // When
+      skillVerificationService.approveRequest(PROGRESS_ID, MODERATOR_ID);
+
+      // Then
+      verify(notificationService).send(notificationCaptor.capture());
+      SendNotificationRequest sent = notificationCaptor.getValue();
+      assertThat(sent.getType()).isEqualTo(NotificationType.SKILL_VERIFIED);
+      assertThat(sent.getRecipientId()).isEqualTo(USER_ID);
+      assertThat(sent.getReferenceId()).isEqualTo(NODE_ID);
+      assertThat(sent.getReferenceType()).isEqualTo("ROADMAP_NODE");
+      assertThat(sent.getBody()).contains("Node " + NODE_ID);
+    }
+
+    @Test
+    @DisplayName("should not name the moderator who ruled on the claim")
+    void shouldNotNameTheModerator() {
+      // Given — which moderator approved a skill is internal (see RoadmapProgressDto), and
+      // NotificationResponseDto hands actorId straight to the client. A null actor also skips the
+      // block check, which is right: a moderation outcome is not a person acting on you, and
+      // letting a block swallow it would leave the claim looking unanswered forever.
+      when(progressRepository.findById(PROGRESS_ID)).thenReturn(Optional.of(pendingProgress()));
+      when(userRepository.findById(MODERATOR_ID)).thenReturn(Optional.of(user(MODERATOR_ID)));
+
+      // When
+      skillVerificationService.approveRequest(PROGRESS_ID, MODERATOR_ID);
+
+      // Then
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getActorId()).isNull();
+    }
   }
 
   // =====================================================================
@@ -465,6 +513,24 @@ class SkillVerificationServiceTest {
       assertThat(progress.getVerifier()).isEqualTo(moderator);
       assertThat(progress.getVerifiedAt()).isNotNull();
       verify(progressRepository).save(progress);
+    }
+
+    @Test
+    @DisplayName("should tell the claimant their request was declined")
+    void shouldNotifyClaimantOnRejection() {
+      // Given — a refusal that arrives silently is indistinguishable from one still in the queue,
+      // so without this the claimant waits forever on an answer already given
+      when(progressRepository.findById(PROGRESS_ID)).thenReturn(Optional.of(pendingProgress()));
+      when(userRepository.findById(MODERATOR_ID)).thenReturn(Optional.of(user(MODERATOR_ID)));
+
+      // When
+      skillVerificationService.rejectRequest(PROGRESS_ID, MODERATOR_ID);
+
+      // Then
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.SKILL_REJECTED);
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(USER_ID);
     }
   }
 

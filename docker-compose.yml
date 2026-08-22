@@ -59,8 +59,8 @@ services:
   # Friendship reads (GET /v1/api/friendships, /suggestions) come from Neo4j, but Flyway only
   # manages Postgres, so nothing ever created the graph: a `docker compose down -v` left every
   # dev with an empty friends list and empty suggestions, and the graph was rebuilt by hand three
-  # times before this existed. The two scripts have been in the repo all along with "run me by
-  # hand" in their headers — this service is what makes them actually run.
+  # times before this existed. The cypher script has been in the repo all along with "run me by
+  # hand" in its header — this service is what makes it actually run.
   #
   # The waiting is done inside seed.sh, not by depends_on alone: see the comment there.
   neo4j-seed:

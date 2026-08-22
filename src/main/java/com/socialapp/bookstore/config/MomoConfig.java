@@ -12,7 +12,9 @@ public class MomoConfig {
   private final MomoProperties momoProperties;
 
   @Bean
-  public WebClient momoWebClient() {
-    return WebClient.builder().baseUrl(momoProperties.getApiUrl()).build();
+  public WebClient momoWebClient(WebClient.Builder builder) {
+    // Builder được inject, không phải WebClient.builder() tĩnh: chỉ bản được Spring quản lý
+    // mới nhận WebClientCustomizer, tức là mới có timeout (xem WebClientTimeoutConfig).
+    return builder.baseUrl(momoProperties.getApiUrl()).build();
   }
 }

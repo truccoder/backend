@@ -17,10 +17,10 @@ public class PushNotificationService {
   private final WebClient webClient;
   private final OneSignalProperties properties;
 
-  public PushNotificationService(OneSignalProperties properties) {
+  public PushNotificationService(OneSignalProperties properties, WebClient.Builder builder) {
     this.properties = properties;
     this.webClient =
-        WebClient.builder()
+        builder
             .baseUrl(properties.getBaseUrl())
             .defaultHeader("Authorization", "Basic " + properties.getRestApiKey())
             .defaultHeader("Content-Type", "application/json")

@@ -11,6 +11,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.common.ratelimit.AuthRateLimitProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.*;
@@ -41,6 +43,7 @@ public class AuthService {
   private static final long VERIFICATION_TOKEN_EXPIRATION_HOURS = 24;
   private static final long MAGIC_LINK_EXPIRATION_MINUTES = 15;
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+  private static final String MAIL_RATE_LIMIT_KEY_PREFIX = "ratelimit:authmail:";
 
   private final UserRepository userRepository;
   private final PasswordEncoder passwordEncoder;
@@ -51,6 +54,8 @@ public class AuthService {
   private final MagicLinkTokenRepository magicLinkTokenRepository;
   private final MailService mailService;
   private final ProfileService profileService;
+  private final FixedWindowRateLimiter rateLimiter;
+  private final AuthRateLimitProperties rateLimitProperties;
 
   // Describes why an account is locked, so the 403 carries structured banDetails rather than
   // only an English sentence with a date embedded in it.
@@ -256,6 +261,10 @@ public class AuthService {
   private void createPasswordResetTokenAndSendEmail(UserEntity user) {
     passwordResetTokenRepository.deleteByUserId(user.getId());
 
+    if (!mailBudgetAvailable(user.getEmail())) {
+      return;
+    }
+
     PasswordResetToken resetToken = new PasswordResetToken();
     resetToken.setToken(generateSecureToken());
     resetToken.setUserId(user.getId());
@@ -266,7 +275,37 @@ public class AuthService {
         user.getEmail(), getRecipientName(user), resetToken.getToken());
   }
 
+  /**
+   * Whether another mail may be sent to this address right now.
+   *
+   * <p>{@link com.socialapp.common.ratelimit.AuthRateLimitFilter} caps requests per source IP, and
+   * that is the wrong key for this particular abuse. Reset, verification and magic-link mails go to
+   * an address that never asked for them, so burying one inbox only needs enough source addresses
+   * for each to stay politely under the IP budget. Counting per recipient is the only key that sees
+   * that pattern.
+   *
+   * <p><b>Over budget means send nothing and return normally — it must not raise.</b> These flows
+   * deliberately answer the same way whether or not the account exists ({@code forgotPassword} is
+   * an {@code ifPresent} with no else). A 429 raised only once a real account is found would
+   * restore exactly the account-enumeration oracle that design avoids: an attacker would ask four
+   * times per address and read existence off the status code.
+   */
+  private boolean mailBudgetAvailable(String email) {
+    if (rateLimiter.isOverLimit(
+        MAIL_RATE_LIMIT_KEY_PREFIX + EmailNormalizer.normalize(email),
+        rateLimitProperties.getMailRequests(),
+        rateLimitProperties.getMailWindow())) {
+      log.warn("Mail budget exhausted for a recipient; skipping send");
+      return false;
+    }
+    return true;
+  }
+
   private void createVerificationTokenAndSendEmail(UserEntity user) {
+    if (!mailBudgetAvailable(user.getEmail())) {
+      return;
+    }
+
     emailVerificationTokenRepository.deleteByUserId(user.getId());
 
     EmailVerificationToken verificationToken = new EmailVerificationToken();
@@ -281,6 +320,10 @@ public class AuthService {
   }
 
   private void createMagicLinkTokenAndSendEmail(UserEntity user) {
+    if (!mailBudgetAvailable(user.getEmail())) {
+      return;
+    }
+
     magicLinkTokenRepository.deleteByUserId(user.getId());
 
     MagicLinkToken magicLinkToken = new MagicLinkToken();

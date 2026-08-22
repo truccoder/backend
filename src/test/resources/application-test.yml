@@ -47,3 +47,8 @@ jwt:
 rate-limit:
   guest:
     enabled: false
+  # Tat luon o test, cung ly do voi guest: cac slice @WebMvcTest khong co Redis, va cac bai
+  # integration test goi /login nhieu lan lien tiep se tu dam vao han muc 20 request neu de bat.
+  # Rieng hanh vi cua bo loc duoc kiem chung o AuthRateLimitFilterTest, noi Redis duoc mock.
+  auth:
+    enabled: false

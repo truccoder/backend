@@ -29,12 +29,15 @@ import com.socialapp.moderation.dto.AppealDto;
 import com.socialapp.moderation.dto.BannedUserDto;
 import com.socialapp.moderation.dto.ModerationLogDto;
 import com.socialapp.moderation.dto.PostModerationDetailDto;
+import com.socialapp.moderation.dto.PostReportDto;
 import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.enums.ModerationStatus;
+import com.socialapp.moderation.enums.ReportReason;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.service.AdminModerationService;
 import com.socialapp.moderation.service.AppealService;
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.moderation.service.PostReportService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -70,6 +73,7 @@ class AdminModerationControllerTest {
 
   @MockBean private AdminModerationService adminModerationService;
   @MockBean private AppealService appealService;
+  @MockBean private PostReportService postReportService;
   @MockBean private JwtProvider jwtProvider;
 
   @MockBean
@@ -378,6 +382,63 @@ class AdminModerationControllerTest {
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
           .andExpect(status().isForbidden());
+    }
+  }
+
+  // =====================================================================
+  // User reports — admin side
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/admin/moderation/reports")
+  class ReportQueueTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheReports_whenCalledByAdmin_happyPath")
+    void shouldReturnReports() throws Exception {
+      when(postReportService.getReports(any(), any()))
+          .thenReturn(
+              new PageImpl<>(
+                  List.of(
+                      PostReportDto.builder()
+                          .id(1)
+                          .postId(5001)
+                          .reporterId(9002)
+                          .reason(ReportReason.SPAM)
+                          .details("buy now")
+                          .build())));
+
+      mockMvc
+          .perform(asAdmin(get(ADMIN_URL + "/reports")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.content[0].postId").value(5001))
+          .andExpect(jsonPath("$.content[0].reason").value("SPAM"));
+    }
+
+    @Test
+    @DisplayName("shouldNarrowToOnePost_whenPostIdIsGiven")
+    void shouldNarrowToOnePost() throws Exception {
+      when(postReportService.getReports(any(), any())).thenReturn(new PageImpl<>(List.of()));
+
+      mockMvc
+          .perform(asAdmin(get(ADMIN_URL + "/reports")).param("postId", "5001"))
+          .andExpect(status().isOk());
+
+      verify(postReportService).getReports(org.mockito.ArgumentMatchers.eq(5001), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenCallerIsNotAnAdmin")
+    void shouldReturn403ForNonAdmin() throws Exception {
+      // The DTO carries the reporter's id — telling an author who reported them is how reporting
+      // stops being something people are willing to do.
+      mockMvc.perform(asRegularUser(get(ADMIN_URL + "/reports"))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc.perform(get(ADMIN_URL + "/reports")).andExpect(status().isUnauthorized());
     }
   }
 

@@ -32,5 +32,24 @@ public enum NotificationType {
   EVENT_RSVP,
   EVENT_REMINDER,
   BOOK_REVIEW,
-  BOOK_PURCHASED
+  BOOK_PURCHASED,
+
+  /**
+   * A moderator approved a skill verification request.
+   *
+   * <p>This closes the product's central loop — real work, entered in the ledger, turned into
+   * reputation — which used to end in silence: {@code SkillVerificationService.approveRequest}
+   * awarded the points and told nobody, so the only way to learn that a claim had been accepted was
+   * to reopen the page and notice the score had moved.
+   */
+  SKILL_VERIFIED,
+
+  /**
+   * A moderator turned a skill verification request down.
+   *
+   * <p>Sent for the same reason as {@link #SKILL_VERIFIED} and not as an afterthought: a request
+   * that is refused silently is indistinguishable from one still sitting in the queue, so without
+   * this the claimant waits forever on an answer that has already been given.
+   */
+  SKILL_REJECTED
 }

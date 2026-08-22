@@ -1,5 +1,6 @@
 package com.socialapp.security.service;
 
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -16,7 +17,11 @@ import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.utils.FileExtensions;
 import com.socialapp.friendships.cache.UserProfileCache;
+import com.socialapp.reputation.RepLevel;
+import com.socialapp.roadmap.enums.VerificationStatus;
+import com.socialapp.roadmap.repository.UserRoadmapProgressRepository;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
+import com.socialapp.security.dto.PublicProfileResponse;
 import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
@@ -41,6 +46,7 @@ public class ProfileService {
   private final MinIOService minIOService;
   private final MinIOConfig minIOConfig;
   private final UserProfileCache userProfileCache;
+  private final UserRoadmapProgressRepository progressRepository;
 
   public UserResponse getProfile(Integer userId) {
     return toResponse(requireUser(userId));
@@ -54,17 +60,44 @@ public class ProfileService {
    * must never. Keeping the distinction in the type means a future edit cannot accidentally widen
    * the public shape — see {@link PublicUserResponse}.
    *
+   * <p>Returns {@link PublicProfileResponse}, not the shared {@link PublicUserResponse}: the
+   * profile page needs the reputation level and the verified-skill strip, and those cost a second
+   * query each. Putting them on the shared record would have charged every reactor list and every
+   * feed author for them — see {@link PublicProfileResponse} for the full reasoning.
+   *
    * <p>Takes a <b>username</b>, not an id, because the public profile URL is {@code /u/{username}}
    * — ids are sequential, and a profile routed by id lets anyone enumerate the whole user table by
    * counting upwards. The response still carries {@code id}, deliberately: it is the one lookup
    * that turns a handle into the id every other per-user endpoint ({@code /users/{userId}/posts},
    * {@code /reputation}, {@code /github/stats}) already takes.
    */
-  public PublicUserResponse getPublicProfile(String username) {
-    return PublicUserResponse.from(
+  @Transactional(readOnly = true)
+  public PublicProfileResponse getPublicProfile(String username) {
+    UserEntity user =
         userRepository
             .findByUsernameIgnoreCase(username)
-            .orElseThrow(() -> new NotFoundException("User not found: " + username)));
+            .orElseThrow(() -> new NotFoundException("User not found: " + username));
+
+    // Resolved here rather than left to the client. The thresholds live in RepLevel and are
+    // mirrored by the design system's RepScore component; a client deriving the label from the raw
+    // score would be a second copy of the table that silently disagrees the day a threshold moves.
+    int score = Objects.requireNonNullElse(user.getEliteScore(), 0);
+    RepLevel level = RepLevel.forScore(score);
+    RepLevel next = level.next();
+
+    return new PublicProfileResponse(
+        user.getId(),
+        user.getUsername(),
+        user.getFullName(),
+        user.getProfilePictureUrl(),
+        user.getEliteScore(),
+        user.getCreatedAt(),
+        level.getLevel(),
+        level.getDisplayName(),
+        level.getMin(),
+        next != null ? next.getMin() : null,
+        progressRepository.findSkillNamesByUserIdAndStatus(
+            user.getId(), VerificationStatus.VERIFIED));
   }
 
   @Transactional

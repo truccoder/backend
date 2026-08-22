@@ -2,12 +2,14 @@ package com.socialapp.notifications.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -26,6 +28,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.dto.NotificationPreferenceResponseDto;
@@ -33,6 +36,7 @@ import com.socialapp.notifications.dto.NotificationResponseDto;
 import com.socialapp.notifications.entity.enums.EmailFrequency;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.notifications.sse.NotificationStreamService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
@@ -71,6 +75,7 @@ class NotificationControllerTest {
   @Autowired private MockMvc mockMvc;
 
   @MockBean private NotificationService notificationService;
+  @MockBean private NotificationStreamService notificationStreamService;
   @MockBean private JwtProvider jwtProvider;
 
   @MockBean
@@ -352,6 +357,77 @@ class NotificationControllerTest {
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
           .andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("GET /v1/api/notifications/stream")
+  class StreamTests {
+
+    @Test
+    @DisplayName("shouldOpenAnEventStreamForTheCaller_happyPath")
+    void shouldOpenStream() throws Exception {
+      // Given
+      when(notificationStreamService.subscribe(currentUser.getId()))
+          .thenReturn(new SseEmitter(30_000L));
+
+      // When / Then — the response is held open rather than completed, which is the whole point:
+      // this is what replaces the bell's polling loop
+      mockMvc
+          .perform(
+              get(NOTIFICATIONS_URL + "/stream")
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .accept(MediaType.TEXT_EVENT_STREAM))
+          .andExpect(status().isOk())
+          .andExpect(request().asyncStarted());
+    }
+
+    @Test
+    @DisplayName("shouldSubscribeTheCallerFromTheSecurityContext_notAPathOrParameter")
+    void shouldSubscribeTheAuthenticatedCaller() throws Exception {
+      // Given
+      when(notificationStreamService.subscribe(currentUser.getId()))
+          .thenReturn(new SseEmitter(30_000L));
+
+      // When
+      mockMvc
+          .perform(
+              get(NOTIFICATIONS_URL + "/stream")
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .accept(MediaType.TEXT_EVENT_STREAM))
+          .andExpect(status().isOk());
+
+      // Then — a user id taken from the request would let anyone read anyone's notifications
+      verify(notificationStreamService).subscribe(currentUser.getId());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenUnauthenticated() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(get(NOTIFICATIONS_URL + "/stream").accept(MediaType.TEXT_EVENT_STREAM))
+          .andExpect(status().isUnauthorized());
+
+      verify(notificationStreamService, never()).subscribe(any());
+    }
+
+    @Test
+    @DisplayName("shouldStillServeAClientThatAsksForJson_becauseProducesIsPinned")
+    void shouldIgnoreAcceptHeader() throws Exception {
+      // Given — content negotiation on a handler returning SseEmitter otherwise depends on what
+      // the client sent, and a client asking for JSON would get a 406 from an endpoint that
+      // plainly is not JSON
+      when(notificationStreamService.subscribe(currentUser.getId()))
+          .thenReturn(new SseEmitter(30_000L));
+
+      // When / Then
+      mockMvc
+          .perform(
+              get(NOTIFICATIONS_URL + "/stream")
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .accept(MediaType.ALL))
+          .andExpect(status().isOk());
     }
   }
 }

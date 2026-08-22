@@ -4,7 +4,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
  * Wires the guest rate limiter, and only when it is switched on.
@@ -22,16 +21,46 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * </ul>
  */
 @Configuration
-@ConditionalOnProperty(
-    name = "rate-limit.guest.enabled",
-    havingValue = "true",
-    matchIfMissing = true)
 public class RateLimitConfig {
 
   @Bean
+  @ConditionalOnProperty(
+      name = "rate-limit.guest.enabled",
+      havingValue = "true",
+      matchIfMissing = true)
   public GuestRateLimitFilter guestRateLimitFilter(
-      StringRedisTemplate redisTemplate, GuestRateLimitProperties properties) {
-    return new GuestRateLimitFilter(redisTemplate, properties);
+      FixedWindowRateLimiter rateLimiter, GuestRateLimitProperties properties) {
+    return new GuestRateLimitFilter(rateLimiter, properties);
+  }
+
+  /**
+   * The limiter on the authentication tree, wired the same way and switchable independently.
+   *
+   * <p>Two separate flags rather than one: the guest limiter guards a read surface and can
+   * reasonably be turned off in an environment with no public traffic, while this one guards
+   * password guessing and outbound mail. Sharing a flag would mean switching off the second to get
+   * rid of the first.
+   */
+  @Bean
+  @ConditionalOnProperty(
+      name = "rate-limit.auth.enabled",
+      havingValue = "true",
+      matchIfMissing = true)
+  public AuthRateLimitFilter authRateLimitFilter(
+      FixedWindowRateLimiter rateLimiter, AuthRateLimitProperties properties) {
+    return new AuthRateLimitFilter(rateLimiter, properties);
+  }
+
+  @Bean
+  @ConditionalOnProperty(
+      name = "rate-limit.auth.enabled",
+      havingValue = "true",
+      matchIfMissing = true)
+  public FilterRegistrationBean<AuthRateLimitFilter> authRateLimitFilterRegistration(
+      AuthRateLimitFilter filter) {
+    FilterRegistrationBean<AuthRateLimitFilter> registration = new FilterRegistrationBean<>(filter);
+    registration.setEnabled(false);
+    return registration;
   }
 
   /**
@@ -43,6 +72,10 @@ public class RateLimitConfig {
    * Declaring the registration disabled leaves only the placement inside {@code SecurityConfig}.
    */
   @Bean
+  @ConditionalOnProperty(
+      name = "rate-limit.guest.enabled",
+      havingValue = "true",
+      matchIfMissing = true)
   public FilterRegistrationBean<GuestRateLimitFilter> guestRateLimitFilterRegistration(
       GuestRateLimitFilter filter) {
     FilterRegistrationBean<GuestRateLimitFilter> registration =

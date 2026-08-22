@@ -2,7 +2,6 @@ package com.socialapp.common.ratelimit;
 
 import java.io.IOException;
 
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -44,7 +43,7 @@ public class GuestRateLimitFilter extends OncePerRequestFilter {
   private static final String FORWARDED_FOR_HEADER = "X-Forwarded-For";
   private static final AntPathMatcher PATH_MATCHER = new AntPathMatcher();
 
-  private final StringRedisTemplate redisTemplate;
+  private final FixedWindowRateLimiter rateLimiter;
   private final GuestRateLimitProperties properties;
 
   @Override
@@ -74,25 +73,8 @@ public class GuestRateLimitFilter extends OncePerRequestFilter {
   }
 
   private boolean isOverLimit(String ip) {
-    String key = KEY_PREFIX + ip;
-    try {
-      Long count = redisTemplate.opsForValue().increment(key);
-      if (count == null) {
-        return false;
-      }
-      // Only the request that created the counter sets the TTL. Setting it on every request would
-      // slide the window forward forever and the counter would never reset for a steady caller.
-      if (count == 1L) {
-        redisTemplate.expire(key, properties.getWindow());
-      }
-      return count > properties.getRequests();
-    } catch (Exception e) {
-      // Fail open. Redis being down must not take the public read surface down with it: a rate
-      // limiter that cannot count is a degraded defence, while one that rejects everything is an
-      // outage — and this filter sits in front of the pages an anonymous visitor first sees.
-      log.warn("Rate-limit check failed for {}; allowing the request", ip, e);
-      return false;
-    }
+    return rateLimiter.isOverLimit(
+        KEY_PREFIX + ip, properties.getRequests(), properties.getWindow());
   }
 
   /**

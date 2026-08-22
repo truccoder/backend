@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -42,6 +43,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
+import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
@@ -99,6 +101,7 @@ class NewsfeedServiceTest {
   @Mock private ValueOperations<String, String> valueOperations;
 
   @Mock private BlockQueryService blockQueryService;
+  @Mock private SkillTagResolver skillTagResolver;
 
   private NewsfeedService newsfeedService;
 
@@ -130,7 +133,8 @@ class NewsfeedServiceTest {
                 bookStorageService,
                 postReactionRepository,
                 commentRepository),
-            blockQueryService);
+            blockQueryService,
+            skillTagResolver);
   }
 
   @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
@@ -957,6 +961,156 @@ class NewsfeedServiceTest {
 
       // Then — nearly every user is in this case, and they must keep paying the old cost
       assertThat(result.getPosts()).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // getFeed(scope = SKILLS)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getFeed — SKILLS scope")
+  class GetSkillFeedTests {
+
+    private FeedPostDataDto tagged(Integer postId, Integer authorId, String... hashtags) {
+      FeedPostDataDto post = feedPost(postId, authorId, OffsetDateTime.now());
+      post.setHashtags(List.of(hashtags));
+      return post;
+    }
+
+    private void givenCachedPosts(FeedPostDataDto... posts) throws Exception {
+      java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+      List<String> keys = new java.util.ArrayList<>();
+      List<String> payloads = new java.util.ArrayList<>();
+      for (FeedPostDataDto post : posts) {
+        String id = String.valueOf(post.getPostId());
+        ids.add(id);
+        keys.add("feedpost:" + id);
+        payloads.add("json-" + id);
+        when(objectMapper.readValue("json-" + id, FeedPostDataDto.class)).thenReturn(post);
+      }
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 299L)).thenReturn(ids);
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(keys)).thenReturn(payloads);
+    }
+
+    @Test
+    @DisplayName("should keep only the posts carrying one of the caller's verified skill tags")
+    void shouldKeepOnlyMatchingPosts() throws Exception {
+      // Given
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java", "docker"));
+      givenCachedPosts(
+          tagged(1, FRIEND_ID, "java"),
+          tagged(2, FRIEND_ID, "tailwindcss"),
+          tagged(3, FRIEND_ID, "career", "docker"));
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then — any-match, not all-match: post 3 is about two things and one of them counts
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1, 3);
+    }
+
+    @Test
+    @DisplayName("should return an empty page when the caller has no verified skills")
+    void shouldReturnEmpty_whenNoVerifiedSkills() {
+      // Given
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then — never a silent fallback to the unfiltered feed: a filter that quietly stops
+      // filtering answers a question the reader did not ask
+      assertThat(result.getPosts()).isEmpty();
+      assertThat(result.isHasMore()).isFalse();
+      verifyNoInteractions(redisTemplate);
+    }
+
+    @Test
+    @DisplayName("should skip a post with no hashtags at all")
+    void shouldSkipUntaggedPost() throws Exception {
+      // Given — EP: the majority of posts carry no hashtag, and "no tags" is not "all tags"
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      givenCachedPosts(feedPost(1, FRIEND_ID, OffsetDateTime.now()), tagged(2, FRIEND_ID, "java"));
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(2);
+    }
+
+    @Test
+    @DisplayName("should still drop a blocked author whose post matches a skill")
+    void shouldStillApplyBlocks() throws Exception {
+      // Given — the two filters compose; matching a skill is not an exemption from a block
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      givenCachedPosts(tagged(1, FRIEND_ID, "java"), tagged(2, AUTHOR_ID + 99, "java"));
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of(AUTHOR_ID + 99));
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("should paginate what survived the filter, not what was read")
+    void shouldPaginateAfterFiltering() throws Exception {
+      // Given — three matches, page size two: the second page must hold the third match rather
+      // than being empty because the raw window already ended
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      givenCachedPosts(
+          tagged(1, FRIEND_ID, "java"),
+          tagged(2, FRIEND_ID, "ux"),
+          tagged(3, FRIEND_ID, "java"),
+          tagged(4, FRIEND_ID, "java"));
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto first = newsfeedService.getFeed(AUTHOR_ID, 1, 2, FeedScope.SKILLS);
+      FeedResponseDto second = newsfeedService.getFeed(AUTHOR_ID, 2, 2, FeedScope.SKILLS);
+
+      // Then
+      assertThat(first.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1, 3);
+      assertThat(first.isHasMore()).isTrue();
+      assertThat(second.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(4);
+      assertThat(second.isHasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("should return an empty page when the requested page starts past the last match")
+    void shouldReturnEmpty_whenPagePastEnd() throws Exception {
+      // Given — BVA: start index equals the number of matches
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      givenCachedPosts(tagged(1, FRIEND_ID, "java"));
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of());
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 2, 1, FeedScope.SKILLS);
+
+      // Then
+      assertThat(result.getPosts()).isEmpty();
+      assertThat(result.isHasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("should not consult the skill resolver for the default ALL scope")
+    void shouldNotResolveSkillsForAllScope() {
+      // Given
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0, 2)).thenReturn(Set.of());
+
+      // When
+      newsfeedService.getFeed(AUTHOR_ID, 1, 2, FeedScope.ALL);
+
+      // Then — the untouched tab must not pay for the new one
+      verifyNoInteractions(skillTagResolver);
     }
   }
 }

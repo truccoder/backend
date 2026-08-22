@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +27,7 @@ import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.config.SecurityConfig;
-import com.socialapp.security.dto.PublicUserResponse;
+import com.socialapp.security.dto.PublicProfileResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.entity.UserRole;
 import com.socialapp.security.repository.UserRepository;
@@ -106,22 +107,34 @@ class PublicProfileControllerTest {
       mockAuthenticatedAs(currentUser);
       when(profileService.getPublicProfile(SUBJECT_USERNAME))
           .thenReturn(
-              new PublicUserResponse(
+              new PublicProfileResponse(
                   SUBJECT_ID,
                   "ada",
                   "Ada Lovelace",
                   "http://cdn.example.com/ada.png",
                   120,
-                  OffsetDateTime.parse("2026-01-01T00:00:00Z")));
+                  OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                  2,
+                  "Contributor",
+                  100,
+                  1000,
+                  List.of("Spring Boot", "Caching")));
 
-      // When / Then
+      // When / Then — levelName and nextLevelMin travel with the score, because the design system
+      // forbids the client from deriving a level from a number it also holds.
       mockMvc
           .perform(authed(get(url(SUBJECT_USERNAME))))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.id").value(SUBJECT_ID))
           .andExpect(jsonPath("$.username").value("ada"))
           .andExpect(jsonPath("$.fullName").value("Ada Lovelace"))
-          .andExpect(jsonPath("$.eliteScore").value(120));
+          .andExpect(jsonPath("$.eliteScore").value(120))
+          .andExpect(jsonPath("$.level").value(2))
+          .andExpect(jsonPath("$.levelName").value("Contributor"))
+          .andExpect(jsonPath("$.currentLevelMin").value(100))
+          .andExpect(jsonPath("$.nextLevelMin").value(1000))
+          .andExpect(jsonPath("$.verifiedSkills[0]").value("Spring Boot"))
+          .andExpect(jsonPath("$.verifiedSkills[1]").value("Caching"));
     }
 
     @Test
@@ -131,13 +144,18 @@ class PublicProfileControllerTest {
       mockAuthenticatedAs(currentUser);
       when(profileService.getPublicProfile(SUBJECT_USERNAME))
           .thenReturn(
-              new PublicUserResponse(
+              new PublicProfileResponse(
                   SUBJECT_ID,
                   "ada",
                   "Ada Lovelace",
                   null,
                   0,
-                  OffsetDateTime.parse("2026-01-01T00:00:00Z")));
+                  OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                  1,
+                  "Newcomer",
+                  0,
+                  100,
+                  List.of()));
 
       // When / Then — the fields that would turn this endpoint into a mass email disclosure
       mockMvc
@@ -167,13 +185,18 @@ class PublicProfileControllerTest {
       // Given: no Authorization header at all
       when(profileService.getPublicProfile(SUBJECT_USERNAME))
           .thenReturn(
-              new PublicUserResponse(
+              new PublicProfileResponse(
                   SUBJECT_ID,
                   SUBJECT_USERNAME,
                   "Ada Lovelace",
                   null,
                   0,
-                  OffsetDateTime.parse("2026-01-01T00:00:00Z")));
+                  OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                  1,
+                  "Newcomer",
+                  0,
+                  100,
+                  List.of()));
 
       // When / Then — this is the endpoint a shared /u/{username} link lands on, so it has to
       // answer someone who has never signed in. Pinning it: a later tightening of SecurityConfig

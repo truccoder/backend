@@ -17,6 +17,7 @@ import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
+import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
@@ -47,6 +48,7 @@ public class NewsfeedService {
   private final NotificationService notificationService;
   private final FeedPostDataMapper feedPostDataMapper;
   private final BlockQueryService blockQueryService;
+  private final SkillTagResolver skillTagResolver;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
@@ -58,6 +60,22 @@ public class NewsfeedService {
    * measured optimum.
    */
   private static final int BLOCK_OVERFETCH_FACTOR = 3;
+
+  /**
+   * How far back into the caller's feed the {@link FeedScope#SKILLS} tab looks.
+   *
+   * <p>The block filter can get away with a small overfetch because almost nobody blocks anybody, so
+   * almost every post read survives it. A skill filter is the opposite: most posts in a feed are
+   * about something other than the handful of skills one person has verified, so the same trick
+   * would return a page of two or three items and call it a page. Scanning a fixed window and
+   * paginating what survives gives full pages instead.
+   *
+   * <p>Bounded rather than unbounded because {@code MAX_FEED_SIZE} is 1000 and a whole-feed scan is
+   * one MGET of a thousand JSON documents on every tab switch. 300 covers the recent history a
+   * reader actually pages through; older matches fall off the end, which is the same thing that
+   * happens to the feed itself at 1000.
+   */
+  private static final int SKILL_SCAN_LIMIT = 300;
 
   // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
   // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
@@ -225,6 +243,36 @@ public class NewsfeedService {
    * still advances.
    */
   public FeedResponseDto getFeed(Integer userId, int page, int size) {
+    return getFeed(userId, page, size, FeedScope.ALL);
+  }
+
+  /**
+   * The caller's own feed, narrowed to one scope.
+   *
+   * <p>{@link FeedScope#SKILLS} is answered from the same Redis fan-out list as {@link
+   * FeedScope#ALL} rather than from a Postgres query, and that is a deliberate choice about what
+   * the tab means: it is <i>your feed, filtered</i> — the same posts from the same people, minus
+   * the ones that are not about anything you have been verified in. A query over all posts carrying
+   * those hashtags would be a different product (a topic feed), would ignore who you follow, and
+   * would put strangers' posts in a list the other tab promises is yours.
+   *
+   * <p>What a post is "about" is its hashtags, matched against the caller's verified skills by
+   * {@link SkillTagResolver}. Hashtags are already in the cached payload, so the filter costs no
+   * extra read per post — only the one skill lookup per request.
+   *
+   * <p>Unlike the block filter, this one paginates <i>after</i> filtering: see {@link
+   * #SKILL_SCAN_LIMIT}. The consequence is that {@code hasMore} is honest about the scanned window
+   * and not about the whole feed — a caller who pages past the end of the window sees the list stop
+   * even though older matching posts exist further down. That is the same horizon the feed itself
+   * has at {@code MAX_FEED_SIZE}, one order of magnitude closer.
+   */
+  public FeedResponseDto getFeed(Integer userId, int page, int size, FeedScope scope) {
+    return FeedScope.SKILLS.equals(scope)
+        ? getSkillFeed(userId, page, size)
+        : getAllFeed(userId, page, size);
+  }
+
+  private FeedResponseDto getAllFeed(Integer userId, int page, int size) {
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
 
     String feedKey = FEED_KEY_PREFIX + userId;
@@ -254,6 +302,62 @@ public class NewsfeedService {
     }
 
     return FeedResponseDto.builder().posts(posts).page(page).size(size).hasMore(hasMore).build();
+  }
+
+  private FeedResponseDto getSkillFeed(Integer userId, int page, int size) {
+    Set<String> skillTags = skillTagResolver.resolveTagsFor(userId);
+
+    // No verified skills, or none that any hashtag corresponds to: the tab is empty, and says so.
+    // Falling back to the unfiltered feed here would show the reader somebody else's answer to the
+    // question they asked.
+    if (skillTags.isEmpty()) {
+      return emptyPage(page, size);
+    }
+
+    Set<String> postIds =
+        redisTemplate.opsForZSet().reverseRange(FEED_KEY_PREFIX + userId, 0, SKILL_SCAN_LIMIT - 1L);
+
+    if (CollectionUtils.isEmpty(postIds)) {
+      return emptyPage(page, size);
+    }
+
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
+    List<FeedPostDataDto> matches =
+        loadPostsFromCache(postIds).stream()
+            .filter(post -> !blockedIds.contains(post.getAuthorId()))
+            .filter(post -> touchesAnyTag(post, skillTags))
+            .toList();
+
+    int start = (page - 1) * size;
+    if (start >= matches.size()) {
+      return emptyPage(page, size);
+    }
+
+    int end = Math.min(start + size, matches.size());
+    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(start, end));
+    signBookCovers(pageItems);
+
+    return FeedResponseDto.builder()
+        .posts(pageItems)
+        .page(page)
+        .size(size)
+        .hasMore(end < matches.size())
+        .build();
+  }
+
+  /**
+   * Whether a post carries at least one of the caller's skill hashtags.
+   *
+   * <p>Any-match rather than all-match: a post tagged {@code java} and {@code kubernetes} is about
+   * both, and a reader verified in only one of them still wants to see it.
+   */
+  private boolean touchesAnyTag(FeedPostDataDto post, Set<String> tags) {
+    List<String> hashtags = post.getHashtags();
+    return !CollectionUtils.isEmpty(hashtags) && hashtags.stream().anyMatch(tags::contains);
+  }
+
+  private FeedResponseDto emptyPage(int page, int size) {
+    return FeedResponseDto.builder().posts(List.of()).page(page).size(size).hasMore(false).build();
   }
 
   /**

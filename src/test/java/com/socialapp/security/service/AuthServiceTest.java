@@ -1,8 +1,11 @@
 package com.socialapp.security.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -21,12 +24,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.common.ratelimit.AuthRateLimitProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.AuthResponseDto;
@@ -74,6 +80,12 @@ class AuthServiceTest {
   @Mock private MagicLinkTokenRepository magicLinkTokenRepository;
   @Mock private MailService mailService;
   @Mock private ProfileService profileService;
+
+  // Mockito returns false from isOverLimit by default, i.e. "budget available", so every existing
+  // test keeps its original behaviour without having to stub this.
+  @Mock private FixedWindowRateLimiter rateLimiter;
+
+  @Spy private AuthRateLimitProperties rateLimitProperties = new AuthRateLimitProperties();
 
   @InjectMocks private AuthService authService;
 
@@ -410,6 +422,36 @@ class AuthServiceTest {
       verify(passwordResetTokenRepository).deleteByUserId(USER_ID);
       verify(passwordResetTokenRepository).save(any());
       verify(mailService).sendPasswordResetEmail(eq(EMAIL), eq("Jane Doe"), any());
+    }
+
+    @Test
+    @DisplayName("should send nothing once the recipient's mail budget is spent")
+    void shouldNotSendResetEmail_whenRecipientMailBudgetExhausted() {
+      // Given an account that exists, but whose address has already received its allowance
+      UserEntity user = verifiedUser(USER_ID, EMAIL, false);
+      when(userRepository.findByEmailIgnoreCase(EMAIL)).thenReturn(Optional.of(user));
+      when(rateLimiter.isOverLimit(anyString(), anyInt(), any())).thenReturn(true);
+
+      // When
+      authService.forgotPassword(new ForgotPasswordRequestDto(EMAIL));
+
+      // Then no mail goes out, and no token is minted for one that will never arrive
+      verifyNoInteractions(mailService);
+      verify(passwordResetTokenRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should stay silent rather than raise, so the throttle is not an existence oracle")
+    void shouldNotThrow_whenMailBudgetExhausted() {
+      // Given
+      UserEntity user = verifiedUser(USER_ID, EMAIL, false);
+      when(userRepository.findByEmailIgnoreCase(EMAIL)).thenReturn(Optional.of(user));
+      when(rateLimiter.isOverLimit(anyString(), anyInt(), any())).thenReturn(true);
+
+      // When / Then — a 429 raised only once a real account is found would let an attacker read
+      // account existence off the status code, defeating the point of the silent ifPresent above.
+      assertThatCode(() -> authService.forgotPassword(new ForgotPasswordRequestDto(EMAIL)))
+          .doesNotThrowAnyException();
     }
   }
 

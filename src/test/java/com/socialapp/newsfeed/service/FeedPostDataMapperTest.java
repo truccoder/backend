@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -154,6 +155,75 @@ class FeedPostDataMapperTest {
       // Then
       assertThat(page).isEmpty();
       verify(postReactionRepository, never()).countByPostIds(anyCollection());
+    }
+  }
+
+  @Nested
+  @DisplayName("updatedAt")
+  class EditedAt {
+
+    private FeedPostDataDto mapWithTimestamps(OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+      PostEntity post = post(10, AUTHOR_ID);
+      post.setCreatedAt(createdAt);
+      post.setUpdatedAt(updatedAt);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+      return mapper.toFeedPostData(post);
+    }
+
+    @Test
+    @DisplayName("stays null for a post nobody has edited")
+    void nullForUnedited() {
+      // Given — @CreationTimestamp and @UpdateTimestamp are two generators and both fire on the
+      // same INSERT, so an untouched post already carries an updated_at a few microseconds later.
+      // A straight isAfter() comparison would mark every post in the feed as edited.
+      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+
+      // When
+      FeedPostDataDto data = mapWithTimestamps(created, created.plusNanos(400_000));
+
+      // Then
+      assertThat(data.getUpdatedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("stays null exactly at the one-second threshold (boundary)")
+    void nullAtThreshold() {
+      // Given — BVA on EDIT_THRESHOLD: the comparison is strictly greater than
+      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+
+      // When
+      FeedPostDataDto data = mapWithTimestamps(created, created.plusSeconds(1));
+
+      // Then
+      assertThat(data.getUpdatedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("carries the timestamp once a real edit has landed (boundary: threshold + 1ms)")
+    void setForEdited() {
+      // Given — BVA just past the threshold. A real edit is a second request, minutes apart.
+      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+      OffsetDateTime edited = created.plusSeconds(1).plusNanos(1_000_000);
+
+      // When
+      FeedPostDataDto data = mapWithTimestamps(created, edited);
+
+      // Then — three things point at the body of a post (a skill proof, a stored explanation, the
+      // reputation its reactions awarded); an edit that arrives unannounced invalidates all three
+      assertThat(data.getUpdatedAt()).isEqualTo(edited);
+    }
+
+    @Test
+    @DisplayName("stays null for a row written before updated_at was populated")
+    void nullWhenColumnIsNull() {
+      // Given — EP: legacy row, updated_at NULL
+      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+
+      // When
+      FeedPostDataDto data = mapWithTimestamps(created, null);
+
+      // Then
+      assertThat(data.getUpdatedAt()).isNull();
     }
   }
 }

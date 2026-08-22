@@ -9,6 +9,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.repository.GithubStatsRepository;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.reputation.entity.enums.RepSourceType;
 import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.roadmap.dto.PendingVerificationDto;
@@ -34,6 +37,7 @@ public class SkillVerificationService {
   private final UserRepository userRepository;
   private final GithubStatsRepository githubStatsRepository;
   private final ReputationEventPublisher reputationEventPublisher;
+  private final NotificationService notificationService;
 
   /**
    * One user's roadmap progress, for the "verified skills" card on their profile.
@@ -156,6 +160,8 @@ public class SkillVerificationService {
         progress.getUser().getId(),
         RepSourceType.ROADMAP_NODE_VERIFIED,
         progressSourceId(progress.getUser().getId(), progress.getNode().getId()));
+
+    notifyDecision(progress, NotificationType.SKILL_VERIFIED);
   }
 
   @Transactional
@@ -179,6 +185,45 @@ public class SkillVerificationService {
     progress.setVerifier(moderator);
     progress.setVerifiedAt(OffsetDateTime.now());
     progressRepository.save(progress);
+
+    notifyDecision(progress, NotificationType.SKILL_REJECTED);
+  }
+
+  /**
+   * Tells the claimant how their request went.
+   *
+   * <p><b>Only for the two moderator decisions</b>, not for {@code SELF_VERIFIED} or {@code
+   * AUTO_CERTIFIED}. Those two are resolved inside the same request that submits them, so the
+   * claimant is already looking at the answer; a notification there would be the system telling
+   * someone what they just did. These two arrive minutes or days later, to someone who has left the
+   * page — which is the whole reason the loop was ending in silence.
+   *
+   * <p><b>No {@code actorId}, deliberately.</b> The obvious value is the moderator's id, and it is
+   * the one thing this must not carry: which moderator ruled on a claim is internal (see {@code
+   * RoadmapProgressDto}), and {@code NotificationResponseDto} hands {@code actorId} straight to the
+   * client. A null actor also skips the block check in {@code NotificationService.send}, which is
+   * correct here — a moderation outcome is not a person acting on you, and letting a block swallow
+   * it would leave the claim looking unanswered forever.
+   *
+   * <p>{@code referenceId} is the roadmap node, not the progress row: the node is what the client
+   * can link to, and the progress row's id is an internal key with no route in front of it.
+   */
+  private void notifyDecision(UserRoadmapProgressEntity progress, NotificationType type) {
+    boolean verified = NotificationType.SKILL_VERIFIED.equals(type);
+    String skill = progress.getNode().getName();
+
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(progress.getUser().getId())
+            .type(type)
+            .title(verified ? "Skill verified" : "Skill verification declined")
+            .body(
+                verified
+                    ? "Your claim for \"" + skill + "\" was verified"
+                    : "Your claim for \"" + skill + "\" was not verified")
+            .referenceId(progress.getNode().getId())
+            .referenceType("ROADMAP_NODE")
+            .build());
   }
 
   @Transactional(readOnly = true)

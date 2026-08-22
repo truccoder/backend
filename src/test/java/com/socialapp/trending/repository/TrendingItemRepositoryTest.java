@@ -90,8 +90,8 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
   }
 
   @Nested
-  @DisplayName("findTrendingSince")
-  class FindTrendingSince {
+  @DisplayName("findTrendingNormalized")
+  class FindTrendingNormalized {
 
     @Test
     @DisplayName("orders matches by score, then publishedAt, both descending")
@@ -124,7 +124,7 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
 
       // When
       Page<TrendingItemEntity> result =
-          trendingItemRepository.findTrendingSince(CUTOFF, PageRequest.of(0, 10));
+          trendingItemRepository.findTrendingNormalized(CUTOFF, null, null, PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent())
@@ -142,7 +142,7 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
 
       // When
       Page<TrendingItemEntity> result =
-          trendingItemRepository.findTrendingSince(CUTOFF, PageRequest.of(0, 10));
+          trendingItemRepository.findTrendingNormalized(CUTOFF, null, null, PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent())
@@ -159,7 +159,7 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
 
       // When
       Page<TrendingItemEntity> result =
-          trendingItemRepository.findTrendingSince(CUTOFF, PageRequest.of(0, 10));
+          trendingItemRepository.findTrendingNormalized(CUTOFF, null, null, PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent()).isEmpty();
@@ -167,8 +167,8 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
   }
 
   @Nested
-  @DisplayName("findTrendingByCategorySince")
-  class FindTrendingByCategorySince {
+  @DisplayName("findTrendingNormalized — filters")
+  class FindTrendingNormalizedFilters {
 
     @Test
     @DisplayName("filters by category and cutoff together, ordered by score descending")
@@ -184,13 +184,68 @@ class TrendingItemRepositoryTest extends AbstractIntegrationTest {
 
       // When
       Page<TrendingItemEntity> result =
-          trendingItemRepository.findTrendingByCategorySince(
-              TrendingCategory.MINDSET, CUTOFF, PageRequest.of(0, 10));
+          trendingItemRepository.findTrendingNormalized(
+              CUTOFF, TrendingCategory.MINDSET.name(), null, PageRequest.of(0, 10));
 
       // Then
       assertThat(result.getContent())
           .extracting(TrendingItemEntity::getId)
           .containsExactly(match.getId());
+    }
+
+    @Test
+    @DisplayName("filters by source when one is given")
+    void filtersBySource() {
+      // Given
+      TrendingItemEntity devTo =
+          trendingItemRepository.saveAndFlush(
+              item("f1", TrendingSource.DEV_TO, TrendingCategory.TOOL, 10, CUTOFF.plusDays(1)));
+      trendingItemRepository.saveAndFlush(
+          item("f2", TrendingSource.GITHUB, TrendingCategory.TOOL, 90_000, CUTOFF.plusDays(1)));
+
+      // When
+      Page<TrendingItemEntity> result =
+          trendingItemRepository.findTrendingNormalized(
+              CUTOFF, null, TrendingSource.DEV_TO.name(), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result.getContent())
+          .extracting(TrendingItemEntity::getId)
+          .containsExactly(devTo.getId());
+    }
+
+    @Test
+    @DisplayName("interleaves sources instead of letting the largest raw scale take the page")
+    void normalisesAcrossSources() {
+      // Given — GitHub stars are three orders of magnitude above Hacker News upvotes, so a raw
+      // score sort would put BOTH GitHub rows above the best Hacker News row. Each source's best
+      // is what should come first.
+      TrendingItemEntity githubTop =
+          trendingItemRepository.saveAndFlush(
+              item(
+                  "n1", TrendingSource.GITHUB, TrendingCategory.TOOL, 400_000, CUTOFF.plusDays(1)));
+      trendingItemRepository.saveAndFlush(
+          item("n2", TrendingSource.GITHUB, TrendingCategory.TOOL, 9_000, CUTOFF.plusDays(1)));
+      TrendingItemEntity hackerNewsTop =
+          trendingItemRepository.saveAndFlush(
+              item(
+                  "n3",
+                  TrendingSource.HACKER_NEWS,
+                  TrendingCategory.TOOL,
+                  900,
+                  CUTOFF.plusDays(1)));
+      trendingItemRepository.saveAndFlush(
+          item("n4", TrendingSource.HACKER_NEWS, TrendingCategory.TOOL, 10, CUTOFF.plusDays(1)));
+
+      // When
+      Page<TrendingItemEntity> result =
+          trendingItemRepository.findTrendingNormalized(CUTOFF, null, null, PageRequest.of(0, 10));
+
+      // Then — the two top-of-source rows occupy the first two places, in raw-score order between
+      // themselves; the two bottom-of-source rows follow.
+      assertThat(result.getContent())
+          .extracting(TrendingItemEntity::getId)
+          .startsWith(githubTop.getId(), hackerNewsTop.getId());
     }
   }
 

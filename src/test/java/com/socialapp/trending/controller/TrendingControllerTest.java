@@ -31,6 +31,7 @@ import com.socialapp.security.entity.UserRole;
 import com.socialapp.security.repository.UserRepository;
 import com.socialapp.trending.dto.TrendingPageResponseDto;
 import com.socialapp.trending.entity.enums.TrendingCategory;
+import com.socialapp.trending.entity.enums.TrendingSource;
 import com.socialapp.trending.service.TrendingService;
 
 /**
@@ -94,7 +95,7 @@ class TrendingControllerTest {
     @DisplayName("shouldReturn200AndPage_withDefaults_happyPath")
     void shouldReturn200AndPage_withDefaults_happyPath() throws Exception {
       // Given
-      when(trendingService.getTrending(null, "week", 1, 10))
+      when(trendingService.getTrending(null, null, "week", 1, 10))
           .thenReturn(
               TrendingPageResponseDto.builder()
                   .items(List.of())
@@ -117,7 +118,7 @@ class TrendingControllerTest {
     @DisplayName("shouldPassCategoryAndTimeRangeThrough_whenProvided")
     void shouldPassCategoryAndTimeRangeThrough_whenProvided() throws Exception {
       // Given
-      when(trendingService.getTrending(TrendingCategory.TOOL, "month", 2, 5))
+      when(trendingService.getTrending(TrendingCategory.TOOL, null, "month", 2, 5))
           .thenReturn(
               TrendingPageResponseDto.builder()
                   .items(List.of())
@@ -138,7 +139,39 @@ class TrendingControllerTest {
                   .param("size", "5"))
           .andExpect(status().isOk());
 
-      verify(trendingService).getTrending(TrendingCategory.TOOL, "month", 2, 5);
+      verify(trendingService).getTrending(TrendingCategory.TOOL, null, "month", 2, 5);
+    }
+
+    @Test
+    @DisplayName("shouldPassSourceThrough_whenProvided")
+    void shouldPassSourceThrough_whenProvided() throws Exception {
+      // Given — the filter that makes the three-source claim visible on screen
+      when(trendingService.getTrending(null, TrendingSource.HACKER_NEWS, "week", 1, 10))
+          .thenReturn(
+              TrendingPageResponseDto.builder()
+                  .items(List.of())
+                  .page(1)
+                  .size(10)
+                  .totalElements(0)
+                  .totalPages(0)
+                  .hasNext(false)
+                  .build());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(TRENDING_URL)).param("source", "HACKER_NEWS"))
+          .andExpect(status().isOk());
+
+      verify(trendingService).getTrending(null, TrendingSource.HACKER_NEWS, "week", 1, 10);
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenSourceIsNotAValidEnumValue")
+    void shouldReturn400_whenSourceIsNotAValidEnumValue() throws Exception {
+      // When / Then — EP: source must be one of TrendingSource's constants
+      mockMvc
+          .perform(authed(get(TRENDING_URL)).param("source", "REDDIT"))
+          .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -163,7 +196,7 @@ class TrendingControllerTest {
     @DisplayName("shouldReturn200_whenCalledByAGuestWithNoAuthorizationHeader")
     void shouldServeGuests() throws Exception {
       // Given
-      when(trendingService.getTrending(null, "week", 1, 10))
+      when(trendingService.getTrending(null, null, "week", 1, 10))
           .thenReturn(
               TrendingPageResponseDto.builder()
                   .items(java.util.List.of())

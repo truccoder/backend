@@ -30,6 +30,10 @@ import lombok.RequiredArgsConstructor;
  * Searches directly against Postgres (t_users, t_posts, t_books) rather than a separate search
  * index. Matches are diacritics-insensitive (Postgres {@code unaccent(...)} on both sides) plain
  * substring — no relevance scoring/fuzzy typo tolerance like a real search engine would give.
+ *
+ * <p>Three branches, one per result list in {@code SearchResponse}: people, posts, books. Each is
+ * its own public method taking the same viewer context, and each applies the same two filters —
+ * blocks both ways, and post visibility — so no branch can surface something another one hides.
  */
 @Service
 @RequiredArgsConstructor
@@ -92,6 +96,69 @@ public class SearchService {
     bookMatches.forEach(p -> merged.putIfAbsent(p.getId(), p));
 
     return toPostDtos(merged.values().stream().limit(size).toList());
+  }
+
+  /**
+   * Books whose title or description matched, as their own result list.
+   *
+   * <p>Filtered by the visibility of the <b>post</b> the book was published as, not by anything on
+   * the book row: {@code t_books} has no visibility column of its own, and every book is created
+   * through {@code PostService.createBookPost}, so the post is the authority on who may see it.
+   * That is the same rule {@link #searchPostsWithBookInfo} applies to its book branch, deliberately
+   * — the two lists must not disagree about whether a given book exists.
+   *
+   * <p>This repeats the {@code bookRepository.search} that {@link #searchPostsWithBookInfo} also
+   * runs, one extra indexed lookup per search. The alternative was a combined entry point that
+   * returns the whole {@link com.socialapp.search.dto.SearchResponse}, which would make the two
+   * branches impossible to call — or test — apart. The controller composes; each branch stays a
+   * question you can ask on its own.
+   */
+  public List<BookDto> searchBooks(
+      String query, int size, Integer currentUserId, List<Integer> friendIds) {
+    List<BookEntity> matches =
+        bookRepository
+            .search(SearchQuerySanitizer.sanitize(query), PageRequest.of(0, size))
+            .getContent();
+
+    if (matches.isEmpty()) {
+      return List.of();
+    }
+
+    List<Integer> safeFriends = safeFriendIds(friendIds);
+    Set<Integer> blockedIds = blockQueryService.blockedPairIds(currentUserId);
+
+    Map<Integer, PostEntity> postsById = new HashMap<>();
+    postRepository
+        .findAllById(
+            matches.stream()
+                .map(BookEntity::getPostId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList())
+        .forEach(post -> postsById.put(post.getId(), post));
+
+    return matches.stream()
+        .filter(book -> isBookVisible(book, postsById, blockedIds, currentUserId, safeFriends))
+        .map(this::toBookDto)
+        .toList();
+  }
+
+  /**
+   * A book with no readable post is dropped rather than shown. {@code postId} is non-null for every
+   * book this application can create, so a null here means a row that predates that rule or was
+   * inserted by hand — and a book nobody can trace back to an author's post is not something to put
+   * in front of a reader on the strength of a title match.
+   */
+  private boolean isBookVisible(
+      BookEntity book,
+      Map<Integer, PostEntity> postsById,
+      Set<Integer> blockedIds,
+      Integer currentUserId,
+      List<Integer> friendIds) {
+    PostEntity post = Objects.isNull(book.getPostId()) ? null : postsById.get(book.getPostId());
+    return Objects.nonNull(post)
+        && !blockedIds.contains(post.getAuthorId())
+        && isVisibleToViewer(post, currentUserId, friendIds);
   }
 
   private boolean isVisibleToViewer(

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialapp.common.utils.Constants;
+import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResponse;
 import com.socialapp.search.dto.SuggestionDto;
@@ -25,8 +26,11 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * Single-call unified search, directly against Postgres (t_users, t_posts, t_books) — no search
- * index. A book match doesn't get its own list: it surfaces as its linked post, with book info
- * attached inline.
+ * index. Three lists come back from one query string: people, posts, books.
+ *
+ * <p>A matching book appears twice on purpose — once in {@code books}, and once as the post it was
+ * published as, with its details inline. See {@link SearchResponse} for why both are the right
+ * answer to different questions the same typed string can be asking.
  */
 @Validated
 @RestController
@@ -48,8 +52,9 @@ public class SearchController {
     List<UserDto> users =
         searchService.searchUsers(q, 1, size, currentUserId, friendIds).getItems();
     List<PostDto> posts = searchService.searchPostsWithBookInfo(q, size, currentUserId, friendIds);
+    List<BookDto> books = searchService.searchBooks(q, size, currentUserId, friendIds);
 
-    return new SearchResponse(users, posts);
+    return new SearchResponse(users, posts, books);
   }
 
   /**

@@ -1,0 +1,21 @@
+# Ép LF cho những file mà HỆ ĐIỀU HÀNH KHÁC sẽ thực thi, bất kể máy checkout là gì.
+#
+# Vì sao cần: `docker build` chạy `./gradlew` bên trong một image Linux. Trên máy Windows không có
+# quy tắc nào ở đây, Git checkout gradlew với đầu dòng CRLF, nên dòng shebang trở thành
+# `#!/bin/sh\r` — Linux đi tìm một trình thông dịch tên `sh\r`, không thấy, và báo lỗi
+# `./gradlew: not found`. Thông báo đó chỉ thẳng vào một file đang nằm sờ sờ ở đó, nên rất dễ đi
+# tìm nhầm hướng.
+#
+# CI không phát hiện được: GitHub Actions checkout trên Linux, ở đó mọi thứ vốn đã là LF. Lỗi chỉ
+# xuất hiện khi có người build image trên máy của họ.
+gradlew    text eol=lf
+*.sh       text eol=lf
+
+# Ngược lại, script batch của Windows cần CRLF.
+gradlew.bat text eol=crlf
+
+# File nhị phân — không được đụng vào đầu dòng, cũng không nên hiện diff văn bản.
+*.jar      binary
+*.png      binary
+*.pdf      binary
+*.epub     binary

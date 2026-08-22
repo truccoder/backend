@@ -28,8 +28,10 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.UserProfileCache;
+import com.socialapp.roadmap.enums.VerificationStatus;
+import com.socialapp.roadmap.repository.UserRoadmapProgressRepository;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
-import com.socialapp.security.dto.PublicUserResponse;
+import com.socialapp.security.dto.PublicProfileResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
@@ -52,6 +54,7 @@ class ProfileServiceTest {
   @Mock private MinIOService minIOService;
   @Mock private MinIOConfig minIOConfig;
   @Mock private UserProfileCache userProfileCache;
+  @Mock private UserRoadmapProgressRepository progressRepository;
 
   @InjectMocks private ProfileService profileService;
 
@@ -378,15 +381,67 @@ class ProfileServiceTest {
           .thenReturn(Optional.of(user(USER_ID)));
 
       // When
-      PublicUserResponse response = profileService.getPublicProfile(USERNAME);
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
 
       // Then — the record has no email/role component at all, which is the point: this is
       // enforced by the type, not by remembering to leave fields out
       assertThat(response.id()).isEqualTo(USER_ID);
       assertThat(response.fullName()).isEqualTo("Jane Doe");
-      assertThat(PublicUserResponse.class.getRecordComponents())
+      assertThat(PublicProfileResponse.class.getRecordComponents())
           .extracting(java.lang.reflect.RecordComponent::getName)
           .doesNotContain("email", "emailVerified", "role", "password");
+    }
+
+    @Test
+    @DisplayName(
+        "should resolve the reputation level from the score rather than leave it to the client")
+    void shouldResolveLevelFromScore() {
+      // Given — 120 sits inside CONTRIBUTOR (100) with PRACTITIONER (1000) next
+      UserEntity subject = user(USER_ID);
+      subject.setEliteScore(120);
+      when(userRepository.findByUsernameIgnoreCase(USERNAME)).thenReturn(Optional.of(subject));
+
+      // When
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then
+      assertThat(response.level()).isEqualTo(2);
+      assertThat(response.levelName()).isEqualTo("Contributor");
+      assertThat(response.currentLevelMin()).isEqualTo(100);
+      assertThat(response.nextLevelMin()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("should report no next level at the top of the ladder (boundary: ELITE)")
+    void shouldReportNoNextLevelAtElite() {
+      // Given — BVA: exactly the ELITE threshold, where next() has nothing to return
+      UserEntity subject = user(USER_ID);
+      subject.setEliteScore(50_000);
+      when(userRepository.findByUsernameIgnoreCase(USERNAME)).thenReturn(Optional.of(subject));
+
+      // When
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then
+      assertThat(response.levelName()).isEqualTo("Elite");
+      assertThat(response.nextLevelMin()).isNull();
+    }
+
+    @Test
+    @DisplayName("should carry only the verified skills, in roadmap order")
+    void shouldCarryVerifiedSkills() {
+      // Given
+      when(userRepository.findByUsernameIgnoreCase(USERNAME))
+          .thenReturn(Optional.of(user(USER_ID)));
+      when(progressRepository.findSkillNamesByUserIdAndStatus(USER_ID, VerificationStatus.VERIFIED))
+          .thenReturn(java.util.List.of("Java Core", "Spring Boot"));
+
+      // When
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then — the status filter is the query's job; what this pins is that the profile asks for
+      // VERIFIED and nothing else, so a pending or rejected claim can never reach a stranger.
+      assertThat(response.verifiedSkills()).containsExactly("Java Core", "Spring Boot");
     }
 
     @Test

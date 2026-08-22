@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.SuggestionType;
@@ -133,14 +134,19 @@ class SearchControllerTest {
       when(searchService.searchPostsWithBookInfo(
               eq("reader"), eq(10), eq(currentUser.getId()), any()))
           .thenReturn(List.of());
+      when(searchService.searchBooks(eq("reader"), eq(10), eq(currentUser.getId()), any()))
+          .thenReturn(List.of(BookDto.builder().id(7).title("Reader Monad").build()));
 
-      // When / Then
+      // When / Then — three lists, one per thing the product claims is searchable. The books
+      // branch is the one the frontend could not draw a tab for while it did not exist.
       mockMvc
           .perform(authed(get(SEARCH_URL)).param("q", "reader"))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.users[0].id").value(2))
           .andExpect(jsonPath("$.users[0].username").value("reader1"))
-          .andExpect(jsonPath("$.posts").isArray());
+          .andExpect(jsonPath("$.posts").isArray())
+          .andExpect(jsonPath("$.books[0].id").value(7))
+          .andExpect(jsonPath("$.books[0].title").value("Reader Monad"));
     }
 
     @Test
@@ -157,6 +163,8 @@ class SearchControllerTest {
                   .size(5)
                   .build());
       when(searchService.searchPostsWithBookInfo(eq("java"), eq(5), eq(currentUser.getId()), any()))
+          .thenReturn(List.of());
+      when(searchService.searchBooks(eq("java"), eq(5), eq(currentUser.getId()), any()))
           .thenReturn(List.of());
 
       // When / Then

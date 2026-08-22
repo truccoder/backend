@@ -21,6 +21,7 @@ import com.socialapp.notifications.entity.enums.EmailFrequency;
 import com.socialapp.notifications.entity.enums.NotificationChannel;
 import com.socialapp.notifications.repository.NotificationPreferenceRepository;
 import com.socialapp.notifications.repository.NotificationRepository;
+import com.socialapp.notifications.sse.NotificationStreamService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -37,6 +38,7 @@ public class NotificationService {
   private final MailService mailService;
   private final UserRepository userRepository;
   private final BlockQueryService blockQueryService;
+  private final NotificationStreamService streamService;
 
   @Async
   public void send(SendNotificationRequest request) {
@@ -88,6 +90,11 @@ public class NotificationService {
     }
 
     notificationRepository.save(entity);
+
+    // After the final save, not before: the payload pushed to the browser is the row as it was
+    // stored, sentAt included, so a client that renders the event and a client that refetches the
+    // list see the same notification rather than two versions of it.
+    streamService.publish(request.getRecipientId(), toDto(entity));
   }
 
   public Page<NotificationResponseDto> getNotifications(Integer userId, int page, int size) {

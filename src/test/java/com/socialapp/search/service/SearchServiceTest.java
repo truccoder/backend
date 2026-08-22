@@ -37,6 +37,7 @@ import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.UserDto;
@@ -502,6 +503,133 @@ class SearchServiceTest {
 
       // Then
       assertThat(posts).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // searchBooks
+  // =====================================================================
+
+  @Nested
+  @DisplayName("searchBooks")
+  class SearchBooksTests {
+
+    private BookEntity book(Integer id, Integer postId, String title) {
+      return BookEntity.builder()
+          .id(id)
+          .postId(postId)
+          .authorId(FRIEND_ID)
+          .title(title)
+          .description("about " + title)
+          .isFree(true)
+          .price(0L)
+          .build();
+    }
+
+    @Test
+    @DisplayName("should return a matched book whose post the caller may read")
+    void shouldReturnVisibleBook() {
+      // Given
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(List.of(post(20, FRIEND_ID, PostVisibility.PUBLIC, PostType.BOOK)));
+      when(bookStorageService.getCoverUrl(any())).thenReturn(null);
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then — the shelf the frontend could not draw a tab for while this branch did not exist
+      assertThat(books).extracting(BookDto::getId).containsExactly(5);
+      assertThat(books.get(0).getTitle()).isEqualTo("Java Basics");
+    }
+
+    @Test
+    @DisplayName("should not query posts at all when nothing matched")
+    void shouldShortCircuitOnNoMatches() {
+      // Given
+      when(bookRepository.search(any(), any())).thenReturn(Page.empty());
+
+      // When
+      List<BookDto> books = searchService.searchBooks("nothing", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).isEmpty();
+      verify(postRepository, never()).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("should drop a book whose author has blocked, or been blocked by, the caller")
+    void shouldDropBlockedAuthorsBook() {
+      // Given — the same rule the inline book branch applies, because the two lists must not
+      // disagree about whether a book exists
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID))
+          .thenReturn(java.util.Set.of(STRANGER_ID));
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(List.of(post(20, STRANGER_ID, PostVisibility.PUBLIC, PostType.BOOK)));
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should drop a FRIENDS-only book when the caller is not a friend")
+    void shouldDropFriendsOnlyBookForStranger() {
+      // Given — EP: the visibility of the post is the book's visibility; t_books has none of its
+      // own
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(List.of(post(20, STRANGER_ID, PostVisibility.FRIENDS, PostType.BOOK)));
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should keep a FRIENDS-only book when the caller is a friend")
+    void shouldKeepFriendsOnlyBookForFriend() {
+      // Given
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(List.of(post(20, FRIEND_ID, PostVisibility.FRIENDS, PostType.BOOK)));
+      when(bookStorageService.getCoverUrl(any())).thenReturn(null);
+
+      // When
+      List<BookDto> books =
+          searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of(FRIEND_ID));
+
+      // Then
+      assertThat(books).extracting(BookDto::getId).containsExactly(5);
+    }
+
+    @Test
+    @DisplayName("should drop a book whose post row is gone")
+    void shouldDropBookWithoutAReadablePost() {
+      // Given — EP: a book nobody can trace back to an author's post. Showing it on a title
+      // match would put content in front of a reader with no visibility rule behind it.
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20))).thenReturn(List.of());
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).isEmpty();
     }
   }
 }
