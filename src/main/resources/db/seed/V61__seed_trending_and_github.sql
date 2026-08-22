@@ -87,6 +87,11 @@ INSERT INTO socialapp.t_trending_items
 -- phút cho tới khi ai đó tắt ứng dụng. Để NULL thì bản ghi vẫn hiển thị được trên hồ sơ nhưng
 -- không kích hoạt lần gọi mạng nào.
 --
+-- Việc để NULL chỉ chặn được lần gọi mạng, không chặn được scheduler *chọn* bản ghi: sau 24 giờ
+-- last_synced_at bên dưới thành cũ, scheduler lấy đúng các hàng seed này rồi ghi ERROR "no stored
+-- access token" mỗi phút. Vì vậy GithubStatsRepository.findUsersToSync đã lọc thêm
+-- access_token IS NOT NULL — đừng bỏ điều kiện đó nếu vẫn giữ cách seed này.
+--
 -- pinned_repos_json và contribution_graph_json là JsonNode tự do — app không đọc từng trường mà
 -- chuyển thẳng ra ngoài. Hình dạng dưới đây sao chép đúng phản hồi GraphQL của GitHub mà
 -- GithubApiClient lấy về (nodes của pinnedItems, và contributionCalendar), để giao diện dựng cho
