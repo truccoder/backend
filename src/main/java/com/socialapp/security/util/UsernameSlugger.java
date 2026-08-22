@@ -65,13 +65,12 @@ public class UsernameSlugger {
   }
 
   /**
-   * Pads a slug that is too short to be a valid handle. A two-letter name is a real name; refusing
-   * to register it, or storing a handle the format rejects, are both worse than padding it.
+   * Whether a slug is long enough to stand as a handle on its own. A two-letter name is a real
+   * name; refusing to register it, or storing a handle the format rejects, are both worse than
+   * suffixing it with something that makes it long enough — which is what the caller does with the
+   * user id when this returns {@code false}.
    */
-  public static String padToMinimumLength(String slug, Integer discriminator) {
-    if (slug.length() >= MIN_LENGTH) {
-      return slug;
-    }
-    return slug + "-" + discriminator;
+  public static boolean isLongEnough(String slug) {
+    return slug.length() >= MIN_LENGTH;
   }
 }
