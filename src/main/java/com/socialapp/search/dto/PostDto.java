@@ -23,6 +23,10 @@ public class PostDto {
   private String content;
   private String eventName;
   private Integer authorId;
+
+  /** Deep-link key for the author's profile — same reasoning as the feed payload's field. */
+  private String authorUsername;
+
   private String authorFullName;
   private String authorProfilePictureUrl;
   private Integer authorEliteScore;

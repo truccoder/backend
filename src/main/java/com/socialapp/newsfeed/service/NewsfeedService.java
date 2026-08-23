@@ -7,6 +7,9 @@ import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,7 +18,9 @@ import org.springframework.util.CollectionUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.newsfeed.dto.FeedRebuildResultDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -76,6 +81,70 @@ public class NewsfeedService {
    * happens to the feed itself at 1000.
    */
   private static final int SKILL_SCAN_LIMIT = 300;
+
+  /**
+   * How many posts one page of {@link #rebuildAll()} loads. Small enough that a database with far
+   * more posts than the seed still rebuilds inside a bounded amount of memory.
+   */
+  private static final int REBUILD_PAGE_SIZE = 200;
+
+  /**
+   * Fans out every approved post again, rebuilding the feed of every user from Postgres.
+   *
+   * <p>Exists because the feed has exactly one source of truth — Redis — and only one way in:
+   * {@code fanOutPost}, called when somebody publishes a post through the API. Two consequences
+   * followed from that, and this method is the answer to both. Seeded posts were written straight
+   * into Postgres and therefore never reached any feed, so a freshly seeded database showed every
+   * account an empty {@code /v1/api/feed} while the discovery feed was full. And in production,
+   * losing Redis meant losing every feed permanently, with no way back short of asking users to
+   * repost.
+   *
+   * <p>Calls the two-argument {@code fanOutPost} rather than the one-argument form on purpose: the
+   * latter also runs {@code notifyTaggedUsers}, and a rebuild must not tell somebody they were
+   * tagged in a post from three months ago. Reputation and interaction tracking are likewise not
+   * involved — this writes cache entries and nothing else.
+   *
+   * <p>Synchronous, and page by page. The caller is an administrator who needs to know when it has
+   * finished before demonstrating anything, and paging keeps a whole-table read off the heap. One
+   * post that fails is counted and stepped over rather than aborting the run, because a single
+   * post whose author row is gone should not cost the other few hundred their fan-out.
+   */
+  @Transactional
+  public FeedRebuildResultDto rebuildAll() {
+    log.info("rebuildAll: starting feed rebuild for all APPROVED posts");
+
+    int processed = 0;
+    int skipped = 0;
+    int pageNumber = 0;
+    Page<PostEntity> page;
+
+    do {
+      page =
+          postRepository.findByModerationStatus(
+              ModerationStatus.APPROVED,
+              PageRequest.of(pageNumber, REBUILD_PAGE_SIZE, Sort.by(Sort.Direction.ASC, "id")));
+
+      for (PostEntity post : page.getContent()) {
+        try {
+          UserEntity author =
+              userRepository
+                  .findById(post.getAuthorId())
+                  .orElseThrow(
+                      () -> new NotFoundException("Author not found: " + post.getAuthorId()));
+          FeedPostDataDto postData = feedPostDataMapper.toFeedPostData(post, author);
+          fanOutPost(postData, postData.getTaggedUserIds());
+          processed++;
+        } catch (RuntimeException e) {
+          skipped++;
+          log.warn("rebuildAll: skipped postId={} — {}", post.getId(), e.toString());
+        }
+      }
+      pageNumber++;
+    } while (page.hasNext());
+
+    log.info("rebuildAll: finished, processed={}, skipped={}", processed, skipped);
+    return new FeedRebuildResultDto(processed, skipped);
+  }
 
   // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
   // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
@@ -328,13 +397,18 @@ public class NewsfeedService {
             .filter(post -> touchesAnyTag(post, skillTags))
             .toList();
 
-    int start = (page - 1) * size;
+    // long, for the same reason getAllFeed casts: page and size are only @Positive, so
+    // (page - 1) * size overflows int for a large page and wraps negative — which sails past the
+    // >= check below and reaches subList(negative, ...) as an IndexOutOfBoundsException, i.e. a
+    // 500 from a query string. Compare against the list size in long space, then narrow.
+    long start = (long) (page - 1) * size;
     if (start >= matches.size()) {
       return emptyPage(page, size);
     }
 
-    int end = Math.min(start + size, matches.size());
-    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(start, end));
+    int from = (int) start;
+    int end = Math.min(from + size, matches.size());
+    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(from, end));
     signBookCovers(pageItems);
 
     return FeedResponseDto.builder()

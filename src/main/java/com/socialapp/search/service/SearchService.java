@@ -10,6 +10,7 @@ import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookStorageService;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
@@ -161,10 +162,22 @@ public class SearchService {
         && isVisibleToViewer(post, currentUserId, friendIds);
   }
 
+  /**
+   * The book branch's in-Java copy of the post visibility rule.
+   *
+   * <p>Moderation is checked before visibility, mirroring {@code PostVisibilityService.isVisibleTo}
+   * and the SQL in {@code PostRepository.searchByContentOrEventName}: a post that is PENDING or
+   * REJECTED has not been cleared for an audience, however public its visibility column says it
+   * is. This check was missing here for the same reason it was missing from the SQL — the two were
+   * written together — so a taken-down book post stayed findable through the book branch.
+   */
   private boolean isVisibleToViewer(
       PostEntity post, Integer currentUserId, List<Integer> friendIds) {
     if (post.getAuthorId().equals(currentUserId)) {
       return true;
+    }
+    if (!ModerationStatus.APPROVED.equals(post.getModerationStatus())) {
+      return false;
     }
     if (PostVisibility.PUBLIC.equals(post.getVisibility())) {
       return true;
@@ -218,7 +231,7 @@ public class SearchService {
             post -> {
               UserEntity author = authorsById.get(post.getAuthorId());
               BookEntity book = booksByPostId.get(post.getId());
-              return PostDto.builder()
+              return withAuthor(PostDto.builder(), author)
                   .id(post.getId())
                   .content(post.getContent())
                   .eventName(
@@ -226,11 +239,6 @@ public class SearchService {
                           ? post.getEventDetails().getEventTitle()
                           : null)
                   .authorId(post.getAuthorId())
-                  .authorFullName(author != null ? author.getFullName() : null)
-                  .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
-                  .authorEliteScore(author != null ? author.getEliteScore() : null)
-                  .authorLevelName(
-                      author != null ? RepLevel.displayNameForScore(author.getEliteScore()) : null)
                   .visibility(post.getVisibility() != null ? post.getVisibility().name() : null)
                   // Handed over whole, offset included — see PostDto#createdAt for why the old
                   // toLocalDateTime() call skewed every search result by the reader's offset.
@@ -249,6 +257,31 @@ public class SearchService {
                   .build();
             })
         .toList();
+  }
+
+  /**
+   * Fills in every field derived from the author's row, or none of them.
+   *
+   * <p>Extracted from the mapping lambda above, which carried one {@code author != null} ternary
+   * per field. Five independent null checks on one object read as five independent decisions, and
+   * each one PMD counted separately — the method sat over both the cognitive-complexity and the
+   * NPath threshold before this. There is only one decision here: either the author row was
+   * loaded or it was not, and in the second case every author field stays null together.
+   *
+   * <p>A missing row is not an error. A post outlives the account that wrote it, and a search
+   * result that renders with a blank byline is better than one that throws.
+   */
+  private static PostDto.PostDtoBuilder withAuthor(
+      PostDto.PostDtoBuilder builder, UserEntity author) {
+    if (author == null) {
+      return builder;
+    }
+    return builder
+        .authorUsername(author.getUsername())
+        .authorFullName(author.getFullName())
+        .authorProfilePictureUrl(author.getProfilePictureUrl())
+        .authorEliteScore(author.getEliteScore())
+        .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()));
   }
 
   private BookDto toBookDto(BookEntity b) {
