@@ -497,6 +497,17 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  /**
+   * The last resort, for anything with no handler of its own.
+   *
+   * <p><b>The message is fixed, not {@code ex.getMessage()}.</b> Every other handler in this class
+   * returns a message somebody wrote for a reader; this one used to return whatever the underlying
+   * exception happened to say, and by definition the exceptions that reach here are the ones
+   * nobody anticipated — Hibernate, the JDBC driver, Jackson, WebClient. Those messages carry SQL
+   * fragments, constraint and column names, internal hostnames and file paths. The full exception,
+   * message and stack trace both, still goes to the log via {@link #writeLog}, which is where it
+   * is useful; the client gets the status and nothing that describes our internals.
+   */
   @ResponseStatus(INTERNAL_SERVER_ERROR)
   @ExceptionHandler(Exception.class)
   public ErrorResponseDto handle(Exception ex, HttpServletRequest request) {
@@ -505,7 +516,7 @@ public class GlobalExceptionHandler {
     return ErrorResponseDto.builder()
         .code(INTERNAL_SERVER_ERROR.value())
         .error(INTERNAL_SERVER_ERROR.getReasonPhrase())
-        .message(ex.getMessage())
+        .message("An unexpected error occurred. Please try again later.")
         .path(request.getRequestURI())
         .build();
   }

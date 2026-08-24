@@ -49,7 +49,7 @@ public class PostReactionService {
 
   @Transactional(readOnly = true)
   public MyReactionResponseDto getMyReaction(Integer userId, Integer postId) {
-    verifyPostExists(postId);
+    requireVisiblePost(userId, postId);
     // A missing reaction is a normal state (not an error), so it maps to a null
     // reactionType instead of a 404 — the frontend polls this on every post card.
     return postReactionRepository
@@ -118,17 +118,21 @@ public class PostReactionService {
    * enumerate the reactions on a FRIENDS-only post, which is the post's audience list in all but
    * name.
    */
-  private void requireVisiblePost(Integer viewerId, Integer postId) {
+  private PostEntity requireVisiblePost(Integer viewerId, Integer postId) {
     PostEntity post = findPostOrThrow(postId);
     if (!postVisibilityService.isVisibleTo(post, viewerId)) {
       throw new NotFoundException("Post not found with ID: " + postId);
     }
+    return post;
   }
 
   @Transactional
   public void upsertReaction(Integer userId, Integer postId, UpsertPostReactionRequestDto request) {
     checkBanStatus(userId);
-    PostEntity post = findPostOrThrow(postId);
+    // The read paths above have always called this; the write paths did not, so a stranger could
+    // react to a PRIVATE post — confirming it exists, notifying its author, and minting
+    // reputation for them — on a post that was never shared with them.
+    PostEntity post = requireVisiblePost(userId, postId);
 
     PostReactionId reactionId = new PostReactionId(userId, postId);
     boolean isNewReaction = !postReactionRepository.existsById(reactionId);
@@ -152,7 +156,7 @@ public class PostReactionService {
 
   @Transactional
   public void removeReaction(Integer userId, Integer postId) {
-    PostEntity post = findPostOrThrow(postId);
+    PostEntity post = requireVisiblePost(userId, postId);
     PostReactionId reactionId = new PostReactionId(userId, postId);
     if (!postReactionRepository.existsById(reactionId)) {
       throw new NotFoundException("Reaction not found for this post");

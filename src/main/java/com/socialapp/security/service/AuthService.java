@@ -265,6 +265,12 @@ public class AuthService {
     user.setPassword(passwordEncoder.encode(request.newPassword()));
     userRepository.save(user);
     passwordResetTokenRepository.delete(resetToken);
+
+    // Resetting a password is what somebody does when they think their account is compromised, so
+    // the sessions opened before the reset are exactly the ones to end. Refresh tokens were only
+    // ever deleted on refresh and logout, which left a stolen one valid for its full TTL after the
+    // victim had already changed the password.
+    refreshTokenRepository.deleteByUserId(user.getId());
   }
 
   @Transactional

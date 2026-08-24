@@ -2,6 +2,7 @@ package com.socialapp.matchmaking.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -15,12 +16,15 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
+import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
+import com.socialapp.security.entity.UserEntity;
 
 /**
  * Component (unit) tests for {@link MatchmakingService}, per ISTQB CTFL v4.0.1 (Section 2.2.1
@@ -37,10 +41,26 @@ class MatchmakingServiceTest {
 
   @InjectMocks private MatchmakingService matchmakingService;
 
+  private static final Integer OWNER_ID = 1;
+  private static final Integer STRANGER_ID = 999;
+
+  /** A position on a project owned by {@code OWNER_ID} — the only caller allowed to read it. */
   private static ProjectPositionEntity position(List<String> requiredSkills) {
+    return position(requiredSkills, OWNER_ID);
+  }
+
+  private static ProjectPositionEntity position(List<String> requiredSkills, Integer ownerId) {
     ProjectPositionEntity position = new ProjectPositionEntity();
     position.setId(POSITION_ID);
     position.setRequiredSkills(requiredSkills);
+
+    UserEntity author = new UserEntity();
+    author.setId(ownerId);
+    ProjectEntity project = new ProjectEntity();
+    project.setId(500);
+    project.setAuthor(author);
+    position.setProject(project);
+
     return position;
   }
 
@@ -55,8 +75,23 @@ class MatchmakingServiceTest {
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> matchmakingService.suggestCandidates(POSITION_ID))
+      assertThatThrownBy(() -> matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID))
           .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse a caller who does not own the project")
+    void shouldThrowForbiddenException_whenCallerIsNotTheProjectOwner() {
+      // Given: a position on somebody else's project. The reply carries other users' job title,
+      // seniority, years of experience and tech stack, so this is a directory harvest if left
+      // open — the sibling endpoint getApplicationsForProject has always checked ownership.
+      when(positionRepository.findById(POSITION_ID))
+          .thenReturn(Optional.of(position(List.of("Java"), OWNER_ID)));
+
+      // When / Then
+      assertThatThrownBy(() -> matchmakingService.suggestCandidates(POSITION_ID, STRANGER_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verifyNoInteractions(profileRepository);
     }
 
     @Test
@@ -66,7 +101,8 @@ class MatchmakingServiceTest {
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position(null)));
 
       // When
-      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID);
 
       // Then
       assertThat(result).isEmpty();
@@ -79,7 +115,8 @@ class MatchmakingServiceTest {
       when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position(List.of())));
 
       // When
-      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID);
 
       // Then
       assertThat(result).isEmpty();
@@ -97,7 +134,8 @@ class MatchmakingServiceTest {
       when(profileRepository.findBySkillsMatch(skills)).thenReturn(List.of(candidate));
 
       // When
-      List<SuggestedCandidateDto> result = matchmakingService.suggestCandidates(POSITION_ID);
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID);
 
       // Then
       assertThat(result)
