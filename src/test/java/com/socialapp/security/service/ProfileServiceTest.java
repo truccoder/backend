@@ -35,6 +35,7 @@ import com.socialapp.security.dto.PublicProfileResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.RefreshTokenRepository;
 import com.socialapp.security.repository.UserRepository;
 
 /**
@@ -55,6 +56,7 @@ class ProfileServiceTest {
   @Mock private MinIOConfig minIOConfig;
   @Mock private UserProfileCache userProfileCache;
   @Mock private UserRoadmapProgressRepository progressRepository;
+  @Mock private RefreshTokenRepository refreshTokenRepository;
 
   @InjectMocks private ProfileService profileService;
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -120,7 +121,9 @@ class GithubServiceTest {
 
       // Then
       ArgumentCaptor<GithubStatsEntity> captor = ArgumentCaptor.forClass(GithubStatsEntity.class);
-      verify(githubStatsRepository).save(captor.capture());
+      // Twice: once to persist the link before syncing (so a failed first sync cannot discard
+      // it), once when performSync writes the fetched stats. The last write is the complete one.
+      verify(githubStatsRepository, times(2)).save(captor.capture());
       GithubStatsEntity saved = captor.getValue();
       assertThat(saved.getGithubUsername()).isEqualTo(USERNAME);
       assertThat(saved.getPublicReposCount()).isEqualTo(5);
@@ -173,7 +176,7 @@ class GithubServiceTest {
       assertThat(existing.getAccessToken()).isEqualTo(ACCESS_TOKEN);
       assertThat(existing.getPublicReposCount()).isEqualTo(7);
       assertThat(existing.getFollowersCount()).isEqualTo(20);
-      verify(githubStatsRepository).save(existing);
+      verify(githubStatsRepository, times(2)).save(existing);
     }
 
     @Test
@@ -193,7 +196,9 @@ class GithubServiceTest {
 
       // Then
       ArgumentCaptor<GithubStatsEntity> captor = ArgumentCaptor.forClass(GithubStatsEntity.class);
-      verify(githubStatsRepository).save(captor.capture());
+      // Twice: once to persist the link before syncing (so a failed first sync cannot discard
+      // it), once when performSync writes the fetched stats. The last write is the complete one.
+      verify(githubStatsRepository, times(2)).save(captor.capture());
       assertThat(captor.getValue().getPublicReposCount()).isEqualTo(0);
       assertThat(captor.getValue().getFollowersCount()).isEqualTo(0);
     }

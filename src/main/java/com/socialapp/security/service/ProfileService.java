@@ -26,6 +26,7 @@ import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.RefreshTokenRepository;
 import com.socialapp.security.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,7 @@ public class ProfileService {
       Set.of("image/jpeg", "image/png", "image/webp");
 
   private final UserRepository userRepository;
+  private final RefreshTokenRepository refreshTokenRepository;
   private final PasswordEncoder passwordEncoder;
   private final MinIOService minIOService;
   private final MinIOConfig minIOConfig;
@@ -123,6 +125,10 @@ public class ProfileService {
 
     user.setPassword(passwordEncoder.encode(request.newPassword()));
     userRepository.save(user);
+
+    // Same reasoning as AuthService#resetPassword: changing a password has to end the sessions
+    // that were opened with the old one, or a stolen refresh token outlives the change.
+    refreshTokenRepository.deleteByUserId(userId);
   }
 
   @Transactional

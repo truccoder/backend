@@ -80,6 +80,12 @@ public class ProjectService {
       throw new IllegalStateException("Position is not open for applications");
     }
 
+    // One application per person per position. There was no check at all and no unique index
+    // behind it, so the same applicant could fill an owner's inbox with the same request.
+    if (applicationRepository.existsByPositionIdAndApplicantId(positionId, applicantId)) {
+      throw new IllegalStateException("You have already applied to this position");
+    }
+
     ProjectApplicationEntity application = new ProjectApplicationEntity();
     application.setProject(position.getProject());
     application.setPosition(position);

@@ -8,7 +8,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.springframework.beans.BeanUtils;
@@ -560,16 +559,12 @@ public class PostService {
       post.setHashtags(new HashSet<>());
     }
 
-    // Decrease usage count for old hashtags if updating
+    // Decrease usage count for old hashtags if updating. In the database, like the increment
+    // below: read-minus-one-write in Java lost a concurrent decrement on a shared tag, and a
+    // counter nothing recomputes from the join table never recovers from that.
     if (!post.getHashtags().isEmpty()) {
-      post.getHashtags()
-          .forEach(
-              h -> {
-                if (h.getUsageCount() != null && h.getUsageCount() > 0) {
-                  h.setUsageCount(h.getUsageCount() - 1);
-                }
-              });
-      hashtagRepository.saveAll(post.getHashtags());
+      hashtagRepository.decrementUsage(
+          post.getHashtags().stream().map(HashtagEntity::getName).toArray(String[]::new));
     }
 
     Set<HashtagEntity> newHashtags = new HashSet<>();
@@ -581,26 +576,14 @@ public class PostService {
       }
 
       if (!tagNames.isEmpty()) {
-        List<HashtagEntity> existingTags = hashtagRepository.findByNameIn(tagNames);
-        Set<String> existingNames =
-            existingTags.stream().map(HashtagEntity::getName).collect(Collectors.toSet());
-
-        for (String name : tagNames) {
-          if (!existingNames.contains(name)) {
-            HashtagEntity newTag = new HashtagEntity();
-            newTag.setName(name);
-            newTag.setUsageCount(0);
-            existingTags.add(newTag);
-          }
-        }
-
-        // Increase usage count for tags that will be linked
-        for (HashtagEntity tag : existingTags) {
-          tag.setUsageCount((tag.getUsageCount() == null ? 0 : tag.getUsageCount()) + 1);
-        }
-
-        List<HashtagEntity> savedTags = hashtagRepository.saveAll(existingTags);
-        newHashtags.addAll(savedTags);
+        // Create-then-increment, both in the database. The previous version selected the existing
+        // tags, built the missing ones in memory, incremented every counter in Java and saved the
+        // lot — which lost a concurrent increment on a shared tag, and raced two posters straight
+        // into the UNIQUE constraint on t_hashtags.name. Postgres arbitrates both now.
+        String[] names = tagNames.toArray(String[]::new);
+        hashtagRepository.createMissing(names);
+        hashtagRepository.incrementUsage(names);
+        newHashtags.addAll(hashtagRepository.findByNameIn(tagNames));
       }
     }
 

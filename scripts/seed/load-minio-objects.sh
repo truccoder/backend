@@ -6,8 +6,15 @@
 # đó là object trong MinIO, mà SQL thì không tạo được object. Không chạy script này thì danh sách
 # sách vẫn hiện đầy đủ, nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
 #
+# V66__seed_dev_avatars.sql (seed-dev) làm điều tương tự với t_users.profile_picture_url, nên
+# script này nạp cả ảnh đại diện.
+#
 # Các key KHÔNG chép tay vào đây mà được đọc thẳng từ file SQL, nên sửa danh sách sách trong SQL
 # rồi chạy lại script là khớp, không có đường nào để hai bên lệch nhau.
+#
+# MỘT key cố ý KHÔNG được nạp: quyển sách 3021 trong V65 trỏ tới một object không tồn tại, để
+# dựng lại nhánh lỗi kho lưu trữ. Nó nằm ngoài diện quét vì script chỉ đọc V55 và V66 — nếu sau
+# này thêm file nguồn thì đừng thêm V65 vào danh sách.
 #
 #   bash scripts/seed/load-minio-objects.sh
 #
@@ -18,6 +25,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SQL_FILE="$REPO_ROOT/src/main/resources/db/seed/V55__seed_bookstore.sql"
+AVATAR_SQL_FILE="$REPO_ROOT/src/main/resources/db/seed-dev/V66__seed_dev_avatars.sql"
 
 # Mặc định khớp docker-compose.yml dùng cho máy dev. Deployment thật dùng credential khác và
 # script này cũng không dành cho deployment thật.
@@ -27,6 +35,9 @@ MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minio_admin_password}"
 
 BOOKS_BUCKET=books
 COVERS_BUCKET=book-covers
+# Khớp PROFILE_PICTURES_BUCKET trong ProfileService — bucket duy nhất trong ba cái được mở đọc
+# công khai, vì ảnh đại diện phát thẳng bằng URL trong t_users chứ không qua presigned URL.
+PICTURES_BUCKET=profile-pictures
 
 command -v docker >/dev/null || { echo "Cần có docker."; exit 1; }
 PY="$(command -v python3 || command -v python || true)"
@@ -35,6 +46,7 @@ PY="$(command -v python3 || command -v python || true)"
 export PYTHONIOENCODING=utf-8
 [ -n "$PY" ] || { echo "Cần có python3 để sinh file mẫu."; exit 1; }
 [ -f "$SQL_FILE" ] || { echo "Không tìm thấy $SQL_FILE"; exit 1; }
+[ -f "$AVATAR_SQL_FILE" ] || { echo "Không tìm thấy $AVATAR_SQL_FILE"; exit 1; }
 
 # mc chạy trong container và nối vào ĐÚNG mạng docker mà MinIO đang ở, rồi gọi tới nó bằng tên
 # service. Cách này tránh được chuyện host.docker.internal có trên Docker Desktop nhưng không có
@@ -50,10 +62,15 @@ MINIO_ALIAS_URL="${MINIO_ALIAS_URL:-http://${MINIO_CONTAINER}:9000}"
 STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 
-echo "==> Đọc danh sách object key từ $(basename "$SQL_FILE")"
+echo "==> Đọc danh sách object key từ $(basename "$SQL_FILE") và $(basename "$AVATAR_SQL_FILE")"
 
-# Lấy mọi chuỗi dạng books/…, previews/…, covers/… trong file SQL.
-grep -oE "(books|previews|covers)/[0-9]+/[A-Za-z0-9._-]+" "$SQL_FILE" | sort -u > "$STAGING/keys.txt"
+# Lấy mọi chuỗi dạng books/…, previews/…, covers/… trong file SQL sách, và avatars/… trong file
+# ảnh đại diện. Quét riêng từng file chứ không gộp một biểu thức: mỗi tiền tố đi về một bucket
+# khác nhau, nên một key xuất hiện nhầm file là một object nằm sai chỗ.
+{
+  grep -oE "(books|previews|covers)/[0-9]+/[A-Za-z0-9._-]+" "$SQL_FILE"
+  grep -oE "avatars/[0-9]+/[A-Za-z0-9._-]+" "$AVATAR_SQL_FILE"
+} | sort -u > "$STAGING/keys.txt"
 echo "    tìm thấy $(wc -l < "$STAGING/keys.txt") key"
 
 echo "==> Sinh file mẫu"
@@ -158,7 +175,11 @@ for i, key in enumerate(keys):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     stem = os.path.splitext(os.path.basename(key))[0].replace("seed-", "").replace("-", " ").title()
 
-    if key.endswith(".png"):
+    if key.startswith("avatars/"):
+        # Vuông, không phải tỉ lệ bìa sách: avatar được cắt tròn ở client, và một ảnh 400x560
+        # cắt tròn sẽ mất phần trên dưới, khiến ảnh trông như bị lỗi chứ không như ảnh đại diện.
+        data = solid_png(256, 256, PALETTE[i % len(PALETTE)])
+    elif key.endswith(".png"):
         data = solid_png(400, 560, PALETTE[i % len(PALETTE)])
     elif key.endswith(".epub"):
         data = minimal_epub(stem)
@@ -182,16 +203,25 @@ echo "==> Tải lên MinIO qua $MINIO_ALIAS_URL (mạng docker: $NETWORK)"
 #
 # Bucket book-covers và books đều KHÔNG mở công khai ở đây: ảnh bìa lẫn nội dung sách đều được
 # phát qua presigned URL do backend ký (BookStorageService), nên không cần policy công khai nào.
+#
+# profile-pictures thì ngược lại và bắt buộc phải mở: t_users.profile_picture_url là URL trần,
+# không ký, trình duyệt tải thẳng — đúng như ProfileService.ensurePublicReadPolicy làm sau mỗi
+# lần đổi ảnh. Không đặt policy thì ba tài khoản có ảnh sẽ hiện ảnh vỡ chứ không rơi về chữ
+# viết tắt, vì URL vẫn tồn tại, chỉ là trả về 403.
 UPLOAD_SCRIPT="
   set -e
   mc alias set seedminio '$MINIO_ALIAS_URL' '$MINIO_ROOT_USER' '$MINIO_ROOT_PASSWORD' >/dev/null
-  mc mb --ignore-existing seedminio/$BOOKS_BUCKET  >/dev/null
-  mc mb --ignore-existing seedminio/$COVERS_BUCKET >/dev/null
-  mc cp --recursive --quiet /objects/books/    seedminio/$BOOKS_BUCKET/books/    >/dev/null
-  mc cp --recursive --quiet /objects/previews/ seedminio/$BOOKS_BUCKET/previews/ >/dev/null
-  mc cp --recursive --quiet /objects/covers/   seedminio/$COVERS_BUCKET/covers/  >/dev/null
-  echo \"    $BOOKS_BUCKET:       \$(mc ls --recursive seedminio/$BOOKS_BUCKET  | wc -l) object\"
-  echo \"    $COVERS_BUCKET: \$(mc ls --recursive seedminio/$COVERS_BUCKET | wc -l) object\"
+  mc mb --ignore-existing seedminio/$BOOKS_BUCKET    >/dev/null
+  mc mb --ignore-existing seedminio/$COVERS_BUCKET   >/dev/null
+  mc mb --ignore-existing seedminio/$PICTURES_BUCKET >/dev/null
+  mc cp --recursive --quiet /objects/books/    seedminio/$BOOKS_BUCKET/books/       >/dev/null
+  mc cp --recursive --quiet /objects/previews/ seedminio/$BOOKS_BUCKET/previews/    >/dev/null
+  mc cp --recursive --quiet /objects/covers/   seedminio/$COVERS_BUCKET/covers/     >/dev/null
+  mc cp --recursive --quiet /objects/avatars/  seedminio/$PICTURES_BUCKET/avatars/  >/dev/null
+  mc anonymous set download seedminio/$PICTURES_BUCKET >/dev/null
+  echo \"    $BOOKS_BUCKET:            \$(mc ls --recursive seedminio/$BOOKS_BUCKET    | wc -l) object\"
+  echo \"    $COVERS_BUCKET:      \$(mc ls --recursive seedminio/$COVERS_BUCKET   | wc -l) object\"
+  echo \"    $PICTURES_BUCKET: \$(mc ls --recursive seedminio/$PICTURES_BUCKET | wc -l) object\"
 "
 
 CID="$(docker create --network "$NETWORK" --entrypoint sh minio/mc:latest -c "$UPLOAD_SCRIPT")"

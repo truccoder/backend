@@ -3,6 +3,7 @@ package com.socialapp.security.service;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Base64;
+import java.util.UUID;
 
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -73,8 +74,18 @@ public class AuthService {
     user.setPassword(passwordEncoder.encode(request.password()));
     user.setFullName(request.fullname());
 
+    // Decided before save(), and carried INTO the INSERT rather than set after it — see
+    // decideUsername() and UsernameDecision.
+    UsernameDecision handle = decideUsername(request.username(), request.fullname());
+    user.setUsername(handle.handleBeforeInsert());
+
     userRepository.save(user);
-    assignUsername(user, request.username());
+
+    // Only the branches that need the id reach the database twice, and only ever as
+    // INSERT-then-UPDATE inside this one transaction.
+    if (handle.needsUserId()) {
+      user.setUsername(handle.handleFor(user.getId()));
+    }
 
     // Upload the picture (if any) BEFORE sending the verification email. Both run inside this
     // same @Transactional method, but the email is an external side effect that @Transactional
@@ -90,37 +101,99 @@ public class AuthService {
   }
 
   /**
-   * Gives the new account the handle its public profile URL will be built from.
+   * Decides the handle the new account's public profile URL will be built from, doing every part
+   * of the decision that reads {@code t_users}.
    *
-   * <p>Called after {@code save()} rather than before it, because the fallback for a name that
-   * slugs to nothing is the user's own id, and the id does not exist until the row does.
+   * <p>Called <b>before</b> {@code save()}, and deliberately so, for two independent reasons.
+   * The INSERT has to carry the handle (see {@link UsernameDecision}), and it can only carry what
+   * was decided by the time {@code persist()} ran. On top of that, an availability check is a
+   * query against {@code t_users}, so running it after {@code save()} auto-flushes the pending
+   * INSERT out early — turning a handle clash into whatever the half-built row happens to
+   * violate, instead of the {@code ValidationException} the caller should get.
    *
    * <p>A handle the caller chose is taken as-is and rejected if taken — telling someone their
    * requested handle is unavailable is normal, and silently handing them a different one would be
    * worse. A handle the server derives is never rejected: the user did not ask for it and cannot
    * do anything about a clash, so the id is appended and registration proceeds.
    */
-  private void assignUsername(UserEntity user, String requestedUsername) {
+  private UsernameDecision decideUsername(String requestedUsername, String fullName) {
     if (requestedUsername != null && !requestedUsername.isBlank()) {
       if (userRepository.existsByUsernameIgnoreCase(requestedUsername)) {
         throw new ValidationException("Username already taken");
       }
-      user.setUsername(requestedUsername);
-      return;
+      return UsernameDecision.settled(requestedUsername);
     }
 
-    String slug = UsernameSlugger.slugify(user.getFullName());
-    String candidate =
-        slug == null
-            ? "user-" + user.getId()
-            : UsernameSlugger.padToMinimumLength(slug, user.getId());
-
-    // Same disambiguation as V47's backfill: suffix the id, which is already unique, instead of
-    // looping over "-2", "-3", … and racing another registration between the check and the write.
-    if (userRepository.existsByUsernameIgnoreCase(candidate)) {
-      candidate = candidate + "-" + user.getId();
+    String slug = UsernameSlugger.slugify(fullName);
+    if (slug == null) {
+      // Nothing usable in the name; the id is the only thing left that is guaranteed unique.
+      return UsernameDecision.needsUserId(null);
     }
-    user.setUsername(candidate);
+    if (!UsernameSlugger.isLongEnough(slug) || userRepository.existsByUsernameIgnoreCase(slug)) {
+      return UsernameDecision.needsUserId(slug);
+    }
+    return UsernameDecision.settled(slug);
+  }
+
+  /**
+   * The outcome of {@link #decideUsername}: either a handle that is already final, or the base a
+   * final handle gets built from once the user id exists. Holds no repository access on purpose:
+   * everything it could have queried was already queried by {@code decideUsername}, back when
+   * querying was still safe.
+   *
+   * <p>The split exists because the INSERT cannot wait for the id. Hibernate captures the row's
+   * column values when {@code persist()} runs, not when the flush happens, so a value assigned to
+   * the entity after {@code save()} does not reach the INSERT at all — it reaches the database
+   * only as a follow-up UPDATE, long after {@code V47}'s NOT NULL constraint has already rejected
+   * the INSERT that carried {@code username} NULL. So every registration hands the INSERT a
+   * non-null handle up front via {@link #handleBeforeInsert()}: the final one when it is already
+   * known, and otherwise a placeholder that {@link #handleFor(Integer)} overwrites in that
+   * follow-up UPDATE, once {@code GenerationType.SEQUENCE} has produced the id.
+   *
+   * @param settled the final handle — one the caller chose, or a derived slug that needs no
+   *     disambiguation — or {@code null} when the handle still needs the user id
+   * @param base the slug a final handle gets suffixed onto, or {@code null} when the name yields
+   *     no usable slug at all; meaningful only while {@code settled} is {@code null}
+   */
+  private record UsernameDecision(String settled, String base) {
+
+    /**
+     * Longer than the 30 characters {@link UsernameSlugger#USERNAME_PATTERN} allows, so no user
+     * can be holding it, and random, so two signups racing each other cannot collide on it either.
+     * Never visible outside the transaction that writes it: the UPDATE that replaces it commits
+     * together with the INSERT that wrote it.
+     */
+    private static String placeholder() {
+      return "pending-registration-" + UUID.randomUUID();
+    }
+
+    static UsernameDecision settled(String handle) {
+      return new UsernameDecision(handle, null);
+    }
+
+    static UsernameDecision needsUserId(String base) {
+      return new UsernameDecision(null, base);
+    }
+
+    boolean needsUserId() {
+      return settled == null;
+    }
+
+    /** The handle the INSERT carries — see the class comment for why it cannot be {@code null}. */
+    String handleBeforeInsert() {
+      return settled != null ? settled : placeholder();
+    }
+
+    String handleFor(Integer userId) {
+      if (settled != null) {
+        return settled;
+      }
+      // Same disambiguation as V47's backfill: suffix the id, which is already unique, instead of
+      // looping over "-2", "-3", … and racing another registration between the check and the
+      // write. A slug too short to be a legal handle is suffixed the same way, so every branch
+      // that is not the bare slug is unique by construction.
+      return base == null ? "user-" + userId : base + "-" + userId;
+    }
   }
 
   @Transactional
@@ -192,6 +265,12 @@ public class AuthService {
     user.setPassword(passwordEncoder.encode(request.newPassword()));
     userRepository.save(user);
     passwordResetTokenRepository.delete(resetToken);
+
+    // Resetting a password is what somebody does when they think their account is compromised, so
+    // the sessions opened before the reset are exactly the ones to end. Refresh tokens were only
+    // ever deleted on refresh and logout, which left a stolen one valid for its full TTL after the
+    // victim had already changed the password.
+    refreshTokenRepository.deleteByUserId(user.getId());
   }
 
   @Transactional

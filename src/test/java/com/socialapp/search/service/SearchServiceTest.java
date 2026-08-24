@@ -25,6 +25,7 @@ import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookStorageService;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.EventDetails;
@@ -67,6 +68,7 @@ class SearchServiceTest {
   private static UserEntity user(Integer id, String fullName) {
     UserEntity user = new UserEntity();
     user.setId(id);
+    user.setUsername("user_" + id);
     user.setFullName(fullName);
     return user;
   }
@@ -79,6 +81,16 @@ class SearchServiceTest {
     post.setVisibility(visibility);
     post.setPostType(type);
     post.setContent("content " + id);
+    // A post only reaches search once moderation has cleared it; the book branch checks this in
+    // Java (SearchService#isVisibleToViewer) the way the post branch checks it in SQL.
+    post.setModerationStatus(ModerationStatus.APPROVED);
+    return post;
+  }
+
+  private static PostEntity postWithStatus(
+      Integer id, Integer authorId, PostVisibility visibility, ModerationStatus status) {
+    PostEntity post = post(id, authorId, visibility, PostType.BOOK);
+    post.setModerationStatus(status);
     return post;
   }
 
@@ -171,6 +183,27 @@ class SearchServiceTest {
       // Then
       assertThat(result).extracting(PostDto::getId).containsExactly(10);
       verify(postRepository, never()).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("should carry the author's username, so a search result can link to a profile")
+    void shouldCarryAuthorUsername() {
+      // Given — the same gap the feed had: a name rendered on a result card with nowhere to go,
+      // because the public profile route is keyed by username and no endpoint maps an id to one
+      PostEntity matched = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.searchByContentOrEventName(
+              any(), eq(CURRENT_USER_ID), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(matched)));
+      stubEmptyBookSearch();
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
+          .thenReturn(List.of(user(CURRENT_USER_ID, "Me")));
+
+      // When
+      List<PostDto> result =
+          searchService.searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of(FRIEND_ID));
+
+      // Then — taken from the authorsById batch the other author fields already use
+      assertThat(result.get(0).getAuthorUsername()).isEqualTo("user_" + CURRENT_USER_ID);
     }
 
     @Test
@@ -543,6 +576,51 @@ class SearchServiceTest {
       // Then — the shelf the frontend could not draw a tab for while this branch did not exist
       assertThat(books).extracting(BookDto::getId).containsExactly(5);
       assertThat(books.get(0).getTitle()).isEqualTo("Java Basics");
+    }
+
+    @Test
+    @DisplayName("should drop a book whose post has been taken down")
+    void shouldDropRejectedBookPost() {
+      // Given: a PUBLIC book post an admin has REJECTED. The post branch filters this in SQL;
+      // this branch resolves visibility in Java and was missing the same check, so a taken-down
+      // book stayed findable through the book tab.
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(
+              List.of(
+                  postWithStatus(20, FRIEND_ID, PostVisibility.PUBLIC, ModerationStatus.REJECTED)));
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should still show the author their own book while it awaits review")
+    void shouldKeepOwnPendingBookPost() {
+      // Given: the author exemption, matching PostVisibilityService.isVisibleTo and the SQL
+      when(blockQueryService.blockedPairIds(CURRENT_USER_ID)).thenReturn(java.util.Set.of());
+      when(bookRepository.search(any(), any()))
+          .thenReturn(new PageImpl<>(List.of(book(5, 20, "Java Basics"))));
+      when(postRepository.findAllById(List.of(20)))
+          .thenReturn(
+              List.of(
+                  postWithStatus(
+                      20,
+                      CURRENT_USER_ID,
+                      PostVisibility.PUBLIC,
+                      ModerationStatus.PENDING_REVIEW)));
+      when(bookStorageService.getCoverUrl(any())).thenReturn(null);
+
+      // When
+      List<BookDto> books = searchService.searchBooks("java", 10, CURRENT_USER_ID, List.of());
+
+      // Then
+      assertThat(books).extracting(BookDto::getId).containsExactly(5);
     }
 
     @Test

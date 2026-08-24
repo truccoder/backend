@@ -24,7 +24,34 @@ bash scripts/seed/load-minio-objects.sh
 ```
 
 Bỏ bước Neo4j thì danh sách bạn bè rỗng dù lịch sử lời mời đầy đủ. Bỏ bước MinIO thì gian sách
-hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
+hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại, và ba tài khoản ở `V66` hiện
+ảnh đại diện vỡ thay vì rơi về chữ viết tắt.
+
+### Bước thứ ba, không bỏ được: dựng lại bảng tin
+
+```bash
+curl -XPOST http://localhost:8080/v1/api/admin/newsfeed/rebuild      -H "Authorization: Bearer <token của admin_one@seed.test>"
+```
+
+**Không chạy lệnh này thì `GET /v1/api/feed` rỗng với MỌI tài khoản seed**, dù database đầy bài.
+Bảng tin đọc duy nhất từ Redis (`NewsfeedService.loadPostsFromCache`) và không bao giờ đọc bù từ
+Postgres; đường duy nhất ghi vào Redis là `fanOutPost`, chỉ chạy khi có người đăng bài qua API.
+Bài do SQL đổ vào không đi qua đường đó. Màn `/newsfeed` sẽ trống trơn trong khi `/posts/public`
+vẫn đầy — triệu chứng dễ bị nhầm thành lỗi frontend.
+
+Cùng lý do, chạy lại lệnh này sau bất kỳ lần nào mất Redis.
+
+### Sau khi deploy một thay đổi có thêm trường vào bài viết
+
+`FeedPostDataDto` được cache 7 ngày. Bản JSON cũ trong Redis không có trường mới, nên bài đang
+nằm trong cache sẽ trả `null` ở trường đó cho tới hết TTL — `authorUsername` là ca gần nhất. Xoá
+cache bài rồi dựng lại:
+
+```bash
+docker exec -i redis redis-cli --scan --pattern 'feedpost:*'   | xargs -r docker exec -i redis redis-cli DEL
+```
+
+(Tiền tố thật đọc ở `POST_CACHE_KEY_PREFIX` trong `PostScoringService`.)
 
 ## Tài khoản
 
@@ -92,14 +119,17 @@ Vài trạng thái đặc biệt để thử các nhánh xử lý:
 | `V59__seed_moderation.sql` | 167 log kiểm duyệt, vi phạm, lệnh cấm, khiếu nại |
 | `V60__seed_reputation_and_notifications.sql` | 2367 sự kiện uy tín, 984 thông báo |
 | `V61__seed_trending_and_github.sql` | 12 tin xu hướng, thống kê GitHub |
+| `V65__seed_demo_fixtures.sql` | Fixture cho S1-S7: bài dài, snippet dài/đủ ngôn ngữ, các ca bình luận 0/1/2/6, cảm xúc `INSIGHT`/`CLAP`, cảm xúc cho bình luận, một sách có tệp thất lạc |
 
 Và một file ở thư mục riêng, **không** chạy ở production:
 
 | File | Nội dung |
 |---|---|
 | `db/seed-dev/V63__seed_dev_tokens.sql` | 3 personal access token — credential dùng được ngay |
+| `db/seed-dev/V66__seed_dev_avatars.sql` | Ảnh đại diện cho 3 tài khoản — URL tuyệt đối trỏ localhost |
 
-Kết quả: **34/39 bảng** có dữ liệu (33 nếu không nạp `db/seed-dev`).
+Kết quả: **35/40 bảng** có dữ liệu (34 nếu không nạp `db/seed-dev`) — `t_comment_reactions` là
+bảng mới, thêm ở `V64`.
 
 ## Năm bảng cố ý để trống
 
@@ -144,10 +174,13 @@ API token thì không.
 
 ## Quy ước khi thêm dữ liệu
 
-- Số version tiếp tục từ `V64`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
-  một dãy version, nên không được giẫm số của nhau: `V62` là schema
-  (`V62__create_post_reports.sql`), `V63` là `db/seed-dev/V63__seed_dev_tokens.sql`. Thêm file mới
-  ở bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
+- Số version tiếp tục từ `V67`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
+  một dãy version, nên không được giẫm số của nhau: `V62` và `V64` là schema
+  (`V62__create_post_reports.sql`, `V64__create_comment_reactions.sql`), `V63` và `V66` là
+  `db/seed-dev`, `V65` là `db/seed`. Thêm file mới ở bất kỳ thư mục nào thì lấy số kế tiếp còn
+  trống rồi cập nhật dòng này.
+- `V65` phải đứng sau `V54`: số bình luận của bốn bài kiểm ca 0/1/2/6 phải CHÍNH XÁC, mà `V54`
+  rải bình luận theo phép chia dư — nó chạy sau thì bài "đúng 2 bình luận" có thể thành ba.
 - Seed phải đứng sau mọi migration schema **tạo bảng mà seed ghi vào**. Một migration số cao hơn
   seed chỉ an toàn khi nó tạo bảng mới (như `V62`); nếu nó sửa bảng mà seed đã đổ dữ liệu thì
   phải đánh số thấp hơn dải seed.

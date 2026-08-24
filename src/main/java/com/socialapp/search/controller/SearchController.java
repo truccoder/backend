@@ -44,7 +44,9 @@ public class SearchController {
   @GetMapping
   public SearchResponse search(
       @RequestParam @NotBlank String q,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int size) {
     Integer currentUserId = SecurityUtils.getCurrentUserId();
     List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
