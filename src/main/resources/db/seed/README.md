@@ -174,6 +174,12 @@ API token thì không.
 
 ## Quy ước khi thêm dữ liệu
 
+- **Không sửa file đã apply lên production — kể cả comment.** Flyway tính checksum trên toàn bộ
+  nội dung file, dòng `--` cũng tính, và `application-prod.yml` bật `validate-on-migrate: true`.
+  Thêm đúng 5 dòng ghi chú vào `V61` (commit d6f6dd1) đã làm production không khởi động được:
+  `Migration checksum mismatch for migration version 61`. Ghi chú về dữ liệu seed thì đặt ở chỗ
+  code đọc nó — Javadoc của repository, hoặc file README này — chứ không đặt vào file `.sql` đã
+  chạy. Nếu buộc phải sửa nội dung, thêm file version mới thay vì sửa file cũ.
 - Số version tiếp tục từ `V67`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
   một dãy version, nên không được giẫm số của nhau: `V62` và `V64` là schema
   (`V62__create_post_reports.sql`, `V64__create_comment_reactions.sql`), `V63` và `V66` là
