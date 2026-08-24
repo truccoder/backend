@@ -49,7 +49,7 @@ public class PostReactionService {
 
   @Transactional(readOnly = true)
   public MyReactionResponseDto getMyReaction(Integer userId, Integer postId) {
-    verifyPostExists(postId);
+    requireVisiblePost(userId, postId);
     // A missing reaction is a normal state (not an error), so it maps to a null
     // reactionType instead of a 404 — the frontend polls this on every post card.
     return postReactionRepository
@@ -118,17 +118,21 @@ public class PostReactionService {
    * enumerate the reactions on a FRIENDS-only post, which is the post's audience list in all but
    * name.
    */
-  private void requireVisiblePost(Integer viewerId, Integer postId) {
+  private PostEntity requireVisiblePost(Integer viewerId, Integer postId) {
     PostEntity post = findPostOrThrow(postId);
     if (!postVisibilityService.isVisibleTo(post, viewerId)) {
       throw new NotFoundException("Post not found with ID: " + postId);
     }
+    return post;
   }
 
   @Transactional
   public void upsertReaction(Integer userId, Integer postId, UpsertPostReactionRequestDto request) {
     checkBanStatus(userId);
-    PostEntity post = findPostOrThrow(postId);
+    // The read paths above have always called this; the write paths did not, so a stranger could
+    // react to a PRIVATE post — confirming it exists, notifying its author, and minting
+    // reputation for them — on a post that was never shared with them.
+    PostEntity post = requireVisiblePost(userId, postId);
 
     PostReactionId reactionId = new PostReactionId(userId, postId);
     boolean isNewReaction = !postReactionRepository.existsById(reactionId);
@@ -139,7 +143,7 @@ public class PostReactionService {
     reaction.setReactionType(request.getReactionType());
 
     postReactionRepository.save(reaction);
-    refreshCachedLikeCount(postId);
+    refreshCachedReactions(postId);
 
     // Guarded by isNewReaction along with the notification and the rep award: swapping LIKE for
     // LOVE on a post you already reacted to is the same single act of engagement, not a second one.
@@ -152,26 +156,32 @@ public class PostReactionService {
 
   @Transactional
   public void removeReaction(Integer userId, Integer postId) {
-    PostEntity post = findPostOrThrow(postId);
+    PostEntity post = requireVisiblePost(userId, postId);
     PostReactionId reactionId = new PostReactionId(userId, postId);
     if (!postReactionRepository.existsById(reactionId)) {
       throw new NotFoundException("Reaction not found for this post");
     }
     postReactionRepository.deleteById(reactionId);
-    refreshCachedLikeCount(postId);
+    refreshCachedReactions(postId);
     revokeReactionRep(post, userId);
   }
 
   /**
-   * Pushes the new like total into the feed cache.
+   * Pushes the new reaction total and its per-type breakdown into the feed cache.
    *
    * <p>The feed reads only from Redis and never falls back to Postgres, so without this the
    * counter stays at whatever it was when the post was fanned out — which is why it read 0
    * forever. {@code updatePostCache} existed for this and simply had no caller.
+   *
+   * <p>Both numbers go in one call. The feed now carries the breakdown beside the total, and a
+   * refresh that updated only the total would leave the chips describing the previous state — a
+   * disagreement the reader can see, on the very card they just tapped.
    */
-  private void refreshCachedLikeCount(Integer postId) {
-    newsfeedService.updateCachedLikeCount(
-        postId, (int) postReactionRepository.countByIdPostId(postId));
+  private void refreshCachedReactions(Integer postId) {
+    newsfeedService.updateCachedReactions(
+        postId,
+        (int) postReactionRepository.countByIdPostId(postId),
+        postReactionRepository.countByType(postId));
   }
 
   private void verifyPostExists(Integer postId) {

@@ -5,8 +5,10 @@ import java.time.OffsetDateTime;
 import java.util.*;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
@@ -36,15 +38,26 @@ public class PostScoringService {
   @Scheduled(fixedRate = 5 * 60 * 1000)
   public void recalculateScores() {
     Set<String> feedKeys = redisTemplate.keys(FEED_KEY_PREFIX + "*");
-    if (feedKeys.isEmpty()) {
+    // keys() returns null, not an empty set, when the connection hands back nothing.
+    if (CollectionUtils.isEmpty(feedKeys)) {
       return;
     }
 
     log.info("Recalculating feed scores for {} feeds", feedKeys.size());
 
+    // Per-key isolation. This loop used to let one bad key end the whole tick: any key matching
+    // `feed:*` whose suffix is not an integer — a future `feed:v2:...`, a stray manual key,
+    // anything else sharing the Redis database — threw NumberFormatException out of the loop, so
+    // no user's feed was rescored, on that tick or any tick after. One unusable key should cost
+    // one user's rescore, not everybody's.
     for (String feedKey : feedKeys) {
-      Integer userId = Integer.parseInt(feedKey.substring(FEED_KEY_PREFIX.length()));
-      recalculateFeedForUser(userId);
+      try {
+        recalculateFeedForUser(Integer.parseInt(feedKey.substring(FEED_KEY_PREFIX.length())));
+      } catch (NumberFormatException e) {
+        log.warn("Skipping feed key with a non-numeric user id: {}", feedKey);
+      } catch (Exception e) {
+        log.error("Failed to recalculate feed for key {}", feedKey, e);
+      }
     }
   }
 
@@ -57,13 +70,46 @@ public class PostScoringService {
 
     Map<Integer, Double> affinityMap = loadAffinityMap(userId);
 
-    for (String postId : postIds) {
-      FeedPostDataDto post = loadPostFromCache(postId);
+    // One MGET for the whole feed instead of a GET per post. A feed holds up to a thousand ids and
+    // this runs for every user every five minutes, so the round trips dominated the job.
+    // NewsfeedService.loadPostsFromCache already did it this way.
+    List<String> ids = List.copyOf(postIds);
+    List<String> cached =
+        redisTemplate
+            .opsForValue()
+            .multiGet(ids.stream().map(id -> POST_CACHE_KEY_PREFIX + id).toList());
+    if (Objects.isNull(cached)) {
+      return;
+    }
+
+    // One ZADD for the whole feed, to match the single MGET above. Scoring a thousand-post feed
+    // one ZADD at a time put the round trips straight back that the MGET had just removed.
+    Set<ZSetOperations.TypedTuple<String>> rescored = new HashSet<>();
+    for (int i = 0; i < ids.size(); i++) {
+      // multiGet keeps positional alignment with the keys, writing null where a key is missing.
+      FeedPostDataDto post = deserialize(cached.get(i));
       if (Objects.isNull(post)) continue;
 
       double affinity = affinityMap.getOrDefault(post.getAuthorId(), 0.0);
-      double newScore = calculateScore(post, affinity);
-      redisTemplate.opsForZSet().add(feedKey, postId, newScore);
+      rescored.add(ZSetOperations.TypedTuple.of(ids.get(i), calculateScore(post, affinity)));
+    }
+
+    // ZADD with no members is an error, and a feed whose every post has fallen out of the cache
+    // reaches here empty.
+    if (!rescored.isEmpty()) {
+      redisTemplate.opsForZSet().add(feedKey, rescored);
+    }
+  }
+
+  FeedPostDataDto deserialize(String json) {
+    if (Objects.isNull(json)) {
+      return null;
+    }
+    try {
+      return objectMapper.readValue(json, FeedPostDataDto.class);
+    } catch (Exception e) {
+      log.warn("Failed to deserialize cached post", e);
+      return null;
     }
   }
 
@@ -106,16 +152,5 @@ public class PostScoringService {
   private double engagementFactor(FeedPostDataDto post) {
     double raw = Math.log(1 + post.getLikeCount() + 2.0 * post.getCommentCount());
     return Math.min(1.0, raw / MAX_ENGAGEMENT_LOG);
-  }
-
-  FeedPostDataDto loadPostFromCache(String postId) {
-    try {
-      String json = redisTemplate.opsForValue().get(POST_CACHE_KEY_PREFIX + postId);
-      if (Objects.isNull(json)) return null;
-      return objectMapper.readValue(json, FeedPostDataDto.class);
-    } catch (Exception e) {
-      log.warn("Failed to read post cache for {}", postId, e);
-      return null;
-    }
   }
 }

@@ -1,6 +1,7 @@
 package com.socialapp.security.service;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -17,6 +18,8 @@ import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.utils.FileExtensions;
 import com.socialapp.friendships.cache.UserProfileCache;
+import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.reputation.RepLevel;
 import com.socialapp.roadmap.enums.VerificationStatus;
 import com.socialapp.roadmap.repository.UserRoadmapProgressRepository;
@@ -26,6 +29,7 @@ import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.RefreshTokenRepository;
 import com.socialapp.security.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -42,11 +46,13 @@ public class ProfileService {
       Set.of("image/jpeg", "image/png", "image/webp");
 
   private final UserRepository userRepository;
+  private final RefreshTokenRepository refreshTokenRepository;
   private final PasswordEncoder passwordEncoder;
   private final MinIOService minIOService;
   private final MinIOConfig minIOConfig;
   private final UserProfileCache userProfileCache;
   private final UserRoadmapProgressRepository progressRepository;
+  private final UserProfessionalProfileRepository professionalProfileRepository;
 
   public UserResponse getProfile(Integer userId) {
     return toResponse(requireUser(userId));
@@ -85,17 +91,29 @@ public class ProfileService {
     RepLevel level = RepLevel.forScore(score);
     RepLevel next = level.next();
 
+    // Absent for anyone who never filled the form in, which is most accounts — so this is an
+    // Optional to read four fields out of, not a row to require.
+    Optional<UserProfessionalProfileEntity> professional =
+        professionalProfileRepository.findById(user.getId());
+
     return new PublicProfileResponse(
         user.getId(),
         user.getUsername(),
         user.getFullName(),
         user.getProfilePictureUrl(),
+        user.getCoverImageUrl(),
         user.getEliteScore(),
         user.getCreatedAt(),
         level.getLevel(),
         level.getDisplayName(),
         level.getMin(),
         next != null ? next.getMin() : null,
+        // Four fields, and deliberately not the whole professional record — see
+        // PublicProfileResponse#jobTitle for what is left behind and why.
+        professional.map(UserProfessionalProfileEntity::getJobTitle).orElse(null),
+        professional.map(UserProfessionalProfileEntity::getPrimaryRole).orElse(null),
+        professional.map(UserProfessionalProfileEntity::getSeniorityLevel).orElse(null),
+        professional.map(UserProfessionalProfileEntity::getYearsOfExperience).orElse(null),
         progressRepository.findSkillNamesByUserIdAndStatus(
             user.getId(), VerificationStatus.VERIFIED));
   }
@@ -104,6 +122,14 @@ public class ProfileService {
   public UserResponse updateProfile(Integer userId, UpdateProfileRequest request) {
     UserEntity user = requireUser(userId);
     user.setFullName(request.fullName());
+
+    // Null leaves the cover alone; empty removes it. See UpdateProfileRequest#coverImageUrl —
+    // every caller that existed before this field was added sends fullName and nothing else, so
+    // copying a null through here would wipe the cover of anyone who edited their name afterwards.
+    if (Objects.nonNull(request.coverImageUrl())) {
+      user.setCoverImageUrl(request.coverImageUrl().isBlank() ? null : request.coverImageUrl());
+    }
+
     userRepository.save(user);
     userProfileCache.evict(userId);
     return toResponse(user);
@@ -123,6 +149,10 @@ public class ProfileService {
 
     user.setPassword(passwordEncoder.encode(request.newPassword()));
     userRepository.save(user);
+
+    // Same reasoning as AuthService#resetPassword: changing a password has to end the sessions
+    // that were opened with the old one, or a stolen refresh token outlives the change.
+    refreshTokenRepository.deleteByUserId(userId);
   }
 
   @Transactional
@@ -166,6 +196,7 @@ public class ProfileService {
         user.getUsername(),
         user.getFullName(),
         user.getProfilePictureUrl(),
+        user.getCoverImageUrl(),
         user.isEmailVerified(),
         user.getRole(),
         user.getCreatedAt());

@@ -20,6 +20,7 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.BadCredentialsException;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.dto.CreateTokenRequestDto;
@@ -178,20 +179,20 @@ class PersonalAccessTokenServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> personalAccessTokenService.validateTokenAndGetEntity("raw-token"))
-          .isInstanceOf(NotFoundException.class)
+          .isInstanceOf(BadCredentialsException.class)
           .hasMessageContaining("Invalid token");
     }
 
     @Test
     @DisplayName("should reject an expired token")
-    void shouldThrowNotFoundException_whenTokenExpired() {
+    void shouldThrowBadCredentials_whenTokenExpired() {
       // Given
       PersonalAccessTokenEntity entity = token(1, USER_ID, OffsetDateTime.now().minusDays(1));
       when(tokenRepository.findByTokenHash(any())).thenReturn(Optional.of(entity));
 
       // When / Then
       assertThatThrownBy(() -> personalAccessTokenService.validateTokenAndGetEntity("raw-token"))
-          .isInstanceOf(NotFoundException.class)
+          .isInstanceOf(BadCredentialsException.class)
           .hasMessageContaining("expired");
       verify(tokenRepository, never()).save(any());
     }

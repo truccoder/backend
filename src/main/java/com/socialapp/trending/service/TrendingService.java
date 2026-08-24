@@ -75,6 +75,7 @@ public class TrendingService {
         .title(entity.getTitle())
         .summary(entity.getSummary())
         .url(entity.getUrl())
+        .imageUrl(entity.getImageUrl())
         .source(entity.getSource())
         .category(entity.getCategory())
         .tags(entity.getTags())

@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
@@ -37,7 +40,9 @@ import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.posts.service.PostVisibilityService;
 
 /**
  * Component (unit) tests for {@link ExplanationService}, per ISTQB CTFL v4.0.1 (Section 2.2.1
@@ -58,6 +63,7 @@ class ExplanationServiceTest {
   @Mock private VaultNoteRepository vaultNoteRepository;
   @Mock private PersonalAccessTokenRepository tokenRepository;
   @Mock private PostRepository postRepository;
+  @Mock private PostVisibilityService postVisibilityService;
 
   private ExplanationService explanationService;
 
@@ -75,6 +81,7 @@ class ExplanationServiceTest {
             vaultNoteRepository,
             tokenRepository,
             postRepository,
+            postVisibilityService,
             new ObjectMapper());
   }
 
@@ -97,6 +104,7 @@ class ExplanationServiceTest {
 
   private void stubHappyPathUpTo(UserProfessionalProfileEntity profile) {
     when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "Post content")));
+    when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
     when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile));
     when(tokenRepository.findByUserId(USER_ID)).thenReturn(List.of());
   }
@@ -116,9 +124,35 @@ class ExplanationServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null))
+      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null, null))
           .isInstanceOf(ResponseStatusException.class)
           .hasMessageContaining("404");
+    }
+
+    @Test
+    @DisplayName("should refuse to explain a post the caller may not read")
+    void shouldRefuse_whenThePostIsNotVisibleToTheCaller() {
+      // Given: a PRIVATE post belonging to somebody else. Post ids are sequential
+      // (PostQueryService says so explicitly), so guessing one is not a barrier.
+      PostEntity privatePost = post(POST_ID, "Somebody's private notes");
+      privatePost.setAuthorId(4242);
+      privatePost.setVisibility(PostVisibility.PRIVATE);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(privatePost));
+      when(postVisibilityService.isVisibleTo(privatePost, USER_ID)).thenReturn(false);
+
+      // Deliberately no profile/Gemini stubs: the call must stop at the visibility gate, before
+      // anything downstream is consulted. When this probe first ran against the unguarded
+      // service it passed for the wrong reason — the 428 "no professional profile" gate fired
+      // first — so the stubs had to be added to prove the leak. Now that the gate exists they
+      // would be unused, and STRICT_STUBS would rightly complain.
+
+      // When / Then: explainPost returns originalContent verbatim AND ships the body to Gemini,
+      // so it must clear the same visibility rule as every other read path
+      // (PostVisibilityService.isVisibleTo). It checks existence only — compare
+      // PostQueryService.getPost, which 404s in exactly this case.
+      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null, null))
+          .isInstanceOfAny(ResponseStatusException.class, ForbiddenException.class);
+      verifyNoInteractions(geminiClient);
     }
 
     @Test
@@ -126,10 +160,11 @@ class ExplanationServiceTest {
     void shouldThrowPreconditionRequired_whenProfileMissing() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null))
+      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null, null))
           .isInstanceOf(ResponseStatusException.class)
           .hasMessageContaining("428");
     }
@@ -145,7 +180,7 @@ class ExplanationServiceTest {
                   + " \"complexityScore\": 4}");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getPostId()).isEqualTo(POST_ID);
@@ -315,6 +350,7 @@ class ExplanationServiceTest {
     void shouldOmitVaultContext_whenNoBidirectionalToken() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(
@@ -325,7 +361,7 @@ class ExplanationServiceTest {
       stubGeminiEcho();
 
       // When
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(promptCaptor.getValue()).doesNotContain("EXISTING KNOWLEDGE");
@@ -336,6 +372,7 @@ class ExplanationServiceTest {
     void shouldOmitVaultContext_whenBidirectionalButNoNotes() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(
@@ -347,7 +384,7 @@ class ExplanationServiceTest {
       stubGeminiEcho();
 
       // When
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(promptCaptor.getValue()).doesNotContain("EXISTING KNOWLEDGE");
@@ -358,6 +395,7 @@ class ExplanationServiceTest {
     void shouldIncludeVaultContext_whenBidirectionalAndNotesExist() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(
@@ -376,7 +414,7 @@ class ExplanationServiceTest {
       stubGeminiEcho();
 
       // When
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(promptCaptor.getValue()).contains("EXISTING KNOWLEDGE").contains("f.md");
@@ -410,6 +448,7 @@ class ExplanationServiceTest {
               String.class,
               UserProfessionalProfileEntity.class,
               String.class,
+              String.class,
               String.class);
       buildPrompt.setAccessible(true);
 
@@ -417,7 +456,7 @@ class ExplanationServiceTest {
       String prompt =
           (String)
               buildPrompt.invoke(
-                  explanationService, "post content", profile(null, null), null, "   ");
+                  explanationService, "post content", profile(null, null), null, "   ", null);
 
       // Then
       assertThat(prompt).doesNotContain("EXISTING KNOWLEDGE");
@@ -432,7 +471,7 @@ class ExplanationServiceTest {
       stubGeminiEcho();
 
       // When
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(promptCaptor.getValue()).contains("Fintech");
@@ -446,7 +485,7 @@ class ExplanationServiceTest {
       stubGeminiEcho();
 
       // When / Then
-      assertThat(explanationService.explainPost(USER_ID, POST_ID, null)).isNotNull();
+      assertThat(explanationService.explainPost(USER_ID, POST_ID, null, null)).isNotNull();
     }
 
     @Test
@@ -454,7 +493,7 @@ class ExplanationServiceTest {
     void shouldUseConciseInstruction() {
       stubHappyPathUpTo(profile(ExplanationStyle.CONCISE, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).contains("CONCISE: keep the explanation short");
     }
 
@@ -463,7 +502,7 @@ class ExplanationServiceTest {
     void shouldUseDetailedInstruction() {
       stubHappyPathUpTo(profile(ExplanationStyle.DETAILED, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).contains("DETAILED: thorough explanation");
     }
 
@@ -472,7 +511,7 @@ class ExplanationServiceTest {
     void shouldUseCodeHeavyInstruction() {
       stubHappyPathUpTo(profile(ExplanationStyle.CODE_HEAVY, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).contains("CODE_HEAVY: prefer runnable code snippets");
     }
 
@@ -481,7 +520,7 @@ class ExplanationServiceTest {
     void shouldUseAnalogyHeavyInstruction() {
       stubHappyPathUpTo(profile(ExplanationStyle.ANALOGY_HEAVY, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).contains("ANALOGY_HEAVY: lean on real-world analogies");
     }
 
@@ -490,7 +529,7 @@ class ExplanationServiceTest {
     void shouldUseDefaultInstruction_whenStyleNull() {
       stubHappyPathUpTo(profile(null, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).contains("no preference stated");
     }
 
@@ -499,7 +538,7 @@ class ExplanationServiceTest {
     void shouldIncludeFeedbackNote_whenPresentAndNonBlank() {
       stubHappyPathUpTo(profile(null, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, "too vague last time");
+      explanationService.explainPost(USER_ID, POST_ID, "too vague last time", null);
       assertThat(promptCaptor.getValue())
           .contains("READER FEEDBACK")
           .contains("too vague last time");
@@ -510,7 +549,7 @@ class ExplanationServiceTest {
     void shouldOmitFeedbackNote_whenNull() {
       stubHappyPathUpTo(profile(null, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, null);
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
       assertThat(promptCaptor.getValue()).doesNotContain("READER FEEDBACK");
     }
 
@@ -519,8 +558,98 @@ class ExplanationServiceTest {
     void shouldOmitFeedbackNote_whenBlank() {
       stubHappyPathUpTo(profile(null, null));
       stubGeminiEcho();
-      explanationService.explainPost(USER_ID, POST_ID, "   ");
+      explanationService.explainPost(USER_ID, POST_ID, "   ", null);
       assertThat(promptCaptor.getValue()).doesNotContain("READER FEEDBACK");
+    }
+
+    @Test
+    @DisplayName("should tell the model to answer in the language the reader asked for")
+    void shouldPinTheAnswerToTheRequestedLanguage() {
+      // Given — the reader is reading the app in Vietnamese
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, "vi");
+
+      // Then — the JDK's own name for the language, not the tag the caller sent
+      assertThat(promptCaptor.getValue()).contains("entirely in Vietnamese");
+    }
+
+    @Test
+    @DisplayName("should replace the match-the-post rule rather than stack a second one on top")
+    void shouldReplaceRuleSix_whenALanguageIsGiven() {
+      // Given — two instructions that can disagree ("match the post" and "answer in Vietnamese")
+      // leave the model to choose, and it chose the post often enough that the reader's setting
+      // looked ignored at random
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, "vi");
+
+      // Then
+      assertThat(promptCaptor.getValue())
+          .doesNotContain("Respond in the same language as the original post");
+    }
+
+    @Test
+    @DisplayName("should keep the match-the-post rule when no language is stated")
+    void shouldKeepRuleSix_whenNoLanguageIsGiven() {
+      // Given — the field is optional, and absent must mean the old behaviour rather than a guess
+      // made on the caller's behalf
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue())
+          .contains("Respond in the same language as the original post");
+    }
+
+    @Test
+    @DisplayName("should treat a blank language as no language at all")
+    void shouldIgnoreABlankLanguage() {
+      // Given — a client sending an empty locale cookie should not produce "answer entirely in "
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, "   ");
+
+      // Then
+      assertThat(promptCaptor.getValue())
+          .contains("Respond in the same language as the original post");
+    }
+
+    @Test
+    @DisplayName("should resolve a regional tag to its full name")
+    void shouldResolveARegionalTag() {
+      // Given / When — EP: BCP-47 allows a region subtag, and the client may well send one
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+      explanationService.explainPost(USER_ID, POST_ID, null, "en-GB");
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("English (United Kingdom)");
+    }
+
+    @Test
+    @DisplayName("should pass a well-formed tag the JDK cannot name straight through")
+    void shouldPassThroughAnUnknownTag() {
+      // Given — the pattern on the DTO has already limited this to letters, digits and hyphens,
+      // so nothing that could steer the model survives that far; refusing the request over a
+      // language nobody can name would be the worse answer
+      stubHappyPathUpTo(profile(null, null));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, "zz");
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("entirely in zz");
     }
   }
 
@@ -543,7 +672,7 @@ class ExplanationServiceTest {
                   + " \"https://x\", \"reason\": \"why\"}]}");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getExternalLinks()).hasSize(1);
@@ -558,7 +687,7 @@ class ExplanationServiceTest {
       when(geminiClient.generateContent(anyString())).thenReturn("{\"explanation\": \"e\"}");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getComplexityScore()).isEqualTo(3);
@@ -573,7 +702,7 @@ class ExplanationServiceTest {
           .thenReturn("{\"explanation\": \"e\", \"externalLinks\": []}");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getExternalLinks()).isEmpty();
@@ -588,7 +717,7 @@ class ExplanationServiceTest {
           .thenReturn("{\"explanation\": \"e\", \"externalLinks\": \"none\"}");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getExternalLinks()).isEmpty();
@@ -602,7 +731,7 @@ class ExplanationServiceTest {
       when(geminiClient.generateContent(anyString())).thenReturn("not json at all");
 
       // When
-      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null);
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
       assertThat(result.getExplanationContent()).isEqualTo("not json at all");

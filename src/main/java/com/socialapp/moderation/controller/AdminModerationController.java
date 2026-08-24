@@ -20,6 +20,7 @@ import com.socialapp.moderation.service.PostReportService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -37,7 +38,10 @@ public class AdminModerationController {
       @RequestParam(required = false) Integer userId,
       @RequestParam(required = false) ModerationStatus status,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return adminModerationService.searchPosts(
         postId, userId, status, PageRequest.of(page - 1, size));
   }
@@ -48,7 +52,10 @@ public class AdminModerationController {
       @RequestParam(required = false) Integer userId,
       @RequestParam(required = false) ModerationStatus status,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return adminModerationService.searchLogs(
         postId, userId, status, PageRequest.of(page - 1, size));
   }
@@ -56,7 +63,10 @@ public class AdminModerationController {
   @GetMapping("/banned-users")
   public Page<BannedUserDto> getBannedUsers(
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return adminModerationService.getBannedUsers(PageRequest.of(page - 1, size));
   }
 
@@ -81,7 +91,10 @@ public class AdminModerationController {
   public Page<PostReportDto> getReports(
       @RequestParam(required = false) Integer postId,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return postReportService.getReports(postId, PageRequest.of(page - 1, size));
   }
 
@@ -95,7 +108,10 @@ public class AdminModerationController {
   public Page<AppealDto> getAppeals(
       @RequestParam(defaultValue = "PENDING") AppealStatus status,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return appealService.getAppeals(status, PageRequest.of(page - 1, size));
   }
 
