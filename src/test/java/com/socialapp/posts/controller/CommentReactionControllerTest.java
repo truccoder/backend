@@ -3,16 +3,20 @@ package com.socialapp.posts.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -28,8 +32,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.utils.Constants;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.service.CommentReactionService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -37,6 +43,7 @@ import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.config.SecurityConfig;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.entity.UserRole;
 import com.socialapp.security.repository.UserRepository;
@@ -103,6 +110,130 @@ class CommentReactionControllerTest {
     return "{\"reactionType\":"
         + (reactionType == null ? "null" : "\"" + reactionType + "\"")
         + "}";
+  }
+
+  // =====================================================================
+  // GET /v1/api/posts/{postId}/comments/{commentId}/reactions
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/posts/{postId}/comments/{commentId}/reactions")
+  class GetReactorsTests {
+
+    private ReactorPageResponseDto page() {
+      PublicUserResponse reactor =
+          new PublicUserResponse(7, "ada", "Ada Lovelace", null, 120, null);
+      return new ReactorPageResponseDto(List.of(reactor), 7, true, 3L);
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndTheReactorPage_happyPath")
+    void shouldReturn200AndTheReactorPage() throws Exception {
+      // Given — the read half a comment never had. A post could always be asked who reacted to
+      // it; a comment could be reacted to and never queried.
+      when(commentReactionService.getReactors(
+              eq(currentUser.getId()), eq(POST_ID), eq(COMMENT_ID), isNull(), isNull(), eq(20)))
+          .thenReturn(page());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(POST_ID, COMMENT_ID))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.reactors[0].username").value("ada"))
+          .andExpect(jsonPath("$.totalCount").value(3))
+          .andExpect(jsonPath("$.hasMore").value(true))
+          .andExpect(jsonPath("$.nextCursor").value(7));
+    }
+
+    @Test
+    @DisplayName("shouldNeverExposeAnEmailAddressInTheReactorList_security")
+    void shouldNotExposeEmails() throws Exception {
+      // Given — this list is readable by anyone who can read the post, so the shape matters:
+      // PublicUserResponse has no email field, UserResponse does
+      when(commentReactionService.getReactors(any(), any(), any(), any(), any(), anyInt()))
+          .thenReturn(page());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(POST_ID, COMMENT_ID))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.reactors[0].email").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("shouldPassTheTypeFilterAndCursorThrough")
+    void shouldPassFilterAndCursor() throws Exception {
+      // Given
+      when(commentReactionService.getReactors(
+              eq(currentUser.getId()),
+              eq(POST_ID),
+              eq(COMMENT_ID),
+              eq(ReactionType.CLAP),
+              eq(12),
+              eq(5)))
+          .thenReturn(page());
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(get(reactionsUrl(POST_ID, COMMENT_ID)))
+                  .param("type", "CLAP")
+                  .param("cursor", "12")
+                  .param("limit", "5"))
+          .andExpect(status().isOk());
+
+      verify(commentReactionService)
+          .getReactors(currentUser.getId(), POST_ID, COMMENT_ID, ReactionType.CLAP, 12, 5);
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenTypeIsNotAReactionType")
+    void shouldReturn400_whenTypeIsUnknown() throws Exception {
+      // When / Then — EP: the filter is an enum, and an unknown name is the caller's mistake
+      mockMvc
+          .perform(authed(get(reactionsUrl(POST_ID, COMMENT_ID))).param("type", "SHRUG"))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenLimitExceedsTheCap_boundary")
+    void shouldReturn400_whenLimitTooLarge() throws Exception {
+      // When / Then — BVA on @Max(Constants.MAX_PAGINATION_PAGE_SIZE); an uncapped limit is a
+      // way to pull every reactor profile in one request
+      mockMvc
+          .perform(
+              authed(get(reactionsUrl(POST_ID, COMMENT_ID)))
+                  .param("limit", String.valueOf(Constants.MAX_PAGINATION_PAGE_SIZE + 1)))
+          .andExpect(status().isBadRequest());
+
+      verify(commentReactionService, never())
+          .getReactors(any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenThePostIsNotVisibleToTheCaller_security")
+    void shouldReturn404_whenPostNotVisible() throws Exception {
+      // Given — without the visibility gate this endpoint would enumerate everyone who reacted
+      // to a comment on a FRIENDS-only post, which is that post's audience list in all but name
+      when(commentReactionService.getReactors(any(), any(), any(), any(), any(), anyInt()))
+          .thenThrow(new NotFoundException("Post not found with ID: " + POST_ID));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(reactionsUrl(POST_ID, COMMENT_ID))))
+          .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCallerIsAnonymous")
+    void shouldReturn401_whenCallerIsAnonymous() throws Exception {
+      // When / Then — the guest-readable entries in SecurityConfig are pinned to single-segment
+      // GETs, so this nested route stays closed even though the post above it is open
+      mockMvc.perform(get(reactionsUrl(POST_ID, COMMENT_ID))).andExpect(status().isUnauthorized());
+
+      verify(commentReactionService, never())
+          .getReactors(any(), any(), any(), any(), any(), anyInt());
+    }
   }
 
   // =====================================================================

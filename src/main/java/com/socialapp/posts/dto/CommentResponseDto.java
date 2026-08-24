@@ -1,6 +1,7 @@
 package com.socialapp.posts.dto;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import com.socialapp.posts.entity.enums.ReactionType;
 
@@ -38,6 +39,20 @@ public class CommentResponseDto {
    * the preview fell back to the two OLDEST comments and said so on screen.
    */
   private int likeCount;
+
+  /**
+   * The breakdown behind {@link #likeCount}, e.g. {@code {"LIKE": 3, "CLAP": 2}}.
+   *
+   * <p>Comments were the worse half of the asymmetry this closes. A post could always be asked
+   * {@code GET /posts/{id}/reactions/summary}; a comment had no read endpoint at all, so once the
+   * reaction row lost its text labels the "5" beside a single glyph became unanswerable — and
+   * after tapping, the new total could only be seen by reloading the whole thread.
+   *
+   * <p>Costs one extra group-by per thread, batched over every comment on the page exactly as
+   * {@link #likeCount} and {@link #myReaction} already are. Types nobody chose are absent rather
+   * than zero.
+   */
+  private Map<ReactionType, Long> reactionSummary;
 
   /** What the caller chose on this comment, or {@code null} if they have not reacted. */
   private ReactionType myReaction;

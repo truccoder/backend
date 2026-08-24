@@ -3,12 +3,15 @@ package com.socialapp.posts.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +23,7 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
@@ -27,6 +31,7 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.CommentReactionEntity;
@@ -36,6 +41,7 @@ import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -99,6 +105,151 @@ class CommentReactionServiceTest {
     when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
     when(commentRepository.findById(COMMENT_ID))
         .thenReturn(Optional.of(sampleComment(commentAuthorId, POST_ID)));
+  }
+
+  // =====================================================================
+  // getReactors
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getReactors")
+  class GetReactorsTests {
+
+    private UserEntity reactor(Integer id, String username) {
+      UserEntity user = new UserEntity();
+      user.setId(id);
+      user.setUsername(username);
+      user.setFullName("Reactor " + id);
+      return user;
+    }
+
+    @Test
+    @DisplayName("should return one page of reactors with the total for the filter")
+    void shouldReturnAPageOfReactors() {
+      // Given
+      givenReadableComment(COMMENT_AUTHOR_ID);
+      when(commentReactionRepository.findReactorIds(eq(COMMENT_ID), isNull(), isNull(), any()))
+          .thenReturn(List.of(11, 12));
+      when(userRepository.findAllById(List.of(11, 12)))
+          .thenReturn(List.of(reactor(11, "ada"), reactor(12, "bob")));
+      when(commentReactionRepository.countByIdCommentId(COMMENT_ID)).thenReturn(2L);
+
+      // When
+      ReactorPageResponseDto page =
+          commentReactionService.getReactors(USER_ID, POST_ID, COMMENT_ID, null, null, 20);
+
+      // Then - totalCount is the total for the whole filter, not for the page, so the UI can say
+      // "2 reactions" without walking the cursor
+      assertThat(page.reactors())
+          .extracting(PublicUserResponse::username)
+          .containsExactly("ada", "bob");
+      assertThat(page.totalCount()).isEqualTo(2L);
+      assertThat(page.hasMore()).isFalse();
+      assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("should ask for one row more than the limit, and report the extra as hasMore")
+    void shouldDetectAFurtherPage() {
+      // Given - limit + 1 detects a further page without a second count query over the same rows
+      givenReadableComment(COMMENT_AUTHOR_ID);
+      when(commentReactionRepository.findReactorIds(eq(COMMENT_ID), isNull(), isNull(), any()))
+          .thenReturn(List.of(11, 12, 13));
+      when(userRepository.findAllById(List.of(11, 12)))
+          .thenReturn(List.of(reactor(11, "ada"), reactor(12, "bob")));
+      when(commentReactionRepository.countByIdCommentId(COMMENT_ID)).thenReturn(3L);
+
+      // When
+      ReactorPageResponseDto page =
+          commentReactionService.getReactors(USER_ID, POST_ID, COMMENT_ID, null, null, 2);
+
+      // Then - the extra row is dropped from the page and becomes the cursor
+      ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+      verify(commentReactionRepository)
+          .findReactorIds(eq(COMMENT_ID), isNull(), isNull(), pageable.capture());
+      assertThat(pageable.getValue().getPageSize()).isEqualTo(3);
+      assertThat(page.reactors()).hasSize(2);
+      assertThat(page.hasMore()).isTrue();
+      assertThat(page.nextCursor()).isEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("should count only the requested type when one is given")
+    void shouldCountOnlyTheFilteredType() {
+      // Given
+      givenReadableComment(COMMENT_AUTHOR_ID);
+      when(commentReactionRepository.findReactorIds(
+              eq(COMMENT_ID), eq(ReactionType.CLAP), isNull(), any()))
+          .thenReturn(List.of(11));
+      when(userRepository.findAllById(List.of(11))).thenReturn(List.of(reactor(11, "ada")));
+      when(commentReactionRepository.countByIdCommentIdAndReactionType(
+              COMMENT_ID, ReactionType.CLAP))
+          .thenReturn(1L);
+
+      // When
+      ReactorPageResponseDto page =
+          commentReactionService.getReactors(
+              USER_ID, POST_ID, COMMENT_ID, ReactionType.CLAP, null, 20);
+
+      // Then - the unfiltered total would be the wrong number to show above a filtered list
+      assertThat(page.totalCount()).isEqualTo(1L);
+      verify(commentReactionRepository, never()).countByIdCommentId(any());
+    }
+
+    @Test
+    @DisplayName("should keep the order of the id list and skip a reactor whose account is gone")
+    void shouldPreserveOrderAndSkipDeletedAccounts() {
+      // Given - findAllById gives no ordering guarantee, and a deleted account must not render as
+      // a blank row
+      givenReadableComment(COMMENT_AUTHOR_ID);
+      when(commentReactionRepository.findReactorIds(eq(COMMENT_ID), isNull(), isNull(), any()))
+          .thenReturn(List.of(11, 12, 13));
+      when(userRepository.findAllById(List.of(11, 12, 13)))
+          .thenReturn(List.of(reactor(13, "cleo"), reactor(11, "ada")));
+      when(commentReactionRepository.countByIdCommentId(COMMENT_ID)).thenReturn(3L);
+
+      // When
+      ReactorPageResponseDto page =
+          commentReactionService.getReactors(USER_ID, POST_ID, COMMENT_ID, null, null, 20);
+
+      // Then
+      assertThat(page.reactors())
+          .extracting(PublicUserResponse::username)
+          .containsExactly("ada", "cleo");
+    }
+
+    @Test
+    @DisplayName("should refuse when the post is not visible to the caller")
+    void shouldRefuse_whenPostNotVisible() {
+      // Given - without this the endpoint enumerates everyone who reacted to a comment on a
+      // FRIENDS-only post, which is that post's audience list in all but name
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost()));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then - 404, not 403: a thing you may not see must look like one that is not there
+      assertThatThrownBy(
+              () ->
+                  commentReactionService.getReactors(USER_ID, POST_ID, COMMENT_ID, null, null, 20))
+          .isInstanceOf(NotFoundException.class);
+      verify(commentReactionRepository, never()).findReactorIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should refuse a comment that belongs to a different post")
+    void shouldRefuse_whenCommentBelongsToAnotherPost() {
+      // Given - otherwise /posts/{readable}/comments/{someone-elses}/reactions reaches a comment
+      // under a post the caller cannot see, by borrowing the id of one they can
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost()));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(commentRepository.findById(COMMENT_ID))
+          .thenReturn(Optional.of(sampleComment(COMMENT_AUTHOR_ID, 999)));
+
+      // When / Then
+      assertThatThrownBy(
+              () ->
+                  commentReactionService.getReactors(USER_ID, POST_ID, COMMENT_ID, null, null, 20))
+          .isInstanceOf(NotFoundException.class);
+    }
   }
 
   // =====================================================================

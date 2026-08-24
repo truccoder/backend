@@ -104,13 +104,18 @@ class PostReactionServiceTest {
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(4L);
+      when(postReactionRepository.countByType(POST_ID))
+          .thenReturn(Map.of(ReactionType.LIKE, 3L, ReactionType.INSIGHT, 1L));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser("Alice")));
 
       // When
       postReactionService.upsertReaction(USER_ID, POST_ID, sampleRequest(ReactionType.LIKE));
 
-      // Then
-      verify(newsfeedService).updateCachedLikeCount(POST_ID, 4);
+      // Then — the breakdown rides along with the total. The feed carries both now, and pushing
+      // only the total would leave the chips describing the state before the tap.
+      verify(newsfeedService)
+          .updateCachedReactions(
+              POST_ID, 4, Map.of(ReactionType.LIKE, 3L, ReactionType.INSIGHT, 1L));
     }
 
     @Test
@@ -332,12 +337,13 @@ class PostReactionServiceTest {
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(3L);
+      when(postReactionRepository.countByType(POST_ID)).thenReturn(Map.of(ReactionType.LIKE, 3L));
 
       // When
       postReactionService.removeReaction(USER_ID, POST_ID);
 
       // Then — un-liking has to move the number too, not just liking
-      verify(newsfeedService).updateCachedLikeCount(POST_ID, 3);
+      verify(newsfeedService).updateCachedReactions(POST_ID, 3, Map.of(ReactionType.LIKE, 3L));
     }
 
     @Test

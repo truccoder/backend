@@ -75,16 +75,20 @@ public class CommentService {
         userRepository.findAllById(authorIds).stream()
             .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
 
-    // Two batch queries for the whole thread, not one pair per comment. A thread has no upper
+    // Three batch queries for the whole thread, not one set per comment. A thread has no upper
     // bound, so counting inside the map below would be an N+1 on exactly the endpoint a busy post
     // hits hardest.
     List<Integer> commentIds = comments.stream().map(CommentEntity::getId).toList();
     Map<Integer, Long> likeCounts = commentReactionRepository.countByCommentIds(commentIds);
+    Map<Integer, Map<ReactionType, Long>> reactionSummaries =
+        commentReactionRepository.countByTypeForCommentIds(commentIds);
     Map<Integer, ReactionType> myReactions =
         commentReactionRepository.findMyReactions(viewerId, commentIds);
 
     return comments.stream()
-        .map(comment -> toResponseDto(comment, authorsById, likeCounts, myReactions))
+        .map(
+            comment ->
+                toResponseDto(comment, authorsById, likeCounts, reactionSummaries, myReactions))
         .toList();
   }
 
@@ -92,6 +96,7 @@ public class CommentService {
       CommentEntity comment,
       Map<Integer, UserEntity> authorsById,
       Map<Integer, Long> likeCounts,
+      Map<Integer, Map<ReactionType, Long>> reactionSummaries,
       Map<Integer, ReactionType> myReactions) {
     UserEntity author = authorsById.get(comment.getAuthorId());
     return CommentResponseDto.builder()
@@ -106,6 +111,9 @@ public class CommentService {
         .createdAt(comment.getCreatedAt())
         .updatedAt(comment.getUpdatedAt())
         .likeCount(likeCounts.getOrDefault(comment.getId(), 0L).intValue())
+        // An empty map, never null: a comment nobody has reacted to has a known breakdown — it is
+        // empty — and null would be indistinguishable from "not loaded" on the client.
+        .reactionSummary(reactionSummaries.getOrDefault(comment.getId(), Map.of()))
         .myReaction(myReactions.get(comment.getId()))
         .build();
   }
@@ -129,7 +137,67 @@ public class CommentService {
     refreshCachedCommentCount(postId);
 
     notifyPostAuthor(post, authorId);
+    // After save, because the notification carries the comment id and the id only exists once the
+    // row does.
+    notifyMentionedUsers(post, comment, authorId);
     trackCommentInteraction(post, authorId);
+  }
+
+  /**
+   * Tells the people named with {@code @handle} in a comment that they were named.
+   *
+   * <p>The other half of a tag. The clients write the handle into the body when someone taps Reply
+   * and render it as a link to that profile, so the mention was already real and already
+   * clickable — it just reached nobody, and the person addressed found out only if they happened
+   * to reopen the post.
+   *
+   * <p>Three filters, each closing a different way this could go wrong:
+   *
+   * <ul>
+   *   <li><b>The handle must exist.</b> {@code MentionScanner} reports what looks like a mention;
+   *       only the user table can say whether anybody holds it. Handles matching nobody are
+   *       dropped silently — writing {@code @nobody} is a comment, not an error.
+   *   <li><b>Not the author.</b> Naming yourself in your own comment is not news.
+   *   <li><b>Not the post's author, when they are already being told.</b> {@code notifyPostAuthor}
+   *       has just sent them a POST_COMMENTED for this same comment; a mention on top would be two
+   *       bells for one event. Only skipped when that notification actually went out — an author
+   *       commenting under their own post gets no POST_COMMENTED, so a mention of them there is
+   *       the only signal and must survive.
+   * </ul>
+   *
+   * <p>Blocks need no filter here: {@code NotificationService.send} already suppresses delivery in
+   * both directions, so a mention cannot be used to reach somebody who blocked you.
+   */
+  private void notifyMentionedUsers(PostEntity post, CommentEntity comment, Integer authorId) {
+    Set<String> handles = MentionScanner.scan(comment.getContent());
+    if (handles.isEmpty()) {
+      return;
+    }
+
+    // notifyPostAuthor above sends POST_COMMENTED to the post's author unless they are the
+    // commenter — so this is exactly when a mention of them would be the second bell for one act.
+    boolean postAuthorAlreadyNotified = !post.getAuthorId().equals(authorId);
+
+    for (UserEntity mentioned : userRepository.findAllByUsernameLowerIn(handles)) {
+      if (mentioned.getId().equals(authorId)) {
+        continue;
+      }
+      if (postAuthorAlreadyNotified && mentioned.getId().equals(post.getAuthorId())) {
+        continue;
+      }
+      notificationService.send(
+          SendNotificationRequest.builder()
+              .recipientId(mentioned.getId())
+              .actorId(authorId)
+              .type(NotificationType.USER_MENTIONED)
+              .title("You were mentioned in a comment")
+              .body(actorName(authorId) + " mentioned you in a comment")
+              // The COMMENT id, not the post id: a thread can run to hundreds of replies, and the
+              // point of the notification is to open at the one that named you.
+              .referenceId(comment.getId())
+              .referenceType("COMMENT")
+              .build());
+    }
   }
 
   /**

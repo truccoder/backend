@@ -56,9 +56,14 @@ class TrendingCrawlSchedulerTest {
   }
 
   private static CrawledItem crawled(String sourceId, String summary) {
+    return crawled(sourceId, summary, null);
+  }
+
+  private static CrawledItem crawled(String sourceId, String summary, String imageUrl) {
     return CrawledItem.builder()
         .title("Title " + sourceId)
         .url("https://example.com/" + sourceId)
+        .imageUrl(imageUrl)
         .summary(summary)
         .source(TrendingSource.HACKER_NEWS)
         .sourceId(sourceId)
@@ -253,6 +258,76 @@ class TrendingCrawlSchedulerTest {
       // Then
       verify(trendingItemRepository).save(savedCaptor.capture());
       assertThat(savedCaptor.getValue().getSummary()).hasSize(500);
+    }
+
+    @Test
+    @DisplayName("should persist the image the crawler found")
+    void shouldPersistTheImageUrl() {
+      // Given — the column has existed since V12 and nothing ever wrote to it, so every trending
+      // card rendered as a block of text on the one surface whose content nobody here wrote
+      CrawledItem item = crawled("1", "summary", "https://cdn.example.com/cover.png");
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
+          .thenReturn(false);
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl())
+          .isEqualTo("https://cdn.example.com/cover.png");
+    }
+
+    @Test
+    @DisplayName("should truncate an image URL too long for the column")
+    void shouldTruncateAnOverlongImageUrl() {
+      // Given — BVA on the 2048-char column. The value comes from somebody else's API, and one
+      // row lost to an over-long CDN link would take the whole batch down with it.
+      CrawledItem item = crawled("1", "summary", "https://cdn.example.com/" + "a".repeat(2100));
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
+          .thenReturn(false);
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl()).hasSize(2048);
+    }
+
+    @Test
+    @DisplayName("should accept an item with no image, since one source never has one")
+    void shouldAcceptAMissingImage() {
+      // Given — Hacker News supplies nothing of its own, so null is a normal value here rather
+      // than a failure to be defended against
+      CrawledItem item = crawled("1", "summary", null);
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
+          .thenReturn(false);
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl()).isNull();
     }
   }
 }

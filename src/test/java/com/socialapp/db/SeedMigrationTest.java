@@ -325,4 +325,180 @@ class SeedMigrationTest {
           .contains("khong-ton-tai");
     }
   }
+
+  @Nested
+  @DisplayName("S10 · images, on the three paths that carry them")
+  class PostImageTests {
+
+    private long imageCount(int postId) throws Exception {
+      return scalar(
+          "SELECT jsonb_array_length(images) FROM socialapp.t_posts WHERE id = " + postId);
+    }
+
+    @Test
+    @DisplayName("should cover the one, two and many image layouts")
+    void shouldCoverEveryGridBranch() throws Exception {
+      // Given — one, two and four-or-more are three different layouts on the client, not one
+      // layout repeated. Before this seed the measured answer across 80 posts was zero images on
+      // every single path, so none of the three had ever rendered.
+      assertThat(imageCount(5301)).isEqualTo(1);
+      assertThat(imageCount(5302)).isEqualTo(2);
+      assertThat(imageCount(5313)).isGreaterThanOrEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("should hold one post whose image is deliberately absent from the object store")
+    void shouldHoldABrokenImage() throws Exception {
+      // Given — image URLs point outward and do eventually die, so the fallback has to be seen
+      // once here rather than for the first time on a user's screen. Same device as the book with
+      // a missing file in V65.
+      assertThat(text("SELECT images->>0 FROM socialapp.t_posts WHERE id = 5310"))
+          .contains("khong-ton-tai");
+    }
+
+    @Test
+    @DisplayName("should fill the article cover and the link thumbnail, and leave siblings null")
+    void shouldCoverTheOtherTwoImagePaths() throws Exception {
+      // Given — both fields were explicitly left null across all of V53 with the note "nowhere to
+      // put a real image". Both branches were therefore dead.
+      assertThat(
+              text("SELECT article_details->>'coverImage' FROM socialapp.t_posts WHERE id = 5031"))
+          .isNotNull();
+      assertThat(
+              text("SELECT link_details->>'thumbnailUrl' FROM socialapp.t_posts WHERE id = 5081"))
+          .isNotNull();
+
+      // Then — and the un-unfurled case survives: a LINK post with no thumbnail is what pasting a
+      // link looks like before anybody asks for a preview, and it must still render.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_posts"
+                      + " WHERE post_type = 'LINK' AND link_details->>'thumbnailUrl' IS NULL"))
+          .isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("should hold accounts both with and without a profile cover")
+    void shouldCoverBothCoverBranches() throws Exception {
+      // Given — the column allows NULL and the clients draw a plain token-coloured band for it,
+      // so "no cover" is the default branch and needs data just as much as the image one does
+      assertThat(scalar("SELECT count(*) FROM socialapp.t_users WHERE cover_image_url IS NOT NULL"))
+          .isGreaterThan(0);
+      assertThat(scalar("SELECT count(*) FROM socialapp.t_users WHERE cover_image_url IS NULL"))
+          .isGreaterThan(0);
+    }
+  }
+
+  @Nested
+  @DisplayName("B20/B21 · mentions and the role line")
+  class MentionAndRoleLineTests {
+
+    @Test
+    @DisplayName("should hold comments that name a handle somebody actually holds")
+    void shouldHoldRealMentions() throws Exception {
+      // Given - there was not one '@' character anywhere in V54, so the whole mention path had no
+      // data to run on. A mention of a handle nobody holds would have been worse than none: the
+      // fixture would look right in the SQL and still notify nobody.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_comments c"
+                      + " JOIN socialapp.t_users u"
+                      + "   ON c.content LIKE '%@' || u.username || '%'"
+                      + " WHERE c.id BETWEEN 8014 AND 8016"))
+          .isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("should hold one comment whose @ is an email address, not a mention")
+    void shouldHoldTheNegativeCase() throws Exception {
+      // Given - the rule that the '@' must follow whitespace exists so that a quoted email
+      // address does not notify whoever holds that handle. Without a row like this, nothing in
+      // the data proves the rule.
+      assertThat(text("SELECT content FROM socialapp.t_comments WHERE id = 8016"))
+          .contains("@socialapp.com");
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE reference_id = 8016 AND type = 'USER_MENTIONED'"))
+          .isZero();
+    }
+
+    @Test
+    @DisplayName("should notify every mentioned user, pointing at the comment not the post")
+    void shouldNotifyMentionedUsers() throws Exception {
+      // Given - one comment names one person, the next names two
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE type = 'USER_MENTIONED'"))
+          .isGreaterThanOrEqualTo(3);
+
+      // Then - a thread runs to hundreds of replies, so the notification has to open at the one
+      // that named you
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE type = 'USER_MENTIONED' AND reference_type <> 'COMMENT'"))
+          .isZero();
+    }
+
+    @Test
+    @DisplayName("should hold accounts both with and without a professional profile")
+    void shouldCoverBothRoleLineBranches() throws Exception {
+      // Given - the public profile now carries a role line, and "never filled the form in" is the
+      // ordinary state. Both branches need data or one of them never renders.
+      assertThat(scalar("SELECT count(*) FROM socialapp.t_user_professional_profiles"))
+          .isGreaterThan(0);
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_users u"
+                      + " WHERE NOT EXISTS (SELECT 1 FROM socialapp.t_user_professional_profiles p"
+                      + "                    WHERE p.user_id = u.id)"))
+          .isGreaterThan(0);
+    }
+  }
+
+  @Nested
+  @DisplayName("S8 · a stored explanation that actually contains Markdown")
+  class MarkdownExplanationTests {
+
+    private String markdownExplanation() throws Exception {
+      return text(
+          "SELECT explanation_content FROM socialapp.t_explanations"
+              + " WHERE post_id = 5302 AND user_id = 9001 AND version = 1");
+    }
+
+    @Test
+    @DisplayName("should map every element type the explanation card renders")
+    void shouldCoverEveryMarkdownElement() throws Exception {
+      // Given — the card switched to react-markdown + remark-gfm, and all eight explanations in
+      // V56 are flat prose. One row per element type is not the point: one row exercising ALL of
+      // them is, since a missing branch is invisible rather than broken.
+      String markdown = markdownExplanation();
+
+      // Then — heading, bold, bullet list, numbered list, inline code, fenced block, GFM table,
+      // and a link. Asserted as separate lines so a failure names the element that went missing.
+      assertThat(markdown).contains("## ");
+      assertThat(markdown).contains("**");
+      assertThat(markdown).contains("* `");
+      assertThat(markdown).contains("1. ");
+      assertThat(markdown).contains("```java");
+      assertThat(markdown).contains("| --- |");
+      assertThat(markdown).contains("](https://");
+    }
+
+    @Test
+    @DisplayName("should keep the plain-prose explanations alongside it")
+    void shouldKeepThePlainTextCase() throws Exception {
+      // Given — Gemini does not always answer in Markdown, so text with no syntax in it has to
+      // render as text. Rewriting V56's rows into Markdown would have traded that working case
+      // away for this missing one.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_explanations"
+                      + " WHERE explanation_content NOT LIKE '%**%'"
+                      + "   AND explanation_content NOT LIKE '%## %'"))
+          .isGreaterThan(0);
+    }
+  }
 }

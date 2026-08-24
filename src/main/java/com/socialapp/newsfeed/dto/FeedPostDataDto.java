@@ -2,6 +2,7 @@ package com.socialapp.newsfeed.dto;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
@@ -14,6 +15,7 @@ import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.LocationType;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -126,4 +128,27 @@ public class FeedPostDataDto {
   private int likeCount;
 
   private int commentCount;
+
+  /**
+   * How many reactions of each type this post has, e.g. {@code {"LIKE": 4, "INSIGHT": 2}} — the
+   * breakdown behind {@link #likeCount}.
+   *
+   * <p>Exists because the reaction row dropped its text labels. While each chip read "Hữu ích 5"
+   * it explained itself; with only a glyph and a number left, the one question a reader still has
+   * is which reactions make up the five, and {@code likeCount} alone cannot answer it. {@code GET
+   * /posts/{id}/reactions/summary} could, per post — ten cards, ten extra requests, over a
+   * group-by this payload had already run and discarded the detail of.
+   *
+   * <p>Types nobody chose are absent rather than zero, matching {@code
+   * PostReactionService#getReactionSummary}: the client renders one chip per entry and would have
+   * to filter a zero out again.
+   *
+   * <p><b>Rewritten in the cache on every reaction</b> — see {@code
+   * NewsfeedService.updateCachedReactionSummary}. The feed never falls back to Postgres, so a
+   * breakdown written once at fan-out would disagree with the {@code likeCount} sitting beside it
+   * the moment anybody reacted, which is worse than not sending one. Null on entries cached
+   * before this field existed; a client has to treat that as "not known yet", not as "no
+   * reactions" — {@code likeCount} remains the authoritative total.
+   */
+  private Map<ReactionType, Long> reactionSummary;
 }

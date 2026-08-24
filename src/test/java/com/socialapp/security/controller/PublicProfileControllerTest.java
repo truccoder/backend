@@ -21,6 +21,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
+import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -112,12 +114,17 @@ class PublicProfileControllerTest {
                   "ada",
                   "Ada Lovelace",
                   "http://cdn.example.com/ada.png",
+                  null,
                   120,
                   OffsetDateTime.parse("2026-01-01T00:00:00Z"),
                   2,
                   "Contributor",
                   100,
                   1000,
+                  "Senior Backend Engineer",
+                  PrimaryRole.BACKEND,
+                  SeniorityLevel.SENIOR,
+                  8,
                   List.of("Spring Boot", "Caching")));
 
       // When / Then — levelName and nextLevelMin travel with the score, because the design system
@@ -134,7 +141,55 @@ class PublicProfileControllerTest {
           .andExpect(jsonPath("$.currentLevelMin").value(100))
           .andExpect(jsonPath("$.nextLevelMin").value(1000))
           .andExpect(jsonPath("$.verifiedSkills[0]").value("Spring Boot"))
-          .andExpect(jsonPath("$.verifiedSkills[1]").value("Caching"));
+          .andExpect(jsonPath("$.verifiedSkills[1]").value("Caching"))
+          // The role line: four fields, on a payload that is built once per request anyway
+          .andExpect(jsonPath("$.jobTitle").value("Senior Backend Engineer"))
+          .andExpect(jsonPath("$.primaryRole").value("BACKEND"))
+          .andExpect(jsonPath("$.seniorityLevel").value("SENIOR"))
+          .andExpect(jsonPath("$.yearsOfExperience").value(8))
+          // ...and the half of the professional profile that stays private. These were declared
+          // so the Gemini explainer could tailor its answers, not to be published on a page
+          // anybody can open.
+          .andExpect(jsonPath("$.workHistory").doesNotExist())
+          .andExpect(jsonPath("$.interestedDomains").doesNotExist())
+          .andExpect(jsonPath("$.knownTechStack").doesNotExist())
+          .andExpect(jsonPath("$.explanationStyle").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("shouldOmitTheRoleLine_whenTheUserHasNoProfessionalProfile")
+    void shouldOmitRoleLineWhenAbsent() throws Exception {
+      // Given - most accounts have never filled the form in, and the client leaves the slot out
+      // rather than rendering an empty line
+      mockAuthenticatedAs(currentUser);
+      when(profileService.getPublicProfile(SUBJECT_USERNAME))
+          .thenReturn(
+              new PublicProfileResponse(
+                  SUBJECT_ID,
+                  "ada",
+                  "Ada Lovelace",
+                  null,
+                  null,
+                  0,
+                  OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                  1,
+                  "Newcomer",
+                  0,
+                  100,
+                  null,
+                  null,
+                  null,
+                  null,
+                  List.of()));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(url(SUBJECT_USERNAME))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.jobTitle").doesNotExist())
+          .andExpect(jsonPath("$.primaryRole").doesNotExist())
+          .andExpect(jsonPath("$.seniorityLevel").doesNotExist())
+          .andExpect(jsonPath("$.yearsOfExperience").doesNotExist());
     }
 
     @Test
@@ -149,12 +204,17 @@ class PublicProfileControllerTest {
                   "ada",
                   "Ada Lovelace",
                   null,
+                  null,
                   0,
                   OffsetDateTime.parse("2026-01-01T00:00:00Z"),
                   1,
                   "Newcomer",
                   0,
                   100,
+                  null,
+                  null,
+                  null,
+                  null,
                   List.of()));
 
       // When / Then — the fields that would turn this endpoint into a mass email disclosure
@@ -190,12 +250,17 @@ class PublicProfileControllerTest {
                   SUBJECT_USERNAME,
                   "Ada Lovelace",
                   null,
+                  null,
                   0,
                   OffsetDateTime.parse("2026-01-01T00:00:00Z"),
                   1,
                   "Newcomer",
                   0,
                   100,
+                  null,
+                  null,
+                  null,
+                  null,
                   List.of()));
 
       // When / Then — this is the endpoint a shared /u/{username} link lands on, so it has to

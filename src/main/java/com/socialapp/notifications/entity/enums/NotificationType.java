@@ -22,6 +22,10 @@ package com.socialapp.notifications.entity.enums;
  *
  * <p>Building the share feature means adding {@code POST_SHARED} back here together with {@code
  * FeedPostDataDto.shareCount}, which was dropped in the same pass for the same reason.
+ *
+ * <p>Adding a constant is the safe direction and needs no migration — the column is a plain {@code
+ * varchar(50)} with no check constraint — but it widens {@code NotificationResponseDto.type} in the
+ * OpenAPI contract, so the generated client has to be regenerated in step.
  */
 public enum NotificationType {
   POST_LIKED,
@@ -41,6 +45,24 @@ public enum NotificationType {
 
   POST_COMMENTED,
   POST_TAGGED,
+
+  /**
+   * Somebody wrote {@code @handle} in a comment and the handle is the caller's.
+   *
+   * <p>The comment-level counterpart of {@link #POST_TAGGED}, and the same asymmetry that comment
+   * reactions closed one release earlier: a post has always had structured tagging ({@code
+   * CreatePostRequest.taggedUserIds}) and a notification to go with it, while comments — where
+   * people actually address each other by name — had neither. A reply that named you was
+   * discoverable only by reopening the post.
+   *
+   * <p>Its own constant rather than reusing {@code POST_TAGGED} with a {@code referenceType} of
+   * "COMMENT", for the reason {@link #COMMENT_LIKED} spells out: the client routes on the type, so
+   * sharing one would open the post instead of the reply, and the two could not be worded
+   * differently in a notification list.
+   *
+   * <p>{@code referenceId} is the COMMENT id — see {@code CommentService#notifyMentionedUsers}.
+   */
+  USER_MENTIONED,
   FRIEND_REQUEST,
   FRIEND_ACCEPTED,
   EVENT_RSVP,

@@ -1,5 +1,12 @@
 package com.socialapp.posts.service;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -9,14 +16,17 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.CommentReactionEntity;
 import com.socialapp.posts.entity.CommentReactionId;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.security.dto.PublicUserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -41,6 +51,61 @@ public class CommentReactionService {
   private final UserBanService userBanService;
   private final NotificationService notificationService;
   private final UserRepository userRepository;
+
+  /**
+   * Who reacted to a comment, one page at a time, optionally narrowed to one reaction type.
+   *
+   * <p>The read half of the asymmetry {@code B14} left behind. A post has had three ways to be
+   * asked about its reactions — {@code /summary}, {@code /me} and this list — while a comment had
+   * none at all: it could be reacted to and never queried, so "who thought this was insightful?"
+   * was answerable one level up and not one level down, on the same screen.
+   *
+   * <p>Returns {@link PublicUserResponse}, never {@code UserResponse}, for the same reason the
+   * post path does: the other type carries an email address, and this list is readable by anyone
+   * who can read the post.
+   */
+  @Transactional(readOnly = true)
+  public ReactorPageResponseDto getReactors(
+      Integer viewerId,
+      Integer postId,
+      Integer commentId,
+      ReactionType type,
+      Integer cursor,
+      int limit) {
+    // The same gate the write paths use, and load-bearing here for a different reason: without it
+    // this endpoint would enumerate everyone who reacted to a comment on a FRIENDS-only post,
+    // which is that post's audience list in all but name.
+    requireVisibleComment(viewerId, postId, commentId);
+
+    // limit + 1 to detect a further page without a second count query over the same rows.
+    List<Integer> reactorIds =
+        commentReactionRepository.findReactorIds(
+            commentId, type, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = reactorIds.size() > limit;
+    List<Integer> pageIds = hasMore ? reactorIds.subList(0, limit) : reactorIds;
+    Integer nextCursor = hasMore ? pageIds.get(pageIds.size() - 1) : null;
+
+    Map<Integer, UserEntity> usersById =
+        userRepository.findAllById(pageIds).stream()
+            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+
+    // Ordered by the id list rather than by whatever order findAllById returned; a reactor whose
+    // user row is gone is skipped rather than rendered as a blank.
+    List<PublicUserResponse> reactors =
+        pageIds.stream()
+            .map(usersById::get)
+            .filter(Objects::nonNull)
+            .map(PublicUserResponse::from)
+            .toList();
+
+    long totalCount =
+        Objects.isNull(type)
+            ? commentReactionRepository.countByIdCommentId(commentId)
+            : commentReactionRepository.countByIdCommentIdAndReactionType(commentId, type);
+
+    return new ReactorPageResponseDto(reactors, nextCursor, hasMore, totalCount);
+  }
 
   @Transactional
   public void upsertReaction(

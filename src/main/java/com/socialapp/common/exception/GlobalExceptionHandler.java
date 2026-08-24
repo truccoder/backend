@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.socialapp.moderation.exception.ContentViolationException;
@@ -289,6 +290,27 @@ public class GlobalExceptionHandler {
     writeLog(ex, request);
 
     String message = format("Missing required header '%s'", ex.getHeaderName());
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message(message)
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  // Covers a required @RequestPart that's omitted or sent under a different part name (e.g. a
+  // client posting to /v1/api/media with its files under "image" instead of "files"). The sibling
+  // of the two handlers above, and it fell through to the generic Exception handler for the same
+  // reason they used to: a mis-named multipart part is the caller's mistake, and reporting it as
+  // 500 sends a client looking for a server fault that is not there.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(MissingServletRequestPartException.class)
+  public ErrorResponseDto handle(
+      MissingServletRequestPartException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    String message = format("Missing required file part '%s'", ex.getRequestPartName());
 
     return ErrorResponseDto.builder()
         .code(BAD_REQUEST.value())

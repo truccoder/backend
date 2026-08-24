@@ -31,6 +31,7 @@ import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
@@ -138,6 +139,173 @@ class CommentServiceTest {
       verify(notificationService).send(notificationCaptor.capture());
       assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(2);
       assertThat(notificationCaptor.getValue().getBody()).contains("Alice");
+    }
+
+    @Test
+    @DisplayName("should notify a user named with @handle in the comment body")
+    void shouldNotifyMentionedUser() {
+      // Given - the other half of a tag. The clients write the handle into content when somebody
+      // taps Reply and render it as a link, so the mention was already real and already
+      // clickable; it just reached nobody.
+      UserEntity mentioned = mentionedUser(77, "ada");
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(java.util.Set.of("ada")))
+          .thenReturn(java.util.List.of(mentioned));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("@ada đúng như bạn nói");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then - two notifications: POST_COMMENTED to the post author, USER_MENTIONED to Ada
+      verify(notificationService, times(2)).send(notificationCaptor.capture());
+      SendNotificationRequest mention =
+          notificationCaptor.getAllValues().stream()
+              .filter(n -> NotificationType.USER_MENTIONED.equals(n.getType()))
+              .findFirst()
+              .orElseThrow();
+      assertThat(mention.getRecipientId()).isEqualTo(77);
+      assertThat(mention.getActorId()).isEqualTo(AUTHOR_ID);
+      assertThat(mention.getBody()).contains("Alice");
+      // The COMMENT id and "COMMENT", not the post: a thread runs to hundreds of replies and the
+      // notification has to open at the one that named you
+      assertThat(mention.getReferenceType()).isEqualTo("COMMENT");
+    }
+
+    @Test
+    @DisplayName("should silently drop a handle nobody holds")
+    void shouldIgnoreUnknownHandles() {
+      // Given - MentionScanner reports what LOOKS like a mention; only the user table can say
+      // whether anybody holds it. Writing @nobody is a comment, not an error.
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(any())).thenReturn(java.util.List.of());
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("@nobody có ở đây không");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then - only the post author hears about it
+      verify(notificationService, times(1)).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.POST_COMMENTED);
+    }
+
+    @Test
+    @DisplayName("should not look anything up when the comment names nobody")
+    void shouldNotQuery_whenThereAreNoMentions() {
+      // Given - the common case. A lookup per comment for text with no @ in it would be a query
+      // added to the write path of every comment in the product.
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("không có tag nào");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(userRepository, never()).findAllByUsernameLowerIn(any());
+    }
+
+    @Test
+    @DisplayName("should not notify the commenter for naming themselves")
+    void shouldNotNotifySelfMention() {
+      // Given - naming yourself in your own comment is not news
+      UserEntity self = mentionedUser(AUTHOR_ID, "author_" + AUTHOR_ID);
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(any())).thenReturn(java.util.List.of(self));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("@author_1 tự nhắc mình");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then - only POST_COMMENTED went out
+      verify(notificationService, times(1)).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.POST_COMMENTED);
+    }
+
+    @Test
+    @DisplayName("should not ring the post author twice for one comment that names them")
+    void shouldNotDoubleNotifyThePostAuthor() {
+      // Given - notifyPostAuthor has just sent them POST_COMMENTED for this same comment, so a
+      // mention on top would be two bells for one act
+      UserEntity postAuthor = mentionedUser(2, "bob");
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(any()))
+          .thenReturn(java.util.List.of(postAuthor));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("@bob cảm ơn bài viết");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(notificationService, times(1)).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.POST_COMMENTED);
+    }
+
+    @Test
+    @DisplayName("should still notify the post author's mention when they commented themselves")
+    void shouldNotifyMentionOfPostAuthorWhenNoPostCommentedWasSent() {
+      // Given - the author commenting under their own post gets no POST_COMMENTED, so the skip
+      // above must not fire: a mention of a THIRD party is then the only signal in play. Here the
+      // post author is the commenter and Ada is the one named.
+      UserEntity mentioned = mentionedUser(77, "ada");
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(any())).thenReturn(java.util.List.of(mentioned));
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("bổ sung thêm, @ada có ý kiến gì không");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then - exactly one notification, and it is the mention
+      verify(notificationService, times(1)).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.USER_MENTIONED);
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(77);
+    }
+
+    @Test
+    @DisplayName("should resolve every named handle in one query, not one per handle")
+    void shouldResolveMentionsInOneQuery() {
+      // Given - a comment may name up to ten people; looking each one up in turn would be ten
+      // round trips on the write path of every comment containing an @
+      when(userBanService.isUserBanned(AUTHOR_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(sampleUser("Alice")));
+      when(userRepository.findAllByUsernameLowerIn(any())).thenReturn(java.util.List.of());
+      CreateCommentRequestDto request = new CreateCommentRequestDto();
+      request.setContent("@ada @bob @cleo xem giúp");
+
+      // When
+      commentService.createComment(AUTHOR_ID, POST_ID, request);
+
+      // Then
+      verify(userRepository, times(1))
+          .findAllByUsernameLowerIn(java.util.Set.of("ada", "bob", "cleo"));
     }
 
     @Test
@@ -572,6 +740,14 @@ class CommentServiceTest {
     }
   }
 
+  private static UserEntity mentionedUser(Integer id, String username) {
+    UserEntity user = new UserEntity();
+    user.setId(id);
+    user.setUsername(username);
+    user.setFullName("Mentioned " + id);
+    return user;
+  }
+
   private static UserEntity sampleUser(String fullName) {
     UserEntity user = new UserEntity();
     user.setId(AUTHOR_ID);
@@ -660,6 +836,38 @@ class CommentServiceTest {
     }
 
     @Test
+    @DisplayName("should attach the per-type breakdown behind the total")
+    void shouldAttachReactionSummary() {
+      // Given - the worse half of the asymmetry: a post could always be asked
+      // GET /posts/{id}/reactions/summary, a comment had no read endpoint at all, so once the
+      // reaction row lost its labels the number beside a single glyph became unanswerable
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+          .thenReturn(java.util.List.of(comment(1, AUTHOR_ID), comment(2, AUTHOR_ID)));
+      when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
+      when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
+          .thenReturn(java.util.List.of(sampleUser("Author")));
+      when(commentReactionRepository.countByCommentIds(java.util.List.of(1, 2)))
+          .thenReturn(java.util.Map.of(1, 3L));
+      when(commentReactionRepository.countByTypeForCommentIds(java.util.List.of(1, 2)))
+          .thenReturn(
+              java.util.Map.of(1, java.util.Map.of(ReactionType.LIKE, 2L, ReactionType.CLAP, 1L)));
+      when(commentReactionRepository.findMyReactions(5, java.util.List.of(1, 2)))
+          .thenReturn(java.util.Map.of());
+
+      // When
+      var comments = commentService.getComments(5, POST_ID);
+
+      // Then - the breakdown adds up to the total beside it, and a comment nobody reacted to gets
+      // an empty map rather than null: null would be indistinguishable from "not loaded"
+      assertThat(comments.get(0).getReactionSummary())
+          .containsEntry(ReactionType.LIKE, 2L)
+          .containsEntry(ReactionType.CLAP, 1L);
+      assertThat(comments.get(1).getReactionSummary()).isEmpty();
+    }
+
+    @Test
     @DisplayName("should read both maps in one batch each, never once per comment")
     void shouldQueryOncePerThreadNotOncePerComment() {
       // Given — a thread has no upper bound, so a count inside the mapping loop is the N+1 that
@@ -674,13 +882,17 @@ class CommentServiceTest {
       when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
           .thenReturn(java.util.List.of(sampleUser("Author")));
       when(commentReactionRepository.countByCommentIds(any())).thenReturn(java.util.Map.of());
+      when(commentReactionRepository.countByTypeForCommentIds(any()))
+          .thenReturn(java.util.Map.of());
       when(commentReactionRepository.findMyReactions(any(), any())).thenReturn(java.util.Map.of());
 
       // When
       commentService.getComments(5, POST_ID);
 
-      // Then
+      // Then - three queries for the thread, not three per comment
       verify(commentReactionRepository, times(1)).countByCommentIds(java.util.List.of(1, 2, 3));
+      verify(commentReactionRepository, times(1))
+          .countByTypeForCommentIds(java.util.List.of(1, 2, 3));
       verify(commentReactionRepository, times(1)).findMyReactions(5, java.util.List.of(1, 2, 3));
     }
 

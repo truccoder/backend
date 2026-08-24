@@ -28,6 +28,10 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.UserProfileCache;
+import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
+import com.socialapp.knowledge.entity.enums.SeniorityLevel;
+import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.roadmap.enums.VerificationStatus;
 import com.socialapp.roadmap.repository.UserRoadmapProgressRepository;
 import com.socialapp.security.dto.ChangePasswordRequestDto;
@@ -57,6 +61,7 @@ class ProfileServiceTest {
   @Mock private UserProfileCache userProfileCache;
   @Mock private UserRoadmapProgressRepository progressRepository;
   @Mock private RefreshTokenRepository refreshTokenRepository;
+  @Mock private UserProfessionalProfileRepository professionalProfileRepository;
 
   @InjectMocks private ProfileService profileService;
 
@@ -104,6 +109,57 @@ class ProfileServiceTest {
     }
 
     @Test
+    @DisplayName("should save a cover image url when one is supplied")
+    void shouldSaveTheCoverImageUrl() {
+      // Given - the URL comes from POST /v1/api/media; there is no multipart cover endpoint, and
+      // deliberately so (a second copy of MediaService's upload rules)
+      UserEntity user = user(USER_ID);
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+      // When
+      UserResponse response =
+          profileService.updateProfile(
+              USER_ID, new UpdateProfileRequest("New Name", "http://minio/post-media/c.png"));
+
+      // Then
+      assertThat(user.getCoverImageUrl()).isEqualTo("http://minio/post-media/c.png");
+      assertThat(response.coverImageUrl()).isEqualTo("http://minio/post-media/c.png");
+    }
+
+    @Test
+    @DisplayName("should leave an existing cover alone when the field is absent")
+    void shouldNotWipeTheCover_whenFieldIsNull() {
+      // Given - this is the B12 lesson applied before it can bite: every caller that existed
+      // before the cover field was added sends fullName alone, so a copy-nulls rule would have
+      // meant the first name edit after setting a cover silently destroyed it
+      UserEntity user = user(USER_ID);
+      user.setCoverImageUrl("http://minio/post-media/existing.png");
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+      // When
+      profileService.updateProfile(USER_ID, new UpdateProfileRequest("New Name", null));
+
+      // Then
+      assertThat(user.getCoverImageUrl()).isEqualTo("http://minio/post-media/existing.png");
+    }
+
+    @Test
+    @DisplayName("should clear the cover when an empty string is sent")
+    void shouldClearTheCover_whenFieldIsEmpty() {
+      // Given - null and empty must not mean the same thing, or there is no way to remove a
+      // cover once set
+      UserEntity user = user(USER_ID);
+      user.setCoverImageUrl("http://minio/post-media/existing.png");
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+      // When
+      profileService.updateProfile(USER_ID, new UpdateProfileRequest("New Name", "  "));
+
+      // Then - stored as null, not as an empty string: the clients branch on absence
+      assertThat(user.getCoverImageUrl()).isNull();
+    }
+
+    @Test
     @DisplayName("should reject when the user does not exist")
     void shouldThrowNotFoundException_whenUserDoesNotExist() {
       // Given
@@ -132,7 +188,7 @@ class ProfileServiceTest {
 
       // When
       UserResponse response =
-          profileService.updateProfile(USER_ID, new UpdateProfileRequest("New Name"));
+          profileService.updateProfile(USER_ID, new UpdateProfileRequest("New Name", null));
 
       // Then
       assertThat(user.getFullName()).isEqualTo("New Name");
@@ -148,7 +204,8 @@ class ProfileServiceTest {
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> profileService.updateProfile(USER_ID, new UpdateProfileRequest("X")))
+      assertThatThrownBy(
+              () -> profileService.updateProfile(USER_ID, new UpdateProfileRequest("X", null)))
           .isInstanceOf(NotFoundException.class);
     }
   }
@@ -427,6 +484,80 @@ class ProfileServiceTest {
       // Then
       assertThat(response.levelName()).isEqualTo("Elite");
       assertThat(response.nextLevelMin()).isNull();
+    }
+
+    @Test
+    @DisplayName("should carry the four role-line fields from the professional profile")
+    void shouldCarryTheRoleLineFields() {
+      // Given - the design system's identity block expects a role line between the reputation and
+      // the handle, and the data existed all along in t_user_professional_profiles. What was
+      // missing was any way to read somebody else's: the owner-facing endpoint takes no userId
+      // and its DTO says so in its javadoc.
+      UserProfessionalProfileEntity professional = new UserProfessionalProfileEntity();
+      professional.setUserId(USER_ID);
+      professional.setJobTitle("Senior Backend Engineer");
+      professional.setPrimaryRole(PrimaryRole.BACKEND);
+      professional.setSeniorityLevel(SeniorityLevel.SENIOR);
+      professional.setYearsOfExperience(8);
+      when(userRepository.findByUsernameIgnoreCase(USERNAME))
+          .thenReturn(Optional.of(user(USER_ID)));
+      when(professionalProfileRepository.findById(USER_ID)).thenReturn(Optional.of(professional));
+
+      // When
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then
+      assertThat(response.jobTitle()).isEqualTo("Senior Backend Engineer");
+      assertThat(response.primaryRole()).isEqualTo(PrimaryRole.BACKEND);
+      assertThat(response.seniorityLevel()).isEqualTo(SeniorityLevel.SENIOR);
+      assertThat(response.yearsOfExperience()).isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("should never publish the private half of the professional profile")
+    void shouldNotPublishTheRestOfTheProfessionalProfile() {
+      // Given - workHistory, interestedDomains and knownTechStack are somebody's actual
+      // employment history, declared so the Gemini explainer could tailor its answers. Copying
+      // the whole record over would have turned an owner-facing form into a public resume nobody
+      // consented to; explanationStyle would leak how a person likes to be taught.
+      assertThat(PublicProfileResponse.class.getRecordComponents())
+          .extracting(java.lang.reflect.RecordComponent::getName)
+          .doesNotContain("workHistory", "interestedDomains", "knownTechStack", "explanationStyle");
+    }
+
+    @Test
+    @DisplayName("should leave the role line null for a user who never filled the form in")
+    void shouldLeaveRoleLineNull_whenNoProfessionalProfile() {
+      // Given - most accounts. The row is absent, not empty, so this is an Optional to read four
+      // fields out of rather than a row to require.
+      when(userRepository.findByUsernameIgnoreCase(USERNAME))
+          .thenReturn(Optional.of(user(USER_ID)));
+      when(professionalProfileRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+      // When
+      PublicProfileResponse response = profileService.getPublicProfile(USERNAME);
+
+      // Then - the client leaves the slot out entirely rather than rendering an empty line
+      assertThat(response.jobTitle()).isNull();
+      assertThat(response.primaryRole()).isNull();
+      assertThat(response.seniorityLevel()).isNull();
+      assertThat(response.yearsOfExperience()).isNull();
+    }
+
+    @Test
+    @DisplayName("should keep yearsOfExperience null rather than defaulting it to zero")
+    void shouldNotDefaultYearsToZero() {
+      // Given - a profile that exists but never said how long. "Has not said" and "has none" are
+      // different claims and the client renders them differently.
+      UserProfessionalProfileEntity professional = new UserProfessionalProfileEntity();
+      professional.setUserId(USER_ID);
+      professional.setJobTitle("Student");
+      when(userRepository.findByUsernameIgnoreCase(USERNAME))
+          .thenReturn(Optional.of(user(USER_ID)));
+      when(professionalProfileRepository.findById(USER_ID)).thenReturn(Optional.of(professional));
+
+      // When / Then
+      assertThat(profileService.getPublicProfile(USERNAME).yearsOfExperience()).isNull();
     }
 
     @Test

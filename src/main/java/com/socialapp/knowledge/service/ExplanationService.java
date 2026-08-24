@@ -1,6 +1,7 @@
 package com.socialapp.knowledge.service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -58,7 +59,8 @@ public class ExplanationService {
    * PostVisibilityService.isVisibleTo} reads scalar columns, and {@code VaultNoteEntity.tags} and
    * {@code links} are jsonb columns that arrive with the row.
    */
-  public ExplanationResponseDto explainPost(Integer userId, Integer postId, String feedbackNote) {
+  public ExplanationResponseDto explainPost(
+      Integer userId, Integer postId, String feedbackNote, String language) {
     PostEntity post =
         postRepository
             .findById(postId)
@@ -84,7 +86,7 @@ public class ExplanationService {
     }
 
     String vaultContext = loadVaultContext(userId);
-    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext);
+    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
     GeminiExplanationResult parsed = parseGeminiResponse(geminiResponse);
 
@@ -160,7 +162,8 @@ public class ExplanationService {
       String postContent,
       UserProfessionalProfileEntity profile,
       String feedbackNote,
-      String vaultContext) {
+      String vaultContext,
+      String language) {
     StringBuilder sb = new StringBuilder();
 
     sb.append(
@@ -173,7 +176,18 @@ public class ExplanationService {
     sb.append("3. Each annotation must reference which part of the original it explains\n");
     sb.append("4. Use analogies appropriate for the reader's experience level\n");
     sb.append("5. If a concept has prerequisites, list them explicitly\n");
-    sb.append("6. Respond in the same language as the original post\n");
+    String targetLanguage = resolveLanguage(language);
+    if (Objects.isNull(targetLanguage)) {
+      sb.append("6. Respond in the same language as the original post\n");
+    } else {
+      // Overrides rule 6 rather than being appended after it: two instructions that can disagree
+      // ("match the post" and "answer in Vietnamese") leave the model to pick, and it picked the
+      // post's language often enough that the reader's choice looked ignored at random.
+      sb.append("6. Write EVERY field of your response entirely in ")
+          .append(targetLanguage)
+          .append(", whatever language the original post is written in. Do not translate the")
+          .append(" original post itself — it is quoted below for reference only.\n");
+    }
     sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n\n");
 
     sb.append("=== READER PROFILE ===\n");
@@ -230,6 +244,28 @@ public class ExplanationService {
         """);
 
     return sb.toString();
+  }
+
+  /**
+   * Turns a caller-supplied language tag into a language name the prompt can use, or {@code null}
+   * when the caller stated nothing usable.
+   *
+   * <p>The tag is resolved through {@link Locale} and it is the JDK's <em>English display name</em>
+   * that goes into the prompt, never the caller's own text. That is the second half of the
+   * validation on {@code ExplainRequestDto.language}: even a tag that satisfies the pattern only
+   * reaches Gemini as a word taken from the JDK's language table.
+   *
+   * <p>A well-formed tag the JDK has no name for ({@code "zz"}) comes back as the tag itself. That
+   * is left alone rather than rejected: the pattern has already limited it to letters, digits and
+   * hyphens, so nothing dangerous survives that far, and a request naming a language nobody can
+   * name is not worth a 400 when the model will make a reasonable job of a bare tag.
+   */
+  private String resolveLanguage(String language) {
+    if (Objects.isNull(language) || language.isBlank()) {
+      return null;
+    }
+    String displayName = Locale.forLanguageTag(language).getDisplayName(Locale.ENGLISH);
+    return displayName.isBlank() ? null : displayName;
   }
 
   private String explanationStyleInstruction(ExplanationStyle style) {

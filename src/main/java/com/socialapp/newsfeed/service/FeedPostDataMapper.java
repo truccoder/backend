@@ -25,6 +25,7 @@ import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.reputation.RepLevel;
@@ -79,11 +80,16 @@ public class FeedPostDataMapper {
         post,
         author,
         (int) postReactionRepository.countByIdPostId(post.getId()),
-        (int) commentRepository.countByPostId(post.getId()));
+        (int) commentRepository.countByPostId(post.getId()),
+        postReactionRepository.countByType(post.getId()));
   }
 
   private FeedPostDataDto build(
-      PostEntity post, UserEntity author, int likeCount, int commentCount) {
+      PostEntity post,
+      UserEntity author,
+      int likeCount,
+      int commentCount,
+      Map<ReactionType, Long> reactionSummary) {
     List<Integer> taggedUserIds =
         Objects.isNull(post.getTags())
             ? List.of()
@@ -131,6 +137,10 @@ public class FeedPostDataMapper {
                 : null)
         .likeCount(likeCount)
         .commentCount(commentCount)
+        // An empty map, never null: a post nobody has reacted to has a known breakdown. Null is
+        // reserved for cache entries written before this field existed, where the client genuinely
+        // does not know — see FeedPostDataDto#reactionSummary.
+        .reactionSummary(reactionSummary)
         .createdAt(post.getCreatedAt())
         .updatedAt(editedAt(post))
         .build();
@@ -166,12 +176,12 @@ public class FeedPostDataMapper {
   }
 
   /**
-   * Maps a whole page of posts, with the author lookups and the two counters done in one query
+   * Maps a whole page of posts, with the author lookups and the three counters done in one query
    * each instead of one per row.
    *
-   * <p>The single-post overloads re-read {@code likeCount}/{@code commentCount} per call, which is
-   * right for fan-out (one post at a time) and wrong for a page: at twenty posts that is forty
-   * extra round trips for two numbers. Book summaries are still loaded per book post — only that
+   * <p>The single-post overloads re-read {@code likeCount}/{@code commentCount}/{@code
+   * reactionSummary} per call, which is right for fan-out (one post at a time) and wrong for a
+   * page: at twenty posts that is sixty extra round trips for three aggregates. Book summaries are still loaded per book post — only that
    * post type pays for it, and the rating breakdown behind it is its own aggregate.
    *
    * <p>Covers are signed here, because every caller of this method is serving a response.
@@ -183,6 +193,8 @@ public class FeedPostDataMapper {
 
     List<Integer> postIds = posts.stream().map(PostEntity::getId).toList();
     Map<Integer, Long> likeCounts = postReactionRepository.countByPostIds(postIds);
+    Map<Integer, Map<ReactionType, Long>> reactionSummaries =
+        postReactionRepository.countByTypeForPostIds(postIds);
     Map<Integer, Long> commentCounts = commentRepository.countByPostIds(postIds);
     Map<Integer, UserEntity> authorsById =
         userRepository
@@ -204,7 +216,8 @@ public class FeedPostDataMapper {
               post,
               author,
               likeCounts.getOrDefault(post.getId(), 0L).intValue(),
-              commentCounts.getOrDefault(post.getId(), 0L).intValue());
+              commentCounts.getOrDefault(post.getId(), 0L).intValue(),
+              reactionSummaries.getOrDefault(post.getId(), Map.of()));
       signBookCover(data);
       page.add(data);
     }

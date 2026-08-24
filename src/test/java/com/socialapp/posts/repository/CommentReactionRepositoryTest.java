@@ -1,6 +1,7 @@
 package com.socialapp.posts.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 import java.util.List;
 import java.util.Map;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.AbstractIntegrationTest;
@@ -82,6 +84,145 @@ class CommentReactionRepositoryTest extends AbstractIntegrationTest {
     reaction.setId(new CommentReactionId(userId, commentId));
     reaction.setReactionType(type);
     commentReactionRepository.saveAndFlush(reaction);
+  }
+
+  // =====================================================================
+  // countByTypeForCommentIds
+  // =====================================================================
+
+  @Nested
+  @DisplayName("countByTypeForCommentIds")
+  class CountByTypeForCommentIdsTests {
+
+    @Test
+    @DisplayName("should break the total down by reaction type, per comment")
+    void shouldGroupByCommentAndType() {
+      // Given - the same rows countByCommentIds sees as "2 and 1". The breakdown is what a
+      // reaction row can no longer say for itself now that the text labels are gone.
+      react(authorId, commentA, ReactionType.LIKE);
+      react(readerId, commentA, ReactionType.INSIGHT);
+      react(readerId, commentB, ReactionType.CLAP);
+
+      // When
+      Map<Integer, Map<ReactionType, Long>> summaries =
+          commentReactionRepository.countByTypeForCommentIds(List.of(commentA, commentB));
+
+      // Then
+      assertThat(summaries.get(commentA))
+          .containsEntry(ReactionType.LIKE, 1L)
+          .containsEntry(ReactionType.INSIGHT, 1L)
+          .hasSize(2);
+      assertThat(summaries.get(commentB)).containsExactly(entry(ReactionType.CLAP, 1L));
+    }
+
+    @Test
+    @DisplayName("should add up several reactions of the same type on one comment")
+    void shouldSumWithinAType() {
+      // Given
+      react(authorId, commentA, ReactionType.LIKE);
+      react(readerId, commentA, ReactionType.LIKE);
+
+      // When
+      Map<Integer, Map<ReactionType, Long>> summaries =
+          commentReactionRepository.countByTypeForCommentIds(List.of(commentA));
+
+      // Then
+      assertThat(summaries.get(commentA)).containsExactly(entry(ReactionType.LIKE, 2L));
+    }
+
+    @Test
+    @DisplayName("should leave out a comment nobody reacted to, rather than mapping it to zero")
+    void shouldOmitUnreactedComments() {
+      // Given
+      react(authorId, commentA, ReactionType.LIKE);
+
+      // When
+      Map<Integer, Map<ReactionType, Long>> summaries =
+          commentReactionRepository.countByTypeForCommentIds(List.of(commentA, commentB));
+
+      // Then - the caller substitutes an empty map, and a client renders one chip per entry, so a
+      // zero would be noise it has to filter out again
+      assertThat(summaries).containsOnlyKeys(commentA);
+    }
+
+    @Test
+    @DisplayName("should return an empty map for an empty id list, not raise a syntax error")
+    void shouldGuardTheEmptyList() {
+      // Given / When / Then - "IN ()" is a syntax error in Postgres, and an unanswered post is
+      // the ordinary case. Only a real database can prove the guard is needed.
+      assertThat(commentReactionRepository.countByTypeForCommentIds(List.of())).isEmpty();
+    }
+  }
+
+  // =====================================================================
+  // findReactorIds
+  // =====================================================================
+
+  @Nested
+  @DisplayName("findReactorIds")
+  class FindReactorIdsTests {
+
+    @Test
+    @DisplayName("should return the reactors of one comment, ordered by user id")
+    void shouldReturnReactorsOrderedById() {
+      // Given - ordered by user id because that is the cursor column: this table's key is
+      // (userId, commentId) and createdAt has no tiebreaker
+      react(readerId, commentA, ReactionType.LIKE);
+      react(authorId, commentA, ReactionType.CLAP);
+
+      // When
+      List<Integer> reactors =
+          commentReactionRepository.findReactorIds(commentA, null, null, PageRequest.of(0, 10));
+
+      // Then
+      assertThat(reactors)
+          .containsExactly(Math.min(authorId, readerId), Math.max(authorId, readerId));
+    }
+
+    @Test
+    @DisplayName("should narrow to one reaction type when asked")
+    void shouldFilterByType() {
+      // Given
+      react(readerId, commentA, ReactionType.LIKE);
+      react(authorId, commentA, ReactionType.CLAP);
+
+      // When
+      List<Integer> reactors =
+          commentReactionRepository.findReactorIds(
+              commentA, ReactionType.CLAP, null, PageRequest.of(0, 10));
+
+      // Then
+      assertThat(reactors).containsExactly(authorId);
+    }
+
+    @Test
+    @DisplayName("should resume strictly after the cursor")
+    void shouldResumeAfterCursor() {
+      // Given
+      react(readerId, commentA, ReactionType.LIKE);
+      react(authorId, commentA, ReactionType.LIKE);
+      int first = Math.min(authorId, readerId);
+      int second = Math.max(authorId, readerId);
+
+      // When
+      List<Integer> reactors =
+          commentReactionRepository.findReactorIds(commentA, null, first, PageRequest.of(0, 10));
+
+      // Then - strictly greater than, so the cursor row is not served twice
+      assertThat(reactors).containsExactly(second);
+    }
+
+    @Test
+    @DisplayName("should not leak reactors of a different comment")
+    void shouldScopeToTheComment() {
+      // Given
+      react(readerId, commentB, ReactionType.LIKE);
+
+      // When / Then
+      assertThat(
+              commentReactionRepository.findReactorIds(commentA, null, null, PageRequest.of(0, 10)))
+          .isEmpty();
+    }
   }
 
   // =====================================================================

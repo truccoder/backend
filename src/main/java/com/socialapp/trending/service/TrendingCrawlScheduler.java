@@ -61,6 +61,10 @@ public class TrendingCrawlScheduler {
             .title(crawled.getTitle())
             .summary(truncate(crawled.getSummary(), 500))
             .url(crawled.getUrl())
+            // Truncated to the column width like the summary above it. An image URL is normally
+            // far shorter than this, but it comes from somebody else's API, and a row lost to a
+            // 2049-character CDN link would take the whole crawl cycle's batch down with it.
+            .imageUrl(truncate(crawled.getImageUrl(), 2048))
             .source(crawled.getSource())
             .sourceId(crawled.getSourceId())
             .category(classification.category())

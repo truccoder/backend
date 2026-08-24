@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -66,6 +67,7 @@ import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
@@ -518,11 +520,11 @@ class NewsfeedServiceTest {
   }
 
   // =====================================================================
-  // updateCachedLikeCount / updateCachedCommentCount
+  // updateCachedReactions / updateCachedCommentCount
   // =====================================================================
 
   @Nested
-  @DisplayName("updateCachedLikeCount / updateCachedCommentCount")
+  @DisplayName("updateCachedReactions / updateCachedCommentCount")
   class UpdateCachedCountersTests {
 
     @Test
@@ -537,10 +539,12 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(any())).thenReturn("{\"likeCount\":5}");
 
       // When
-      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+      newsfeedService.updateCachedReactions(POST_ID, 5, Map.of(ReactionType.INSIGHT, 5L));
 
-      // Then
+      // Then — the total and its breakdown are written together, in one read-modify-write over
+      // the same entry: two calls would leave a window where the chips disagree with the number
       assertThat(cachedPost.getLikeCount()).isEqualTo(5);
+      assertThat(cachedPost.getReactionSummary()).containsEntry(ReactionType.INSIGHT, 5L);
       verify(valueOperations)
           .set(eq("feedpost:" + POST_ID), eq("{\"likeCount\":5}"), eq(Duration.ofDays(7)));
     }
@@ -595,7 +599,7 @@ class NewsfeedServiceTest {
       when(valueOperations.get("feedpost:" + POST_ID)).thenReturn(null);
 
       // When
-      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+      newsfeedService.updateCachedReactions(POST_ID, 5, Map.of());
 
       // Then
       verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
@@ -611,7 +615,7 @@ class NewsfeedServiceTest {
           .thenThrow(new RuntimeException("boom"));
 
       // When / Then — a broken cache entry must not fail the user's like
-      assertThatCode(() -> newsfeedService.updateCachedLikeCount(POST_ID, 5))
+      assertThatCode(() -> newsfeedService.updateCachedReactions(POST_ID, 5, Map.of()))
           .doesNotThrowAnyException();
       verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
     }

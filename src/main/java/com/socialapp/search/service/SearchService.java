@@ -15,6 +15,8 @@ import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
+import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.reputation.RepLevel;
 import com.socialapp.search.dto.BookDto;
@@ -42,6 +44,7 @@ public class SearchService {
   private final BlockQueryService blockQueryService;
   private final UserRepository userRepository;
   private final PostRepository postRepository;
+  private final PostReactionRepository postReactionRepository;
   private final BookRepository bookRepository;
   private final BookStorageService bookStorageService;
 
@@ -226,6 +229,13 @@ public class SearchService {
                 .collect(
                     java.util.stream.Collectors.toMap(BookEntity::getPostId, b -> b, (a, b) -> a));
 
+    // One group-by for the whole page, matching FeedPostDataMapper.toFeedPostDataPage — a search
+    // result renders the same card as a feed row, so it needs the same breakdown, and per-post
+    // counting here would be an N+1 on a list that is already twenty rows wide.
+    Map<Integer, Map<ReactionType, Long>> reactionSummaries =
+        postReactionRepository.countByTypeForPostIds(
+            posts.stream().map(PostEntity::getId).toList());
+
     return posts.stream()
         .map(
             post -> {
@@ -254,6 +264,7 @@ public class SearchService {
                   .pollDetails(post.getPollDetails())
                   .linkDetails(post.getLinkDetails())
                   .book(book != null ? toBookDto(book) : null)
+                  .reactionSummary(reactionSummaries.getOrDefault(post.getId(), Map.of()))
                   .build();
             })
         .toList();

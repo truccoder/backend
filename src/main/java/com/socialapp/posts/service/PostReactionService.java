@@ -143,7 +143,7 @@ public class PostReactionService {
     reaction.setReactionType(request.getReactionType());
 
     postReactionRepository.save(reaction);
-    refreshCachedLikeCount(postId);
+    refreshCachedReactions(postId);
 
     // Guarded by isNewReaction along with the notification and the rep award: swapping LIKE for
     // LOVE on a post you already reacted to is the same single act of engagement, not a second one.
@@ -162,20 +162,26 @@ public class PostReactionService {
       throw new NotFoundException("Reaction not found for this post");
     }
     postReactionRepository.deleteById(reactionId);
-    refreshCachedLikeCount(postId);
+    refreshCachedReactions(postId);
     revokeReactionRep(post, userId);
   }
 
   /**
-   * Pushes the new like total into the feed cache.
+   * Pushes the new reaction total and its per-type breakdown into the feed cache.
    *
    * <p>The feed reads only from Redis and never falls back to Postgres, so without this the
    * counter stays at whatever it was when the post was fanned out — which is why it read 0
    * forever. {@code updatePostCache} existed for this and simply had no caller.
+   *
+   * <p>Both numbers go in one call. The feed now carries the breakdown beside the total, and a
+   * refresh that updated only the total would leave the chips describing the previous state — a
+   * disagreement the reader can see, on the very card they just tapped.
    */
-  private void refreshCachedLikeCount(Integer postId) {
-    newsfeedService.updateCachedLikeCount(
-        postId, (int) postReactionRepository.countByIdPostId(postId));
+  private void refreshCachedReactions(Integer postId) {
+    newsfeedService.updateCachedReactions(
+        postId,
+        (int) postReactionRepository.countByIdPostId(postId),
+        postReactionRepository.countByType(postId));
   }
 
   private void verifyPostExists(Integer postId) {

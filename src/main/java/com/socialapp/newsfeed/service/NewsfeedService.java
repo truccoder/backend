@@ -32,6 +32,7 @@ import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
@@ -232,25 +233,37 @@ public class NewsfeedService {
   }
 
   /**
-   * Rewrites the cached like count for one post.
+   * Rewrites the cached reaction total <b>and</b> its per-type breakdown for one post.
    *
-   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database
-   * is a counter the user never sees. Callers pass a count they have just read from their own
+   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database is
+   * a counter the user never sees. Callers pass values they have just read from their own
    * repository rather than a delta: read-modify-write against Redis is not atomic, and under
-   * concurrent reactions a delta would drift permanently, whereas an absolute value taken from
-   * the authoritative table self-corrects on the very next interaction.
+   * concurrent reactions a delta would drift permanently, whereas absolute values taken from the
+   * authoritative table self-correct on the very next interaction.
+   *
+   * <p><b>One method for both, and not two.</b> The total and the breakdown are two views of the
+   * same rows, so writing them separately means two read-modify-write cycles over the same cache
+   * entry and a window in which the chips visibly disagree with the number beside them. Splitting
+   * them would also make it possible to add a caller that updates one and forgets the other —
+   * which is precisely how the breakdown would rot into something worse than not sending one.
    */
-  public void updateCachedLikeCount(Integer postId, int likeCount) {
-    mutateCachedPost(postId, post -> post.setLikeCount(likeCount));
+  public void updateCachedReactions(
+      Integer postId, int likeCount, Map<ReactionType, Long> reactionSummary) {
+    mutateCachedPost(
+        postId,
+        post -> {
+          post.setLikeCount(likeCount);
+          post.setReactionSummary(reactionSummary);
+        });
   }
 
-  /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
+  /** Rewrites the cached comment count for one post — see {@link #updateCachedReactions}. */
   public void updateCachedCommentCount(Integer postId, int commentCount) {
     mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
   }
 
   /**
-   * Rewrites the cached QNA block for one post — see {@link #updateCachedLikeCount}. Accepting an
+   * Rewrites the cached QNA block for one post — see {@link #updateCachedReactions}. Accepting an
    * answer changes {@code isResolved}/{@code acceptedAnswerId}, and the feed would otherwise keep
    * serving the pre-accept copy.
    */

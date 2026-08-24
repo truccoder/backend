@@ -1,8 +1,11 @@
 package com.socialapp.search.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -10,6 +13,7 @@ import static org.mockito.Mockito.when;
 import java.time.OffsetDateTime;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -37,6 +41,8 @@ import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
+import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
@@ -62,8 +68,19 @@ class SearchServiceTest {
   @Mock private PostRepository postRepository;
   @Mock private BookRepository bookRepository;
   @Mock private BookStorageService bookStorageService;
+  @Mock private PostReactionRepository postReactionRepository;
 
   @InjectMocks private SearchService searchService;
+
+  @BeforeEach
+  void noReactionsByDefault() {
+    // A search result renders the same card as a feed row, so it carries the same reaction
+    // breakdown. Most cases here are about visibility and mapping and have no reactions at
+    // all, so the empty map is the default and the one case that cares overrides it.
+    lenient()
+        .when(postReactionRepository.countByTypeForPostIds(anyCollection()))
+        .thenReturn(java.util.Map.of());
+  }
 
   private static UserEntity user(Integer id, String fullName) {
     UserEntity user = new UserEntity();
@@ -204,6 +221,53 @@ class SearchServiceTest {
 
       // Then — taken from the authorsById batch the other author fields already use
       assertThat(result.get(0).getAuthorUsername()).isEqualTo("user_" + CURRENT_USER_ID);
+    }
+
+    @Test
+    @DisplayName("should carry the reaction breakdown, so a result card matches a feed card")
+    void shouldCarryReactionSummary() {
+      // Given - a search result renders the same card as a feed row. A field present on one and
+      // missing on the other is a card that loses its reaction chips when the reader arrives by
+      // searching instead of by scrolling.
+      PostEntity matched = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.searchByContentOrEventName(
+              any(), eq(CURRENT_USER_ID), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(matched)));
+      stubEmptyBookSearch();
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
+          .thenReturn(List.of(user(CURRENT_USER_ID, "Me")));
+      when(postReactionRepository.countByTypeForPostIds(List.of(10)))
+          .thenReturn(java.util.Map.of(10, java.util.Map.of(ReactionType.INSIGHT, 4L)));
+
+      // When
+      List<PostDto> result =
+          searchService.searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of(FRIEND_ID));
+
+      // Then - one group-by for the whole page, not one per result
+      assertThat(result.get(0).getReactionSummary())
+          .containsExactly(entry(ReactionType.INSIGHT, 4L));
+    }
+
+    @Test
+    @DisplayName("should send an empty breakdown for a post nobody reacted to")
+    void shouldSendEmptySummaryWhenNoReactions() {
+      // Given - the caller substitutes an empty map for a post absent from the group-by; null
+      // would read on the client as "not loaded" rather than as "nobody reacted"
+      PostEntity matched = post(10, CURRENT_USER_ID, PostVisibility.PUBLIC, PostType.REGULAR);
+      when(postRepository.searchByContentOrEventName(
+              any(), eq(CURRENT_USER_ID), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(matched)));
+      stubEmptyBookSearch();
+      when(userRepository.findAllById(List.of(CURRENT_USER_ID)))
+          .thenReturn(List.of(user(CURRENT_USER_ID, "Me")));
+
+      // When / Then
+      assertThat(
+              searchService
+                  .searchPostsWithBookInfo("q", 10, CURRENT_USER_ID, List.of(FRIEND_ID))
+                  .get(0)
+                  .getReactionSummary())
+          .isEmpty();
     }
 
     @Test
