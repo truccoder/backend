@@ -3,6 +3,7 @@ package com.socialapp.moderation.service;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -51,12 +52,22 @@ public class AppealService {
   /** What has been recorded against the caller, and whether each item is already under appeal. */
   @Transactional(readOnly = true)
   public List<UserViolationDto> getMyViolations(Integer userId) {
-    return violationRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-        .map(
-            v ->
-                UserViolationDto.from(
-                    v,
-                    appealRepository.existsByViolationIdAndStatus(v.getId(), AppealStatus.PENDING)))
+    List<UserViolationEntity> violations =
+        violationRepository.findByUserIdOrderByCreatedAtDesc(userId);
+    if (violations.isEmpty()) {
+      return List.of();
+    }
+
+    // One query for the whole page rather than an exists() per row: this used to cost a round
+    // trip per violation just to draw the "under appeal" badge.
+    Set<Long> underAppeal =
+        Set.copyOf(
+            appealRepository.findViolationIdsWithStatus(
+                violations.stream().map(UserViolationEntity::getId).toList(),
+                AppealStatus.PENDING));
+
+    return violations.stream()
+        .map(v -> UserViolationDto.from(v, underAppeal.contains(v.getId())))
         .toList();
   }
 

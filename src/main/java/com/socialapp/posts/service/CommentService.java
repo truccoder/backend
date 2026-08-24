@@ -26,6 +26,8 @@ import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.ReactionType;
+import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -37,12 +39,14 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class CommentService {
   private final CommentRepository commentRepository;
+  private final CommentReactionRepository commentReactionRepository;
   private final PostRepository postRepository;
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
   private final NewsfeedService newsfeedService;
   private final BlockQueryService blockQueryService;
+  private final PostVisibilityService postVisibilityService;
 
   /**
    * The comments on a post, as {@code viewerId} is allowed to see them.
@@ -58,7 +62,7 @@ public class CommentService {
    */
   @Transactional(readOnly = true)
   public List<CommentResponseDto> getComments(Integer viewerId, Integer postId) {
-    verifyPostExists(postId);
+    requireVisiblePost(viewerId, postId);
 
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(viewerId);
     List<CommentEntity> comments =
@@ -71,22 +75,38 @@ public class CommentService {
         userRepository.findAllById(authorIds).stream()
             .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
 
-    return comments.stream().map(comment -> toResponseDto(comment, authorsById)).toList();
+    // Two batch queries for the whole thread, not one pair per comment. A thread has no upper
+    // bound, so counting inside the map below would be an N+1 on exactly the endpoint a busy post
+    // hits hardest.
+    List<Integer> commentIds = comments.stream().map(CommentEntity::getId).toList();
+    Map<Integer, Long> likeCounts = commentReactionRepository.countByCommentIds(commentIds);
+    Map<Integer, ReactionType> myReactions =
+        commentReactionRepository.findMyReactions(viewerId, commentIds);
+
+    return comments.stream()
+        .map(comment -> toResponseDto(comment, authorsById, likeCounts, myReactions))
+        .toList();
   }
 
   private CommentResponseDto toResponseDto(
-      CommentEntity comment, Map<Integer, UserEntity> authorsById) {
+      CommentEntity comment,
+      Map<Integer, UserEntity> authorsById,
+      Map<Integer, Long> likeCounts,
+      Map<Integer, ReactionType> myReactions) {
     UserEntity author = authorsById.get(comment.getAuthorId());
     return CommentResponseDto.builder()
         .id(comment.getId())
         .postId(comment.getPostId())
         .authorId(comment.getAuthorId())
+        .authorUsername(author != null ? author.getUsername() : null)
         .authorFullName(author != null ? author.getFullName() : null)
         .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
         .content(comment.getContent())
         .parentId(comment.getParentId())
         .createdAt(comment.getCreatedAt())
         .updatedAt(comment.getUpdatedAt())
+        .likeCount(likeCounts.getOrDefault(comment.getId(), 0L).intValue())
+        .myReaction(myReactions.get(comment.getId()))
         .build();
   }
 
@@ -94,7 +114,7 @@ public class CommentService {
   public void createComment(Integer authorId, Integer postId, CreateCommentRequestDto request) {
     checkBanStatus(authorId);
     validateContent(request.getContent());
-    PostEntity post = findPostOrThrow(postId);
+    PostEntity post = requireVisiblePost(authorId, postId);
 
     if (request.getParentId() != null) {
       validateParentComment(request.getParentId(), postId);
@@ -209,6 +229,25 @@ public class CommentService {
     return postRepository
         .findById(postId)
         .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
+  }
+
+  /**
+   * The post, but only if {@code viewerId} is allowed to read it.
+   *
+   * <p>Existence used to be the only check here, which left a comment thread readable — and
+   * writable — on a PRIVATE post by anyone who guessed its id. That is a worse leak than it first
+   * looks: the thread carries comment bodies plus every commenter's name and avatar, and posting
+   * into it fires a notification at an author who never shared the post with that reader.
+   *
+   * <p>404, not 403, matching {@code PostReactionService#requireVisiblePost}: a post you may not
+   * read must not be distinguishable from one that does not exist.
+   */
+  private PostEntity requireVisiblePost(Integer viewerId, Integer postId) {
+    PostEntity post = findPostOrThrow(postId);
+    if (!postVisibilityService.isVisibleTo(post, viewerId)) {
+      throw new NotFoundException("Post not found with ID: " + postId);
+    }
+    return post;
   }
 
   private void checkBanStatus(Integer userId) {

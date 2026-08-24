@@ -92,6 +92,7 @@ public class FeedPostDataMapper {
     return FeedPostDataDto.builder()
         .postId(post.getId())
         .authorId(post.getAuthorId())
+        .authorUsername(author.getUsername())
         .authorFullName(author.getFullName())
         .authorProfilePictureUrl(author.getProfilePictureUrl())
         .authorEliteScore(author.getEliteScore())

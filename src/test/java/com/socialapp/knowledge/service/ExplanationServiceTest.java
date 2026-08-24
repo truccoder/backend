@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
@@ -37,7 +40,9 @@ import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.PostVisibility;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.posts.service.PostVisibilityService;
 
 /**
  * Component (unit) tests for {@link ExplanationService}, per ISTQB CTFL v4.0.1 (Section 2.2.1
@@ -58,6 +63,7 @@ class ExplanationServiceTest {
   @Mock private VaultNoteRepository vaultNoteRepository;
   @Mock private PersonalAccessTokenRepository tokenRepository;
   @Mock private PostRepository postRepository;
+  @Mock private PostVisibilityService postVisibilityService;
 
   private ExplanationService explanationService;
 
@@ -75,6 +81,7 @@ class ExplanationServiceTest {
             vaultNoteRepository,
             tokenRepository,
             postRepository,
+            postVisibilityService,
             new ObjectMapper());
   }
 
@@ -97,6 +104,7 @@ class ExplanationServiceTest {
 
   private void stubHappyPathUpTo(UserProfessionalProfileEntity profile) {
     when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "Post content")));
+    when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
     when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile));
     when(tokenRepository.findByUserId(USER_ID)).thenReturn(List.of());
   }
@@ -122,10 +130,37 @@ class ExplanationServiceTest {
     }
 
     @Test
+    @DisplayName("should refuse to explain a post the caller may not read")
+    void shouldRefuse_whenThePostIsNotVisibleToTheCaller() {
+      // Given: a PRIVATE post belonging to somebody else. Post ids are sequential
+      // (PostQueryService says so explicitly), so guessing one is not a barrier.
+      PostEntity privatePost = post(POST_ID, "Somebody's private notes");
+      privatePost.setAuthorId(4242);
+      privatePost.setVisibility(PostVisibility.PRIVATE);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(privatePost));
+      when(postVisibilityService.isVisibleTo(privatePost, USER_ID)).thenReturn(false);
+
+      // Deliberately no profile/Gemini stubs: the call must stop at the visibility gate, before
+      // anything downstream is consulted. When this probe first ran against the unguarded
+      // service it passed for the wrong reason — the 428 "no professional profile" gate fired
+      // first — so the stubs had to be added to prove the leak. Now that the gate exists they
+      // would be unused, and STRICT_STUBS would rightly complain.
+
+      // When / Then: explainPost returns originalContent verbatim AND ships the body to Gemini,
+      // so it must clear the same visibility rule as every other read path
+      // (PostVisibilityService.isVisibleTo). It checks existence only — compare
+      // PostQueryService.getPost, which 404s in exactly this case.
+      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null))
+          .isInstanceOfAny(ResponseStatusException.class, ForbiddenException.class);
+      verifyNoInteractions(geminiClient);
+    }
+
+    @Test
     @DisplayName("should reject when the caller has no professional profile")
     void shouldThrowPreconditionRequired_whenProfileMissing() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
@@ -315,6 +350,7 @@ class ExplanationServiceTest {
     void shouldOmitVaultContext_whenNoBidirectionalToken() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(
@@ -336,6 +372,7 @@ class ExplanationServiceTest {
     void shouldOmitVaultContext_whenBidirectionalButNoNotes() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(
@@ -358,6 +395,7 @@ class ExplanationServiceTest {
     void shouldIncludeVaultContext_whenBidirectionalAndNotesExist() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
       when(tokenRepository.findByUserId(USER_ID))
           .thenReturn(

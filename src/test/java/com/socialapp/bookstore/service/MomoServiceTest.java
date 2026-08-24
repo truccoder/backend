@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -490,9 +491,44 @@ class MomoServiceTest {
       when(purchaseRepository.findByTransactionRef("REF404")).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> momoService.syncPaymentStatus("REF404"))
+      assertThatThrownBy(() -> momoService.syncPaymentStatus(BUYER_ID, "REF404"))
           .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Purchase not found");
+    }
+
+    @Test
+    @DisplayName("should refuse to sync a purchase belonging to somebody else")
+    void shouldRefuse_whenCallerIsNotTheBuyer() {
+      // Given: a purchase owned by BUYER_ID. The ref used to be trusted on its own, so any
+      // signed-in user could drive somebody else's order to COMPLETED or FAILED and fire the
+      // author's "your book sold" notification with it.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+
+      // When / Then: 404, not 403 — somebody else's order ref is not theirs to confirm exists
+      assertThatThrownBy(() -> momoService.syncPaymentStatus(BUYER_ID + 1, "REF1"))
+          .isInstanceOf(NotFoundException.class);
+      verifyNoInteractions(momoApiClient);
+    }
+
+    @Test
+    @DisplayName("should return false when MoMo answers with a malformed resultCode")
+    void shouldReturnFalse_whenResultCodeIsMalformed() {
+      // Given: handleWebhook already guarded this; the query path did not, so a junk resultCode
+      // threw NumberFormatException out of a user-facing endpoint.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+      Map<String, Object> response = new HashMap<>();
+      response.put("resultCode", "not-a-number");
+      when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
+
+      // When
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
+
+      // Then
+      assertThat(result).isFalse();
     }
 
     @Test
@@ -512,7 +548,7 @@ class MomoServiceTest {
       when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
 
       // When
-      boolean result = momoService.syncPaymentStatus("REF1");
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
 
       // Then
       assertThat(result).isTrue();

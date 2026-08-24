@@ -100,6 +100,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(4L);
@@ -119,6 +120,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser("Alice")));
@@ -146,6 +148,7 @@ class PostReactionServiceTest {
       PostReactionEntity existing = new PostReactionEntity(id, ReactionType.LIKE, null);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
       when(postReactionRepository.findById(id)).thenReturn(Optional.of(existing));
 
@@ -166,6 +169,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(USER_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
 
@@ -186,6 +190,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser("Alice")));
@@ -205,6 +210,7 @@ class PostReactionServiceTest {
       PostReactionEntity existing = new PostReactionEntity(id, ReactionType.LIKE, null);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
       when(postReactionRepository.findById(id)).thenReturn(Optional.of(existing));
 
@@ -222,6 +228,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(USER_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
 
@@ -274,6 +281,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser(" ")));
@@ -293,6 +301,7 @@ class PostReactionServiceTest {
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
       when(postReactionRepository.findById(id)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
@@ -320,6 +329,7 @@ class PostReactionServiceTest {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(3L);
 
@@ -336,6 +346,7 @@ class PostReactionServiceTest {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
 
       // When
@@ -354,6 +365,7 @@ class PostReactionServiceTest {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(USER_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(true);
 
       // When
@@ -370,6 +382,7 @@ class PostReactionServiceTest {
       // Given
       PostReactionId id = new PostReactionId(USER_ID, POST_ID);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(2)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(postReactionRepository.existsById(id)).thenReturn(false);
 
       // When / Then
@@ -548,6 +561,47 @@ class PostReactionServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> postReactionService.getReactors(USER_ID, POST_ID, null, null, 20))
+          .isInstanceOf(NotFoundException.class);
+    }
+  }
+
+  // =====================================================================
+  // post visibility gate — the write paths
+  // =====================================================================
+
+  @Nested
+  @DisplayName("post visibility (write paths)")
+  class WritePathVisibilityTests {
+
+    @Test
+    @DisplayName("should not let a reaction be added to a post the caller may not read")
+    void shouldRefuseUpsert_whenPostNotVisible() {
+      // Given: the read paths (getReactionSummary, getReactors) have always checked this; the
+      // write path did not, so a stranger could react to a PRIVATE post — confirming it exists,
+      // notifying its author and minting reputation for them.
+      when(userBanService.isUserBanned(USER_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(4242)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      UpsertPostReactionRequestDto request = new UpsertPostReactionRequestDto();
+      request.setReactionType(ReactionType.LIKE);
+
+      // When / Then
+      assertThatThrownBy(() -> postReactionService.upsertReaction(USER_ID, POST_ID, request))
+          .isInstanceOf(NotFoundException.class);
+      verify(postReactionRepository, never()).save(any());
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should not report the caller's own reaction on a post they may not read")
+    void shouldRefuseGetMyReaction_whenPostNotVisible() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(4242)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> postReactionService.getMyReaction(USER_ID, POST_ID))
           .isInstanceOf(NotFoundException.class);
     }
   }

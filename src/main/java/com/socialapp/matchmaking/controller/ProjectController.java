@@ -111,8 +111,9 @@ public class ProjectController {
     projectService.rejectApplication(ownerId, applicationId);
   }
 
+  /** Candidate suggestions for one of the caller's own roles. 403 for anyone else. */
   @GetMapping("/positions/{positionId}/suggested-candidates")
   public List<SuggestedCandidateDto> getSuggestedCandidates(@PathVariable Integer positionId) {
-    return matchmakingService.suggestCandidates(positionId);
+    return matchmakingService.suggestCandidates(positionId, SecurityUtils.getCurrentUserId());
   }
 }

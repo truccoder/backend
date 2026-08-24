@@ -65,6 +65,13 @@ public class GithubService {
     entity.setPublicReposCount(publicRepos);
     entity.setFollowersCount(followers);
 
+    // Persist the link before syncing, not after. syncGithubData swallows failures on the promise
+    // that "the account stays linked" — but for a first-time link the row was still transient at
+    // that point and only ever written inside performSync, three GitHub calls later. Any failure
+    // there discarded it: the OAuth round trip completed, the endpoint answered 200, and the
+    // account was not linked. Saving here makes the comment true.
+    githubStatsRepository.save(entity);
+
     // Initial sync will fetch pinned repos and graph
     syncGithubData(entity);
   }

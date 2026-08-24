@@ -27,6 +27,17 @@ import lombok.NoArgsConstructor;
 public class FeedPostDataDto {
   private Integer postId;
   private Integer authorId;
+
+  /**
+   * The author's handle, and the only key the public profile page has: {@code GET
+   * /v1/api/users/{username}/profile} is looked up by username, never by id, and no endpoint maps
+   * one to the other. Without this the author's name on a feed card rendered but led nowhere.
+   *
+   * <p>Costs no extra query — {@code FeedPostDataMapper} already holds the author's {@code
+   * UserEntity} to read the four fields below it.
+   */
+  private String authorUsername;
+
   private String authorFullName;
   private String authorProfilePictureUrl;
   private Integer authorEliteScore;

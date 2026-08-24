@@ -27,6 +27,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -40,8 +42,10 @@ import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.newsfeed.dto.FeedRebuildResultDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -1111,6 +1115,118 @@ class NewsfeedServiceTest {
 
       // Then — the untouched tab must not pay for the new one
       verifyNoInteractions(skillTagResolver);
+    }
+  }
+
+  // =====================================================================
+  // rebuildAll
+  // =====================================================================
+
+  @Nested
+  @DisplayName("rebuildAll")
+  class RebuildAllTests {
+
+    private PostEntity approved(Integer id, Integer authorId) {
+      return post(id, authorId, PostVisibility.PUBLIC, PostType.REGULAR);
+    }
+
+    @Test
+    @DisplayName("should fan out every approved post and report how many")
+    void shouldFanOutEveryApprovedPost() {
+      // Given — seeded posts are written straight into Postgres and never pass through the
+      // publish path, so no feed contains them; this is the only way they reach Redis
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID), approved(2, AUTHOR_ID))));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(2);
+      assertThat(result.skipped()).isZero();
+    }
+
+    @Test
+    @DisplayName("should not re-notify tagged users")
+    void shouldNotNotifyTaggedUsers() {
+      // Given — a post tagging somebody. The single-argument fanOutPost also runs
+      // notifyTaggedUsers, which is why the rebuild calls the two-argument form instead: nobody
+      // should be told they were tagged in a post from three months ago because an operator
+      // rebuilt a cache.
+      PostEntity tagged = approved(1, AUTHOR_ID);
+      tagged.getTags().add(new PostTagEntity(new PostTagId(1, 0), TAGGED_ID));
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(tagged)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.rebuildAll();
+
+      // Then
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should count a post it cannot rebuild and carry on with the rest")
+    void shouldSkipAndContinue_whenOnePostFails() {
+      // Given — the first post's author row is gone. Aborting the run there would cost the other
+      // posts their fan-out over one broken row.
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, 999), approved(2, AUTHOR_ID))));
+      when(userRepository.findById(999)).thenReturn(Optional.empty());
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(1);
+      assertThat(result.skipped()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should walk every page rather than stopping after the first")
+    void shouldWalkEveryPage() {
+      // Given — two pages. Reading only the first would silently rebuild a prefix of the database
+      // and still report success, which is worse than failing.
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID)), PageRequest.of(0, 1), 2))
+          .thenReturn(new PageImpl<>(List.of(approved(2, AUTHOR_ID)), PageRequest.of(1, 1), 2));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("should report zero on an empty database rather than failing")
+    void shouldReturnZeros_whenThereAreNoApprovedPosts() {
+      // Given
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of()));
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isZero();
+      assertThat(result.skipped()).isZero();
     }
   }
 }
