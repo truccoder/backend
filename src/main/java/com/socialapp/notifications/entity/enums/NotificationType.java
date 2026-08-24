@@ -25,6 +25,20 @@ package com.socialapp.notifications.entity.enums;
  */
 public enum NotificationType {
   POST_LIKED,
+
+  /**
+   * Somebody reacted to one of the caller's comments.
+   *
+   * <p>The sibling of {@link #POST_LIKED}, added with comment reactions. Reusing {@code POST_LIKED}
+   * with a {@code referenceType} of "COMMENT" was the cheaper option and the wrong one: the client
+   * routes on the type, so every comment reaction would have opened the post rather than the reply
+   * it was about, and a notification list could not have worded the two differently.
+   *
+   * <p>{@code referenceId} is the COMMENT id, not the post id — see {@code
+   * CommentReactionService#notifyCommentAuthor}.
+   */
+  COMMENT_LIKED,
+
   POST_COMMENTED,
   POST_TAGGED,
   FRIEND_REQUEST,

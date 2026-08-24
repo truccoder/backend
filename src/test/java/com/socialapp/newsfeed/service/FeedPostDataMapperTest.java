@@ -66,6 +66,7 @@ class FeedPostDataMapperTest {
   private static UserEntity user(Integer id) {
     UserEntity user = new UserEntity();
     user.setId(id);
+    user.setUsername("author_" + id);
     user.setFullName("Author " + id);
     user.setEliteScore(0);
     return user;
@@ -90,6 +91,23 @@ class FeedPostDataMapperTest {
       // Then
       assertThat(data.getLikeCount()).isEqualTo(4);
       assertThat(data.getCommentCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("carries the author's username, so a feed card can link to their profile")
+    void carriesAuthorUsername() {
+      // Given — the public profile page is keyed by username and nothing maps an id to one, so
+      // without this field the author's name on a card rendered but led nowhere
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+
+      // When
+      FeedPostDataDto data = mapper.toFeedPostData(post);
+
+      // Then — read off the same UserEntity the other four author fields come from, so it costs
+      // no extra query
+      assertThat(data.getAuthorUsername()).isEqualTo("author_" + AUTHOR_ID);
+      assertThat(data.getAuthorFullName()).isEqualTo("Author " + AUTHOR_ID);
     }
 
     @Test
