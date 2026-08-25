@@ -295,6 +295,84 @@ class PostRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Test
+    @DisplayName("a REJECTED post is not returned to a stranger")
+    void rejectedPostHiddenFromStranger() {
+      // Given: a post an admin has taken down. findPublicFeed filters on
+      // p.moderation_status = APPROVED and PostVisibilityService.isVisibleTo checks status before
+      // visibility — search is the one read path whose WHERE clause has no status predicate.
+      Integer strangerId =
+          userRepository.saveAndFlush(user("rejstranger@example.com", "rejstranger")).getId();
+      postRepository.saveAndFlush(
+          post(
+              authorId,
+              "uniquesearchtermrejected",
+              PostVisibility.PUBLIC,
+              ModerationStatus.REJECTED));
+
+      // When
+      Page<PostEntity> result =
+          postRepository.searchByContentOrEventName(
+              "uniquesearchtermrejected",
+              strangerId,
+              List.of(),
+              List.of(-1),
+              PageRequest.of(0, 10));
+
+      // Then: taking a post down has to remove it from search too, or the takedown is cosmetic
+      assertThat(result.getContent()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a PENDING_REVIEW post is not returned to a stranger")
+    void pendingPostHiddenFromStranger() {
+      // Given: the state a post lands in when PostReportService.escalateIfEnoughReporters pulls it
+      // out of circulation pending a human decision.
+      Integer strangerId =
+          userRepository.saveAndFlush(user("pendstranger@example.com", "pendstranger")).getId();
+      postRepository.saveAndFlush(
+          post(
+              authorId,
+              "uniquesearchtermpending",
+              PostVisibility.PUBLIC,
+              ModerationStatus.PENDING_REVIEW));
+
+      // When
+      Page<PostEntity> result =
+          postRepository.searchByContentOrEventName(
+              "uniquesearchtermpending", strangerId, List.of(), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result.getContent()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("the author still finds their own post while it awaits review")
+    void pendingPostVisibleToItsAuthor() {
+      // Given: the moderation predicate exempts the author, matching
+      // PostVisibilityService.isVisibleTo — you should not lose your own post from search just
+      // because it is queued for review.
+      PostEntity target =
+          postRepository.saveAndFlush(
+              post(
+                  authorId,
+                  "uniquesearchtermownpending",
+                  PostVisibility.PUBLIC,
+                  ModerationStatus.PENDING_REVIEW));
+
+      // When
+      Page<PostEntity> result =
+          postRepository.searchByContentOrEventName(
+              "uniquesearchtermownpending",
+              authorId,
+              List.of(),
+              List.of(-1),
+              PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result.getContent()).extracting(PostEntity::getId).containsExactly(target.getId());
+    }
+
+    @Test
     @DisplayName("a PRIVATE post is not visible to a stranger")
     void privatePostHiddenFromStranger() {
       // Given

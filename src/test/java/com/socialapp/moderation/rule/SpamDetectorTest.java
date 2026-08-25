@@ -5,8 +5,10 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.moderation.config.ModerationProperties;
 
 /**
@@ -29,6 +32,7 @@ import com.socialapp.moderation.config.ModerationProperties;
 class SpamDetectorTest {
 
   @Mock private StringRedisTemplate redisTemplate;
+  @Mock private FixedWindowRateLimiter rateLimiter;
   @Mock private ValueOperations<String, String> valueOperations;
 
   private final ModerationProperties properties = new ModerationProperties();
@@ -37,7 +41,7 @@ class SpamDetectorTest {
 
   @BeforeEach
   void setUp() {
-    spamDetector = new SpamDetector(redisTemplate, properties);
+    spamDetector = new SpamDetector(redisTemplate, properties, rateLimiter);
   }
 
   @Nested
@@ -106,63 +110,37 @@ class SpamDetectorTest {
   @DisplayName("isRateLimited")
   class IsRateLimitedTests {
 
+    private static final String KEY = "moderation:rate:1";
+    private static final Duration WINDOW = Duration.ofMinutes(1);
+
     @Test
-    @DisplayName("shouldReturnFalse_andSetExpiry_onTheFirstPost")
-    void shouldReturnFalse_andSetExpiry_onTheFirstPost() {
+    @DisplayName("shouldDelegateToTheSharedLimiter_withTheAuthorAsTheKey")
+    void shouldDelegateToTheSharedLimiter() {
+      // Given — the counting itself moved to FixedWindowRateLimiter, which is where the atomicity
+      // of INCR-plus-EXPIRE is now tested. What matters here is that SpamDetector asks it with the
+      // right key and budget rather than counting again on its own: the local copy set the TTL as a
+      // separate command, so an interruption between the two left the author permanently unable to
+      // post, and it had no try/catch, so a Redis outage threw all the way out through the rule
+      // engine into createPost.
+      when(rateLimiter.isOverLimit(KEY, 5, WINDOW)).thenReturn(false);
+
+      // When
+      boolean result = spamDetector.isRateLimited(1);
+
+      // Then
+      assertThat(result).isFalse();
+      verify(rateLimiter).isOverLimit(KEY, 5, WINDOW);
+      verifyNoInteractions(redisTemplate);
+    }
+
+    @Test
+    @DisplayName("shouldReturnTrue_whenTheSharedLimiterSaysTheBudgetIsSpent")
+    void shouldReturnTrue_whenOverBudget() {
       // Given
-      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-      when(valueOperations.increment(anyString())).thenReturn(1L);
+      when(rateLimiter.isOverLimit(KEY, 5, WINDOW)).thenReturn(true);
 
-      // When
-      boolean result = spamDetector.isRateLimited(1);
-
-      // Then — expiry is set only on the first post within the window
-      assertThat(result).isFalse();
-      verify(redisTemplate).expire(anyString(), eq(60L), eq(TimeUnit.SECONDS));
-    }
-
-    @Test
-    @DisplayName("shouldReturnFalse_andNotResetExpiry_whenBelowTheLimit_boundary")
-    void shouldReturnFalse_andNotResetExpiry_whenBelowTheLimit_boundary() {
-      // Given — exactly at MAX_POSTS_PER_MINUTE (5), still allowed
-      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-      when(valueOperations.increment(anyString())).thenReturn(5L);
-
-      // When
-      boolean result = spamDetector.isRateLimited(1);
-
-      // Then
-      assertThat(result).isFalse();
-      verify(redisTemplate, never()).expire(anyString(), eq(60L), eq(TimeUnit.SECONDS));
-    }
-
-    @Test
-    @DisplayName("shouldReturnTrue_whenAboveTheLimit_boundary")
-    void shouldReturnTrue_whenAboveTheLimit_boundary() {
-      // Given — one past MAX_POSTS_PER_MINUTE (5)
-      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-      when(valueOperations.increment(anyString())).thenReturn(6L);
-
-      // When
-      boolean result = spamDetector.isRateLimited(1);
-
-      // Then
-      assertThat(result).isTrue();
-    }
-
-    @Test
-    @DisplayName("shouldReturnFalse_whenRedisReturnsNull")
-    void shouldReturnFalse_whenRedisReturnsNull() {
-      // Given — a Redis outage on increment() must not crash or falsely rate-limit the user
-      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-      when(valueOperations.increment(anyString())).thenReturn(null);
-
-      // When
-      boolean result = spamDetector.isRateLimited(1);
-
-      // Then
-      assertThat(result).isFalse();
-      verify(redisTemplate, never()).expire(anyString(), eq(60L), eq(TimeUnit.SECONDS));
+      // When / Then
+      assertThat(spamDetector.isRateLimited(1)).isTrue();
     }
   }
 }

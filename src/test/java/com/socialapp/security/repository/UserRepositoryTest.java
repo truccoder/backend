@@ -248,6 +248,38 @@ class UserRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Test
+    @DisplayName("resolves several handles at once, dropping the ones nobody holds")
+    void resolvesManyHandlesInOneQuery() {
+      // Given - the batch form MentionScanner feeds. A comment can name up to ten people, so a
+      // lookup per handle would be ten round trips on the write path of every comment with an @.
+      UserEntity ada = userRepository.saveAndFlush(user("ada@example.com", "ada", "Ada"));
+      UserEntity bob = userRepository.saveAndFlush(user("bob@example.com", "bob", "Bob"));
+
+      // When
+      List<UserEntity> found =
+          userRepository.findAllByUsernameLowerIn(List.of("ada", "bob", "nobody-here"));
+
+      // Then - the unknown handle is simply absent, which is the answer the caller wants: a
+      // comment naming somebody who does not exist is a comment, not an error
+      assertThat(found)
+          .extracting(UserEntity::getId)
+          .containsExactlyInAnyOrder(ada.getId(), bob.getId());
+    }
+
+    @Test
+    @DisplayName("matches on the lower-cased handle, the way the unique index stores it")
+    void matchesTheLowerCaseIndex() {
+      // Given - a handle saved with capitals. The caller lower-cases what it scanned, so the
+      // comparison has to be against lower(username) or this misses a real user.
+      UserEntity ada = userRepository.saveAndFlush(user("ada@example.com", "Ada-Lovelace", "Ada"));
+
+      // When / Then
+      assertThat(userRepository.findAllByUsernameLowerIn(List.of("ada-lovelace")))
+          .extracting(UserEntity::getId)
+          .containsExactly(ada.getId());
+    }
+
+    @Test
     @DisplayName("rejects a second user whose handle differs only by case")
     void rejectsCaseOnlyDuplicate() {
       // Given

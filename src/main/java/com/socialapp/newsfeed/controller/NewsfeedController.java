@@ -11,6 +11,7 @@ import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -30,7 +31,10 @@ public class NewsfeedController {
   public FeedResponseDto getFeed(
       @RequestParam(defaultValue = "ALL") FeedScope scope,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return newsfeedService.getFeed(SecurityUtils.getCurrentUserId(), page, size, scope);
   }
 }

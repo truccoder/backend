@@ -55,6 +55,7 @@ class EventServiceTest {
   @Mock private UserRepository userRepository;
   @Mock private NotificationService notificationService;
   @Mock private GoogleCalendarService googleCalendarService;
+  @Mock private PostVisibilityService postVisibilityService;
 
   @InjectMocks private EventService eventService;
 
@@ -105,6 +106,7 @@ class EventServiceTest {
     void shouldCreateNewRsvp_whenUserHasNotRsvpdYet() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
 
       // When
@@ -122,6 +124,7 @@ class EventServiceTest {
     void shouldUpdateExistingRsvp_whenUserAlreadyRsvpd() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       EventRsvpEntity existing =
           EventRsvpEntity.builder()
               .postId(POST_ID)
@@ -144,6 +147,7 @@ class EventServiceTest {
     void shouldNotifyHost_whenRsvpIsGoing() {
       // Given — EVENT_RSVP was declared in NotificationType with no publisher anywhere (B16)
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(sampleUser()));
 
@@ -168,6 +172,7 @@ class EventServiceTest {
       // Given — a decline is not worth a ping, and it also stops GOING -> NOT_GOING from
       // notifying the host twice about one person changing their mind
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
 
       // When
@@ -182,6 +187,7 @@ class EventServiceTest {
     void shouldNotNotifyHost_whenStatusIsUnchanged() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID))
           .thenReturn(
               Optional.of(
@@ -203,6 +209,7 @@ class EventServiceTest {
     void shouldNotNotifyHost_whenHostRsvpsToOwnEvent() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, HOST_ID)).thenReturn(Optional.empty());
 
       // When
@@ -217,6 +224,7 @@ class EventServiceTest {
     void shouldUseFallbackName_whenAttendeeIsMissing() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
@@ -235,6 +243,7 @@ class EventServiceTest {
     void shouldAllowGoing_whenEventHasCapacityLeft() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(9);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
 
@@ -250,6 +259,7 @@ class EventServiceTest {
     void shouldThrowValidationException_whenEventIsFull() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(10);
 
       // When / Then
@@ -262,9 +272,10 @@ class EventServiceTest {
     @Test
     @DisplayName("should allow NOT_GOING even when the event is already at max capacity")
     void shouldAllowNotGoing_whenEventIsFull() {
-      // Given — the capacity check only blocks GOING, not other statuses
+      // Given — the capacity block is skipped entirely for a non-GOING answer, so neither the
+      // count nor the row lock is reached. A NOT_GOING never contends for a seat.
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(10)));
-      when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(10);
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostIdAndUserId(POST_ID, USER_ID)).thenReturn(Optional.empty());
 
       // When
@@ -290,6 +301,7 @@ class EventServiceTest {
     void shouldThrowValidationException_whenPostIsNotAnEvent() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleRegularPost()));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When / Then
       assertThatThrownBy(() -> eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING))
@@ -311,6 +323,7 @@ class EventServiceTest {
     void shouldReturnAttendees_whenPostIsAnEvent() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       EventRsvpEntity rsvp =
           EventRsvpEntity.builder()
               .postId(POST_ID)
@@ -322,7 +335,7 @@ class EventServiceTest {
       when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of(sampleUser()));
 
       // When
-      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, null);
+      List<EventAttendeeDto> attendees = eventService.getAttendees(USER_ID, POST_ID, null);
 
       // Then
       assertThat(attendees)
@@ -343,6 +356,7 @@ class EventServiceTest {
     void shouldFilterByStatus_whenStatusIsSupplied() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       EventRsvpEntity going =
           EventRsvpEntity.builder()
               .postId(POST_ID)
@@ -354,7 +368,8 @@ class EventServiceTest {
       when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of(sampleUser()));
 
       // When
-      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, RsvpStatus.GOING);
+      List<EventAttendeeDto> attendees =
+          eventService.getAttendees(USER_ID, POST_ID, RsvpStatus.GOING);
 
       // Then
       assertThat(attendees)
@@ -368,6 +383,7 @@ class EventServiceTest {
     void shouldLeaveIdentityNull_whenUserIsMissing() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.findByPostId(POST_ID))
           .thenReturn(
               List.of(
@@ -379,7 +395,7 @@ class EventServiceTest {
       when(userRepository.findAllById(List.of(USER_ID))).thenReturn(List.of());
 
       // When
-      List<EventAttendeeDto> attendees = eventService.getAttendees(POST_ID, null);
+      List<EventAttendeeDto> attendees = eventService.getAttendees(USER_ID, POST_ID, null);
 
       // Then
       assertThat(attendees)
@@ -399,18 +415,21 @@ class EventServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> eventService.getAttendees(POST_ID, null))
+      assertThatThrownBy(() -> eventService.getAttendees(USER_ID, POST_ID, null))
           .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     @DisplayName("should return the count of GOING RSVPs")
     void shouldReturnGoingCount() {
-      // Given
+      // Given: the count now goes through the same visibility gate as the attendee list — the
+      // number of people going to a PRIVATE event is itself information about that event.
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
       when(rsvpRepository.countByPostIdAndStatus(POST_ID, RsvpStatus.GOING)).thenReturn(5);
 
       // When
-      int count = eventService.getGoingCount(POST_ID);
+      int count = eventService.getGoingCount(USER_ID, POST_ID);
 
       // Then
       assertThat(count).isEqualTo(5);
@@ -431,6 +450,7 @@ class EventServiceTest {
       // Given
       PostEntity post = sampleEventPost(null);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When
       eventService.addToGoogleCalendar(USER_ID, POST_ID);
@@ -464,9 +484,10 @@ class EventServiceTest {
     void shouldGenerateIcsFile_withEventDetails() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When
-      String ics = eventService.generateIcsFile(POST_ID);
+      String ics = eventService.generateIcsFile(USER_ID, POST_ID);
 
       // Then
       assertThat(ics)
@@ -483,9 +504,10 @@ class EventServiceTest {
     void shouldIncludeUidAndDtstamp() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When
-      String ics = eventService.generateIcsFile(POST_ID);
+      String ics = eventService.generateIcsFile(USER_ID, POST_ID);
 
       // Then — UID is derived from the post id so a re-import updates rather than duplicates,
       // and DTSTAMP is the generation time in the same UTC basic format as DTSTART.
@@ -500,9 +522,10 @@ class EventServiceTest {
       PostEntity post = sampleEventPost(null);
       post.getEventDetails().setEventTitle("A, B; C\\D\nE");
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When
-      String ics = eventService.generateIcsFile(POST_ID);
+      String ics = eventService.generateIcsFile(USER_ID, POST_ID);
 
       // Then
       assertThat(ics).contains("SUMMARY:A\\, B\\; C\\\\D\\nE");
@@ -516,9 +539,10 @@ class EventServiceTest {
       post.getEventDetails().setEventDescription(null);
       post.getEventDetails().setLocation(null);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When
-      String ics = eventService.generateIcsFile(POST_ID);
+      String ics = eventService.generateIcsFile(USER_ID, POST_ID);
 
       // Then
       assertThat(ics).contains("DESCRIPTION:\r\n").contains("LOCATION:\r\n");
@@ -531,7 +555,7 @@ class EventServiceTest {
       when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> eventService.generateIcsFile(POST_ID))
+      assertThatThrownBy(() -> eventService.generateIcsFile(USER_ID, POST_ID))
           .isInstanceOf(NotFoundException.class);
     }
 
@@ -540,10 +564,71 @@ class EventServiceTest {
     void shouldThrowValidationException_whenPostIsNotAnEvent() {
       // Given
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleRegularPost()));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
 
       // When / Then
-      assertThatThrownBy(() -> eventService.generateIcsFile(POST_ID))
+      assertThatThrownBy(() -> eventService.generateIcsFile(USER_ID, POST_ID))
           .isInstanceOf(ValidationException.class);
+    }
+  }
+
+  // =====================================================================
+  // post visibility gate
+  // =====================================================================
+
+  @Nested
+  @DisplayName("post visibility")
+  class PostVisibilityTests {
+
+    @Test
+    @DisplayName("should not list attendees of an event the viewer may not read")
+    void shouldRefuseGetAttendees_whenPostNotVisible() {
+      // Given: the attendee list is every attendee's full name and avatar
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.getAttendees(USER_ID, POST_ID, null))
+          .isInstanceOf(NotFoundException.class);
+      verifyNoInteractions(rsvpRepository);
+    }
+
+    @Test
+    @DisplayName("should not export the .ics of an event the viewer may not read")
+    void shouldRefuseGenerateIcs_whenPostNotVisible() {
+      // Given: the .ics carries title, description, location and time
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.generateIcsFile(USER_ID, POST_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should not RSVP to an event the caller may not read")
+    void shouldRefuseRsvp_whenPostNotVisible() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleEventPost(null)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.rsvp(USER_ID, POST_ID, RsvpStatus.GOING))
+          .isInstanceOf(NotFoundException.class);
+      verify(rsvpRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should report the post missing rather than not-an-event when it is hidden")
+    void shouldPreferNotFoundOverNotAnEvent() {
+      // Given: a regular (non-event) post the caller may not see. Answering "Post is not an
+      // event" would confirm the post exists, so the visibility check runs first.
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(sampleRegularPost()));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> eventService.generateIcsFile(USER_ID, POST_ID))
+          .isInstanceOf(NotFoundException.class);
     }
   }
 }
