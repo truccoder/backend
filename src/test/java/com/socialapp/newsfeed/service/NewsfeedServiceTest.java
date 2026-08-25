@@ -30,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -43,6 +44,7 @@ import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
@@ -71,7 +73,6 @@ import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -92,7 +93,7 @@ class NewsfeedServiceTest {
 
   @Mock private StringRedisTemplate redisTemplate;
   @Mock private ObjectMapper objectMapper;
-  @Mock private FriendshipQueryService friendshipQueryService;
+  @Mock private FriendshipService friendshipService;
   @Mock private UserInteractionRepository userInteractionRepository;
   @Mock private PostRepository postRepository;
   @Mock private UserRepository userRepository;
@@ -127,7 +128,7 @@ class NewsfeedServiceTest {
         new NewsfeedService(
             redisTemplate,
             objectMapper,
-            friendshipQueryService,
+            friendshipService,
             userInteractionRepository,
             postRepository,
             userRepository,
@@ -222,7 +223,7 @@ class NewsfeedServiceTest {
       post.setTags(null);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -239,7 +240,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -261,7 +262,7 @@ class NewsfeedServiceTest {
       post.setLocationDetails(location);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -277,7 +278,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.BOOK);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       BookEntity book =
           BookEntity.builder()
               .id(50)
@@ -307,7 +308,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.BOOK);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -329,7 +330,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 1), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -337,9 +338,12 @@ class NewsfeedServiceTest {
       // When
       newsfeedService.fanOutPost(POST_ID);
 
-      // Then
-      verify(zSetOperations).add(eq("feed:" + FRIEND_ID), anyString(), any(Double.class));
-      verify(zSetOperations).add(eq("feed:" + TAGGED_ID), anyString(), any(Double.class));
+      // Then — the audience (friends plus tagged users, minus the author, who already got the post
+      // added directly) goes to Redis in one pipelined batch rather than two commands per
+      // recipient, so the assertion is that the pipeline ran and the notification went to the right
+      // person. NewsfeedService#addToFeeds carries the per-recipient detail.
+      verify(redisTemplate)
+          .executePipelined(org.mockito.ArgumentMatchers.<RedisCallback<Object>>any());
       verify(notificationService, org.mockito.Mockito.times(1)).send(notificationCaptor.capture());
       assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(TAGGED_ID);
       assertThat(notificationCaptor.getValue().getBody()).isEqualTo("Alice tagged you in a post");
@@ -354,7 +358,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "   ")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -376,7 +380,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, null)));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -396,7 +400,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -423,7 +427,7 @@ class NewsfeedServiceTest {
       newsfeedService.fanOutPost(POST_ID);
 
       // Then
-      verify(friendshipQueryService, never()).getFriendIds(any());
+      verify(friendshipService, never()).getFriendIds(any());
     }
 
     @Test
@@ -443,7 +447,7 @@ class NewsfeedServiceTest {
 
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -478,7 +482,7 @@ class NewsfeedServiceTest {
       author.setEliteScore(5_000);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(author));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -501,7 +505,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(7L);
       when(commentRepository.countByPostId(POST_ID)).thenReturn(3L);
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
@@ -642,7 +646,7 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(data)).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       long before = System.currentTimeMillis();
 
       // When
@@ -670,7 +674,7 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(data)).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
 
       // When / Then
       assertThatCode(() -> newsfeedService.fanOutPost(data, null)).doesNotThrowAnyException();
@@ -727,7 +731,7 @@ class NewsfeedServiceTest {
     @DisplayName("should remove the post from the author's and friends' feeds with no tagged users")
     void shouldRemoveFromAuthorAndFriendFeeds_withNoTaggedUsers() {
       // Given
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
       // When
@@ -743,7 +747,7 @@ class NewsfeedServiceTest {
     @DisplayName("should also remove the post from tagged users' feeds when present")
     void shouldAlsoRemoveFromTaggedUserFeeds_whenTaggedUsersPresent() {
       // Given
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
       // When
@@ -1142,7 +1146,7 @@ class NewsfeedServiceTest {
       when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
           .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID), approved(2, AUTHOR_ID))));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
@@ -1166,7 +1170,7 @@ class NewsfeedServiceTest {
       when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
           .thenReturn(new PageImpl<>(List.of(tagged)));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
@@ -1186,7 +1190,7 @@ class NewsfeedServiceTest {
           .thenReturn(new PageImpl<>(List.of(approved(1, 999), approved(2, AUTHOR_ID))));
       when(userRepository.findById(999)).thenReturn(Optional.empty());
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
@@ -1207,7 +1211,7 @@ class NewsfeedServiceTest {
           .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID)), PageRequest.of(0, 1), 2))
           .thenReturn(new PageImpl<>(List.of(approved(2, AUTHOR_ID)), PageRequest.of(1, 1), 2));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 

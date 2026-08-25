@@ -77,7 +77,7 @@ class MediaServiceTest {
       assertThat(urls.get(0)).endsWith(".jpg");
       assertThat(urls.get(1)).endsWith(".png");
       verify(minIOService, org.mockito.Mockito.times(2))
-          .uploadFile(eq("post-media"), anyString(), any());
+          .uploadFile(eq("post-media"), anyString(), any(), anyString());
     }
 
     @Test
@@ -104,7 +104,7 @@ class MediaServiceTest {
       // Then — an anonymous pile of UUIDs is untraceable; the uploader is in the key so a stored
       // object can be tied back to an account
       ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-      verify(minIOService).uploadFile(eq("post-media"), key.capture(), any());
+      verify(minIOService).uploadFile(eq("post-media"), key.capture(), any(), anyString());
       assertThat(key.getValue()).startsWith("posts/" + USER_ID + "/");
     }
 
@@ -115,7 +115,9 @@ class MediaServiceTest {
       mediaService.upload(USER_ID, List.of(image("a.gif", "image/gif")));
 
       // Then — the URL is handed to a browser that presents no credentials
-      verify(minIOService).ensurePublicReadPolicy("post-media");
+      // Applied once at startup by MinIOBucketInitializer. Doing it per file meant ten
+      // setBucketPolicy calls for a ten-image upload, each writing the value already there.
+      verify(minIOService, never()).ensurePublicReadPolicy(anyString());
     }
 
     @Test
@@ -201,15 +203,17 @@ class MediaServiceTest {
 
       // Then — nothing was written. Validating inside the upload loop would have left the first
       // file in the bucket, referenced by nothing, after a request that returned 400.
-      verify(minIOService, never()).uploadFile(anyString(), anyString(), any());
+      verify(minIOService, never()).uploadFile(anyString(), anyString(), any(), anyString());
     }
 
     @Test
     @DisplayName("shouldSurfaceAStorageFailureAsStorageException_not500")
     void shouldWrapStorageFailures() throws Exception {
       // Given
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new RuntimeException("minio is down"));
+      // MinIOService raises StorageException itself now, so this class has no catch to widen —
+      // and an unrelated RuntimeException is no longer relabelled as a storage fault.
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(new StorageException("Could not store posts/1/x.jpg", new RuntimeException()));
 
       // When / Then — StorageException maps to a retryable 503; the caller did nothing wrong
       assertThatThrownBy(() -> mediaService.upload(USER_ID, List.of(image("a.jpg", "image/jpeg"))))

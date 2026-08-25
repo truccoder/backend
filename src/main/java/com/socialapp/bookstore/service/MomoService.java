@@ -130,6 +130,21 @@ public class MomoService {
       return false;
     }
 
+    // A signed IPN naming an orderId this database has no row for means money may have moved with
+    // nothing on this side to attach it to — the one failure in this flow that loses evidence
+    // rather than just an update. Logged at ERROR with the whole payload before the exception
+    // leaves, because that payload carries MoMo's own signature and is the only record of the
+    // transaction we will ever hold. Rethrown unchanged so the caller still sees a 404 and MoMo
+    // still retries; the point is that the retries are now visible.
+    if (!purchaseRepository.findByTransactionRef(orderId).isPresent()) {
+      log.error(
+          "[orderId={}] MoMo IPN passed signature verification but no purchase holds this"
+              + " transaction ref. If resultCode is 0 this is a PAID order with no local record —"
+              + " reconcile by hand. Signed payload: {}",
+          orderId,
+          payload);
+    }
+
     return applyResult(
         orderId,
         resultCode,

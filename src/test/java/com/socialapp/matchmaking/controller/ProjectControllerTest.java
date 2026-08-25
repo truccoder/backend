@@ -26,6 +26,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
@@ -409,7 +410,7 @@ class ProjectControllerTest {
     void shouldReturn409WhenFilled() throws Exception {
       // Given: a wrong-state request is IllegalStateException -> 409, the convention this
       // codebase settled on for state-transition guards.
-      doThrow(new IllegalStateException("This position is no longer open"))
+      doThrow(new ConflictException("This position is no longer open"))
           .when(projectService)
           .applyToPosition(OWNER_ID, POSITION_ID, null);
 
@@ -490,7 +491,7 @@ class ProjectControllerTest {
     void shouldReturn409OnAlreadyDecided() throws Exception {
       // Given: the state guard added alongside rejectApplication — a decided application may
       // not be re-decided.
-      doThrow(new IllegalStateException("This application has already been decided"))
+      doThrow(new ConflictException("This application has already been decided"))
           .when(projectService)
           .acceptApplication(OWNER_ID, APPLICATION_ID);
 
@@ -566,7 +567,7 @@ class ProjectControllerTest {
     @DisplayName("shouldReturn409_whenTheApplicationWasAlreadyDecided")
     void shouldReturn409OnAlreadyDecided() throws Exception {
       // Given
-      doThrow(new IllegalStateException("This application has already been decided"))
+      doThrow(new ConflictException("This application has already been decided"))
           .when(projectService)
           .rejectApplication(OWNER_ID, APPLICATION_ID);
 

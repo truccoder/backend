@@ -2,6 +2,7 @@ package com.socialapp.moderation.service;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -214,7 +215,7 @@ public class AppealService {
     // and a second approval would go looking for one that is gone.
     if (!AppealStatus.PENDING.equals(appeal.getStatus())) {
       throw new ValidationException(
-          "This appeal has already been " + appeal.getStatus().name().toLowerCase());
+          "This appeal has already been " + appeal.getStatus().name().toLowerCase(Locale.ROOT));
     }
     return appeal;
   }

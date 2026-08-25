@@ -380,12 +380,22 @@ public class GlobalExceptionHandler {
                 .build());
   }
 
-  // Covers service-layer "wrong current state for this action" checks (e.g. reviewing a post
-  // that isn't PENDING_REVIEW anymore) — previously fell through to the generic Exception
-  // handler and was incorrectly reported as 500 instead of a 409 Conflict.
+  /**
+   * Service-layer "wrong current state for this action" checks — reviewing a post that is no longer
+   * PENDING_REVIEW, accepting an application already decided, applying to a filled position.
+   *
+   * <p><b>{@link ConflictException}, not {@code IllegalStateException}.</b> This handler used to be
+   * registered for the latter, which worked for the handful of places that threw it deliberately
+   * and was wrong for every other source of it: the JDK, Hibernate, Spring and Jackson all raise
+   * {@code IllegalStateException} for real programming errors. Each of those reached the client as
+   * a 409 — an instruction to retry something that could never succeed — carrying the raw internal
+   * message, which is precisely the disclosure the catch-all handler below goes out of its way to
+   * prevent. An unexpected {@code IllegalStateException} now falls through to that handler, where
+   * it belongs.
+   */
   @ResponseStatus(CONFLICT)
-  @ExceptionHandler(IllegalStateException.class)
-  public ErrorResponseDto handle(IllegalStateException ex, HttpServletRequest request) {
+  @ExceptionHandler(ConflictException.class)
+  public ErrorResponseDto handle(ConflictException ex, HttpServletRequest request) {
     writeLog(ex, request);
 
     return ErrorResponseDto.builder()

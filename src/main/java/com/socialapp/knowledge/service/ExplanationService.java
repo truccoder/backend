@@ -12,6 +12,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.ratelimit.CostlyOperationProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
@@ -36,7 +38,15 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class ExplanationService {
+
+  private static final String AI_RATE_LIMIT_KEY_PREFIX = "ratelimit:ai:explain:";
+
+  /** How many vault notes may be summarised into one prompt — see {@code loadVaultContext}. */
+  private static final int MAX_VAULT_NOTES_IN_CONTEXT = 50;
+
   private final GeminiClient geminiClient;
+  private final FixedWindowRateLimiter rateLimiter;
+  private final CostlyOperationProperties costlyOperationProperties;
   private final ExplanationRepository explanationRepository;
   private final UserProfessionalProfileRepository profileRepository;
   private final VaultNoteRepository vaultNoteRepository;
@@ -85,6 +95,8 @@ public class ExplanationService {
           "Professional profile required. Please set up your profile first.");
     }
 
+    requireAiBudget(userId);
+
     String vaultContext = loadVaultContext(userId);
     String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
@@ -132,6 +144,33 @@ public class ExplanationService {
     return KnowledgeLibraryResponseDto.builder().explanations(dtos).totalCount(dtos.size()).build();
   }
 
+  /**
+   * Refuses the call when this user has spent their AI budget for the window.
+   *
+   * <p>Keyed on the user rather than the IP: the endpoint requires a session, so the account is the
+   * accountable thing, and an IP key would let one person spread a loop across networks while
+   * punishing everyone behind a shared one.
+   *
+   * <p>Uses the same {@code FixedWindowRateLimiter} as the auth and guest limiters — including its
+   * fail-open behaviour, so a Redis outage degrades the ceiling rather than blocking study.
+   */
+  private void requireAiBudget(Integer userId) {
+    if (!costlyOperationProperties.isEnabled()) {
+      return;
+    }
+    boolean overLimit =
+        rateLimiter.isOverLimit(
+            AI_RATE_LIMIT_KEY_PREFIX + userId,
+            costlyOperationProperties.getAiRequests(),
+            costlyOperationProperties.getAiWindow());
+    if (overLimit) {
+      log.warn("AI explanation budget exhausted for user {}", userId);
+      throw new ResponseStatusException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          "You have requested a lot of explanations recently. Please try again later.");
+    }
+  }
+
   private String loadVaultContext(Integer userId) {
     boolean hasBidirectionalAccess =
         tokenRepository.findByUserId(userId).stream()
@@ -144,6 +183,14 @@ public class ExplanationService {
     List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdWithTags(userId);
     if (notes.isEmpty()) {
       return null;
+    }
+
+    // Capped. Every note here goes into the prompt of every /explain call, so an untrimmed vault
+    // multiplies the token cost of each request by its own size and eventually overruns the model's
+    // context window outright. Only filenames, tags and links are sent — not note bodies — so
+    // taking a slice costs little context and bounds the cost.
+    if (notes.size() > MAX_VAULT_NOTES_IN_CONTEXT) {
+      notes = notes.subList(0, MAX_VAULT_NOTES_IN_CONTEXT);
     }
 
     return notes.stream()

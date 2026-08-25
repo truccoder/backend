@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -21,6 +22,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -86,6 +89,42 @@ class PostScoringServiceTest {
   // recalculateScores
   // =====================================================================
 
+  /** A closable cursor over a fixed set of keys, standing in for what SCAN returns. */
+  private static Cursor<String> cursorOver(String... keys) {
+    Iterator<String> iterator = List.of(keys).iterator();
+    return new Cursor<>() {
+      @Override
+      public boolean hasNext() {
+        return iterator.hasNext();
+      }
+
+      @Override
+      public String next() {
+        return iterator.next();
+      }
+
+      @Override
+      public void close() {
+        // nothing to release
+      }
+
+      @Override
+      public long getCursorId() {
+        return 0L;
+      }
+
+      @Override
+      public boolean isClosed() {
+        return false;
+      }
+
+      @Override
+      public long getPosition() {
+        return 0L;
+      }
+    };
+  }
+
   @Nested
   @DisplayName("recalculateScores")
   class RecalculateScoresTests {
@@ -94,7 +133,9 @@ class PostScoringServiceTest {
     @DisplayName("should do nothing when there are no feed keys in Redis")
     void shouldDoNothing_whenNoFeedKeysExist() {
       // Given
-      when(redisTemplate.keys("feed:*")).thenReturn(Set.of());
+      // SCAN, not KEYS: KEYS blocks the whole single-threaded server while it walks the keyspace,
+      // which on this deployment queues every other user of Redis behind a periodic job.
+      when(redisTemplate.scan(any(ScanOptions.class))).thenReturn(cursorOver());
 
       // When
       postScoringService.recalculateScores();
@@ -107,7 +148,7 @@ class PostScoringServiceTest {
     @DisplayName("should recalculate every feed found in Redis")
     void shouldRecalculateEachFeed_whenFeedKeysExist() {
       // Given
-      when(redisTemplate.keys("feed:*")).thenReturn(Set.of("feed:1"));
+      when(redisTemplate.scan(any(ScanOptions.class))).thenReturn(cursorOver("feed:1"));
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
       when(zSetOperations.range("feed:1", 0, -1)).thenReturn(Set.of());
 

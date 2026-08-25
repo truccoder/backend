@@ -1,8 +1,9 @@
 package com.socialapp.security.service;
 
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.security.authentication.BadCredentialsException;
@@ -14,9 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.cloud.minio.MinIOConfig;
 import com.socialapp.cloud.minio.MinIOService;
 import com.socialapp.common.exception.NotFoundException;
-import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
-import com.socialapp.common.utils.FileExtensions;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
@@ -42,8 +41,30 @@ public class ProfileService {
 
   private static final String PROFILE_PICTURES_BUCKET = "profile-pictures";
   private static final long MAX_PROFILE_PICTURE_SIZE = 5L * 1024 * 1024;
-  private static final Set<String> ALLOWED_PROFILE_PICTURE_TYPES =
-      Set.of("image/jpeg", "image/png", "image/webp");
+
+  /**
+   * Content types accepted, and the extension each is stored under.
+   *
+   * <p>Same table, and the same reasoning, as {@code MediaService.ALLOWED_TYPES} — whose javadoc
+   * named this class as the one still getting it wrong. Two things matter here and both used to be
+   * taken from the caller:
+   *
+   * <ul>
+   *   <li><b>The extension comes from this map, not from {@code getOriginalFilename()}.</b> The
+   *       bucket is served public-read, so the name an object is stored under is what a browser
+   *       sees when someone opens the URL directly. Taking the suffix from the upload let a caller
+   *       store {@code avatars/7/<uuid>.html} on the project's own storage host.
+   *   <li><b>The stored content type comes from this map too</b> — see {@code storedContentType}
+   *       below — rather than being echoed back from whatever the multipart part declared.
+   * </ul>
+   *
+   * <p>GIF is deliberately absent, unlike the post-image list: an animated avatar is a distraction.
+   */
+  private static final Map<String, String> ALLOWED_PROFILE_PICTURE_TYPES =
+      Map.of(
+          "image/jpeg", "jpg",
+          "image/png", "png",
+          "image/webp", "webp");
 
   private final UserRepository userRepository;
   private final RefreshTokenRepository refreshTokenRepository;
@@ -160,20 +181,18 @@ public class ProfileService {
     validateProfilePicture(file);
     UserEntity user = requireUser(userId);
 
+    String contentType = normalisedContentType(file);
     String objectKey =
         "avatars/"
             + userId
             + "/"
             + UUID.randomUUID()
             + "."
-            + FileExtensions.getExtension(file.getOriginalFilename(), "jpg");
+            + ALLOWED_PROFILE_PICTURE_TYPES.get(contentType);
 
-    try {
-      minIOService.uploadFile(PROFILE_PICTURES_BUCKET, objectKey, file);
-      minIOService.ensurePublicReadPolicy(PROFILE_PICTURES_BUCKET);
-    } catch (Exception e) {
-      throw new StorageException("Failed to upload profile picture", e);
-    }
+    // Policy set once at startup by MinIOBucketInitializer; MinIOService raises StorageException
+    // on its own, so there is no catch here to widen.
+    minIOService.uploadFile(PROFILE_PICTURES_BUCKET, objectKey, file, contentType);
 
     String publicUrl = minIOConfig.getUrl() + "/" + PROFILE_PICTURES_BUCKET + "/" + objectKey;
     user.setProfilePictureUrl(publicUrl);
@@ -209,9 +228,31 @@ public class ProfileService {
     if (file.getSize() > MAX_PROFILE_PICTURE_SIZE) {
       throw new ValidationException("File exceeds maximum size of 5MB");
     }
-    String contentType = file.getContentType();
-    if (contentType == null || !ALLOWED_PROFILE_PICTURE_TYPES.contains(contentType.toLowerCase())) {
+    if (!ALLOWED_PROFILE_PICTURE_TYPES.containsKey(normalisedContentType(file))) {
       throw new ValidationException("Only JPEG, PNG, or WEBP images are allowed");
     }
+  }
+
+  /**
+   * The declared content type, lower-cased and stripped of any {@code ;charset=…} parameter.
+   *
+   * <p>Declared, not detected: this is what the client said and a client can say anything. It is
+   * not load-bearing on its own — what decides how the stored object is served is the extension and
+   * the stored content type, and both now come from {@link #ALLOWED_PROFILE_PICTURE_TYPES} rather
+   * than from the request. The worst a lying caller achieves is a PNG-named object that is not a
+   * PNG, which a browser will decline to render.
+   *
+   * <p>{@code Locale.ROOT} because the default locale is not pinned anywhere and Turkish lower-cases
+   * {@code I} to a dotless {@code ı}, which would stop {@code IMAGE/PNG} matching.
+   */
+  private String normalisedContentType(MultipartFile file) {
+    String contentType = file.getContentType();
+    if (contentType == null) {
+      return "";
+    }
+    int parameterStart = contentType.indexOf(';');
+    return (parameterStart < 0 ? contentType : contentType.substring(0, parameterStart))
+        .trim()
+        .toLowerCase(Locale.ROOT);
   }
 }

@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
@@ -374,9 +375,9 @@ class GithubControllerTest {
     @Test
     @DisplayName("shouldReturn409_whenSyncedWithinTheLastHour_becauseOfTheManualRateLimit")
     void shouldReturn409WhenRateLimited() throws Exception {
-      // Given: syncNow throws IllegalStateException for the 1-hour cooldown, and the handler maps
+      // Given: syncNow throws ConflictException for the 1-hour cooldown, and the handler maps
       // that to 409 CONFLICT — the established convention for a wrong-state request here.
-      doThrow(new IllegalStateException("Please wait at least 1 hour before syncing again"))
+      doThrow(new ConflictException("Please wait at least 1 hour before syncing again"))
           .when(githubService)
           .syncNow(CALLER_ID);
 

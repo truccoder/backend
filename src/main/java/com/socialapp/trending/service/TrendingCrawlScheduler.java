@@ -1,6 +1,7 @@
 package com.socialapp.trending.service;
 
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -28,13 +29,18 @@ public class TrendingCrawlScheduler {
     for (TrendingCrawler crawler : crawlers) {
       try {
         List<CrawledItem> items = crawler.crawl();
+
+        // One query for the whole batch rather than one per crawled item.
+        Set<String> alreadyStored =
+            items.isEmpty()
+                ? Set.of()
+                : Set.copyOf(
+                    trendingItemRepository.findExistingSourceIds(
+                        crawler.getSource(),
+                        items.stream().map(CrawledItem::getSourceId).distinct().toList()));
+
         List<CrawledItem> newItems =
-            items.stream()
-                .filter(
-                    item ->
-                        !trendingItemRepository.existsBySourceAndSourceId(
-                            item.getSource(), item.getSourceId()))
-                .toList();
+            items.stream().filter(item -> !alreadyStored.contains(item.getSourceId())).toList();
 
         if (newItems.isEmpty()) {
           log.debug("No new items from {}", crawler.getSource());

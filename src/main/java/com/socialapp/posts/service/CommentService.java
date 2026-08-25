@@ -5,7 +5,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -21,6 +23,7 @@ import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.CommentPageResponseDto;
 import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
@@ -61,23 +64,52 @@ public class CommentService {
    * announced itself would invite retaliation.
    */
   @Transactional(readOnly = true)
-  public List<CommentResponseDto> getComments(Integer viewerId, Integer postId) {
+  public CommentPageResponseDto getComments(
+      Integer viewerId, Integer postId, Integer cursor, int limit) {
     requireVisiblePost(viewerId, postId);
+
+    // limit + 1: the extra root answers hasMore without a second COUNT, and is dropped before the
+    // page is returned. Same trick as PostQueryService.
+    List<CommentEntity> roots =
+        commentRepository.findRootCommentsForPage(postId, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = roots.size() > limit;
+    List<CommentEntity> pageRoots = hasMore ? roots.subList(0, limit) : roots;
+
+    // The cursor comes from the last root READ, before block filtering removes any of them.
+    // Taking it after filtering would rewind to an earlier comment whenever the last root on a
+    // page happened to be from a blocked author, and the client would fetch the same page forever.
+    Integer nextCursor = hasMore ? pageRoots.get(pageRoots.size() - 1).getId() : null;
+
+    List<CommentEntity> replies =
+        pageRoots.isEmpty()
+            ? List.of()
+            : commentRepository.findByParentIdInOrderByCreatedAtAsc(
+                pageRoots.stream().map(CommentEntity::getId).toList());
 
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(viewerId);
     List<CommentEntity> comments =
-        commentRepository.findByPostIdOrderByCreatedAtAsc(postId).stream()
+        Stream.concat(pageRoots.stream(), replies.stream())
             .filter(comment -> !blockedIds.contains(comment.getAuthorId()))
             .toList();
+
+    return new CommentPageResponseDto(hydrate(comments, viewerId), nextCursor, hasMore);
+  }
+
+  /**
+   * Turns comment rows into response DTOs, loading everything they need in batches.
+   *
+   * <p>Four queries for the whole page rather than a set per comment: authors, like counts,
+   * reaction breakdowns and the viewer's own reactions. Counting inside the mapping loop would be
+   * an N+1 on exactly the endpoint a busy post hits hardest.
+   */
+  private List<CommentResponseDto> hydrate(List<CommentEntity> comments, Integer viewerId) {
     Set<Integer> authorIds =
         comments.stream().map(CommentEntity::getAuthorId).collect(Collectors.toSet());
     Map<Integer, UserEntity> authorsById =
         userRepository.findAllById(authorIds).stream()
             .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
 
-    // Three batch queries for the whole thread, not one set per comment. A thread has no upper
-    // bound, so counting inside the map below would be an N+1 on exactly the endpoint a busy post
-    // hits hardest.
     List<Integer> commentIds = comments.stream().map(CommentEntity::getId).toList();
     Map<Integer, Long> likeCounts = commentReactionRepository.countByCommentIds(commentIds);
     Map<Integer, Map<ReactionType, Long>> reactionSummaries =

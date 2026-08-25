@@ -1,6 +1,7 @@
 package com.socialapp.trending.service;
 
 import java.time.OffsetDateTime;
+import java.util.Locale;
 import java.util.Objects;
 
 import org.springframework.data.domain.Page;
@@ -61,7 +62,7 @@ public class TrendingService {
     if (Objects.isNull(timeRange) || timeRange.isBlank()) {
       return OffsetDateTime.now().minusDays(7);
     }
-    return switch (timeRange.toLowerCase()) {
+    return switch (timeRange.toLowerCase(Locale.ROOT)) {
       case "today" -> OffsetDateTime.now().minusDays(1);
       case "week" -> OffsetDateTime.now().minusDays(7);
       case "month" -> OffsetDateTime.now().minusDays(30);

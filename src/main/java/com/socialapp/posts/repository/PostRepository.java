@@ -34,13 +34,21 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
   List<PostEntity> findByModerationStatus(ModerationStatus status);
 
   /**
+   * An author's posts in one moderation state.
+   *
+   * <p>No production caller — it is kept for the integration and repository tests, which use it to
+   * assert what actually reached the database after a request. That is a real use: an assertion
+   * helper that reads through the same mapping the application does catches a mapping bug an
+   * in-memory check would miss.
+   */
+  List<PostEntity> findByAuthorIdAndModerationStatus(Integer authorId, ModerationStatus status);
+
+  /**
    * Paged variant, for the feed rebuild — which walks every approved post in the database and so
    * must not load them all at once. The unpaged form above is fine for its callers, which read
    * only the small moderation queues.
    */
   Page<PostEntity> findByModerationStatus(ModerationStatus status, Pageable pageable);
-
-  List<PostEntity> findByAuthorIdAndModerationStatus(Integer authorId, ModerationStatus status);
 
   @Query(
       """

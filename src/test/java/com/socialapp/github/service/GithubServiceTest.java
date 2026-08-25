@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
@@ -388,7 +389,7 @@ class GithubServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> githubService.syncNow(USER_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(githubApiClient, never()).getAuthenticatedUser(any());
     }
 

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
@@ -175,7 +176,7 @@ public class GithubService {
     // Basic rate limiting for manual sync: e.g. 1 hour
     if (entity.getLastSyncedAt() != null
         && entity.getLastSyncedAt().plusHours(1).isAfter(OffsetDateTime.now())) {
-      throw new IllegalStateException("Please wait at least 1 hour before syncing again");
+      throw new ConflictException("Please wait at least 1 hour before syncing again");
     }
 
     // performSync, not syncGithubData: a manual sync that fails silently is worse than one that

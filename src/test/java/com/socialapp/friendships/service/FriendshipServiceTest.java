@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -854,15 +855,16 @@ class FriendshipServiceTest {
       fromStranger.setAddresseeId(ACTOR_ID);
       fromStranger.setStatus(FriendRequestStatus.PENDING);
 
-      when(friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(
-              ACTOR_ID, FriendRequestStatus.PENDING))
+      when(friendRequestRepository.findIncomingForPage(
+              eq(ACTOR_ID), eq(FriendRequestStatus.PENDING), isNull(), any()))
           .thenReturn(List.of(fromBlocked, fromStranger));
       when(blockQueryService.blockedPairIds(ACTOR_ID)).thenReturn(Set.of(OTHER_ID));
       when(userProfileCache.getOrLoadAll(eq(Set.of(THIRD_ID)), any()))
           .thenReturn(Map.of(THIRD_ID, new UserProfileDto(THIRD_ID, "u3", "Three", null)));
 
       // When
-      List<PendingFriendRequestDto> pending = friendshipService.getPendingRequests(ACTOR_ID);
+      List<PendingFriendRequestDto> pending =
+          friendshipService.getPendingRequests(ACTOR_ID, null, 20).requests();
 
       // Then — this screen is where a leftover row would put a blocked user's name back in front
       // of the person who blocked them

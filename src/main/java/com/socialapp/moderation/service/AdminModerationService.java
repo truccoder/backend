@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
@@ -136,7 +137,7 @@ public class AdminModerationService {
             .orElseThrow(() -> new NotFoundException("Post not found: " + postId));
 
     if (!ModerationStatus.PENDING_REVIEW.equals(post.getModerationStatus())) {
-      throw new IllegalStateException("Post is not in PENDING_REVIEW status");
+      throw new ConflictException("Post is not in PENDING_REVIEW status");
     }
 
     boolean isViolation = decision.isAtLeast(Likelihood.LIKELY);

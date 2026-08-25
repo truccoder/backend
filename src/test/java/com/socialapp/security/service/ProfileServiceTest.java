@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -362,7 +364,7 @@ class ProfileServiceTest {
     }
 
     @Test
-    @DisplayName("should default to a jpg extension when the filename is null")
+    @DisplayName("should take the extension from the validated type, not from the filename")
     void shouldDefaultToJpgExtension_whenFilenameIsNull() throws Exception {
       // Given
       MultipartFile file = mockFile(null, 1024, "image/png");
@@ -372,38 +374,59 @@ class ProfileServiceTest {
       // When
       String url = profileService.changeProfilePicture(USER_ID, file);
 
-      // Then
-      assertThat(url).endsWith(".jpg");
+      // Then — image/png, so ".png", regardless of what the filename claimed
+      assertThat(url).endsWith(".png");
     }
 
     @Test
-    @DisplayName("should default to a jpg extension when the filename has none")
-    void shouldDefaultToJpgExtension_whenFilenameHasNoExtension() throws Exception {
-      // Given
-      MultipartFile file = mockFile("avatar", 1024, "image/png");
+    @DisplayName("should ignore a hostile filename entirely when building the object key")
+    void shouldIgnoreTheFilename_whenBuildingTheObjectKey() throws Exception {
+      // Given — the classic attempt: a real PNG body under a name that would make the object serve
+      // as markup from a public-read bucket. The extension now comes from
+      // ALLOWED_PROFILE_PICTURE_TYPES,
+      // so what the caller named the file cannot reach the stored key at all.
+      MultipartFile file = mockFile("avatar.html", 1024, "image/png");
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
       when(minIOConfig.getUrl()).thenReturn("http://minio");
 
       // When
       String url = profileService.changeProfilePicture(USER_ID, file);
 
-      // Then
-      assertThat(url).endsWith(".jpg");
+      // Then — not ".html"
+      assertThat(url).endsWith(".png");
     }
 
     @Test
-    @DisplayName("should wrap an upload failure as a StorageException")
-    void shouldThrowStorageException_whenUploadFails() throws Exception {
-      // Given
+    @DisplayName("should let a storage failure through as a StorageException")
+    void shouldSurfaceStorageException_whenUploadFails() throws Exception {
+      // Given — MinIOService is the one that translates MinIO's checked exceptions now, so this
+      // method has no catch of its own to widen.
       MultipartFile file = mockFile("avatar.png", 1024, "image/png");
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new RuntimeException("minio down"));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException("Could not store avatars/1/x.png", new RuntimeException()));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
-          .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture");
+          .isInstanceOf(StorageException.class);
+      verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should not dress an unexpected programming error up as a storage failure")
+    void shouldNotWrapUnrelatedRuntimeExceptions() throws Exception {
+      // Given — this is the point of removing `catch (Exception e)`. A NullPointerException here is
+      // a bug in our own code, and reporting it to the user as a 503 "storage is having trouble"
+      // sent everyone looking at MinIO for a fault that was never there.
+      MultipartFile file = mockFile("avatar.png", 1024, "image/png");
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(new NullPointerException("boom"));
+
+      // When / Then
+      assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
+          .isInstanceOf(NullPointerException.class);
     }
 
     @Test
@@ -421,8 +444,11 @@ class ProfileServiceTest {
       // Then
       assertThat(url).startsWith("http://minio:9000/profile-pictures/avatars/1/").endsWith(".png");
       assertThat(user.getProfilePictureUrl()).isEqualTo(url);
-      verify(minIOService).uploadFile(anyString(), anyString(), any());
-      verify(minIOService).ensurePublicReadPolicy("profile-pictures");
+      // The bucket policy is applied once at startup by MinIOBucketInitializer now, not per
+      // upload — it used to be a setBucketPolicy round trip on every avatar change, inside the
+      // transaction.
+      verify(minIOService).uploadFile(anyString(), anyString(), any(), eq("image/png"));
+      verify(minIOService, never()).ensurePublicReadPolicy(anyString());
       verify(userRepository).save(user);
       verify(userProfileCache).evict(USER_ID);
     }

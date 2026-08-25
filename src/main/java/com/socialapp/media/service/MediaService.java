@@ -2,6 +2,7 @@ package com.socialapp.media.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -11,7 +12,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.socialapp.cloud.minio.MinIOConfig;
 import com.socialapp.cloud.minio.MinIOService;
-import com.socialapp.common.exception.StorageException;
 import com.socialapp.common.exception.ValidationException;
 
 import lombok.RequiredArgsConstructor;
@@ -93,18 +93,14 @@ public class MediaService {
   }
 
   private String store(Integer userId, MultipartFile file) {
-    String extension = ALLOWED_TYPES.get(normalisedContentType(file));
+    String contentType = normalisedContentType(file);
+    String extension = ALLOWED_TYPES.get(contentType);
     String objectKey = "posts/" + userId + "/" + UUID.randomUUID() + "." + extension;
 
-    try {
-      minIOService.uploadFile(MEDIA_BUCKET, objectKey, file);
-      // Same call the avatar path makes, and for the same reason: the URL below is handed to a
-      // browser that presents no credentials, so an object in a default-private bucket would come
-      // back 403 from inside an <img> tag with nothing to explain it.
-      minIOService.ensurePublicReadPolicy(MEDIA_BUCKET);
-    } catch (Exception e) {
-      throw new StorageException("Failed to upload image", e);
-    }
+    // The public-read policy is set once at startup by MinIOBucketInitializer, not here. Doing it
+    // per file meant ten setBucketPolicy round trips for a ten-image upload, all writing the value
+    // that was already there.
+    minIOService.uploadFile(MEDIA_BUCKET, objectKey, file, contentType);
 
     return minIOConfig.getUrl() + "/" + MEDIA_BUCKET + "/" + objectKey;
   }
@@ -134,6 +130,6 @@ public class MediaService {
     int parameterStart = contentType.indexOf(';');
     return (parameterStart < 0 ? contentType : contentType.substring(0, parameterStart))
         .trim()
-        .toLowerCase();
+        .toLowerCase(Locale.ROOT);
   }
 }

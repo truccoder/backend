@@ -61,7 +61,9 @@ public class ProjectController {
   @GetMapping
   public ProjectPageResponseDto getProjects(
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive @Max(50)
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int limit) {
     return projectQueryService.getProjects(cursor, limit);
   }

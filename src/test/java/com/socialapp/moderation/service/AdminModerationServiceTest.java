@@ -24,6 +24,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
@@ -284,7 +285,7 @@ class AdminModerationServiceTest {
               () ->
                   adminModerationService.reviewPost(
                       POST_ID, Likelihood.LIKELY, ViolationType.SPAM, null))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
     }
 
     @Test

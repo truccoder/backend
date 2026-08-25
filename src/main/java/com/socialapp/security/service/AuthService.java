@@ -14,6 +14,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.ratelimit.AuthRateLimitProperties;
 import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
+import com.socialapp.common.utils.TokenHasher;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.*;
@@ -65,6 +66,15 @@ public class AuthService {
   @Transactional
   public void register(RegisterRequestDto request, MultipartFile profilePicture) {
     String email = EmailNormalizer.normalize(request.email());
+
+    // Yes, this confirms whether an address is registered, and yes, that is an account-enumeration
+    // oracle. It is a deliberate exception to the rule the mail flows follow (see
+    // mailBudgetAvailable, which goes to some trouble not to leak the same fact): a signup form
+    // that silently accepts a duplicate address, or claims to have sent a mail it did not, leaves
+    // the person with no way to understand why they cannot get in. The alternative — "check your
+    // inbox" either way, with a "you already have an account" mail — is the correct fix and is a
+    // product change, not a code one. Until then the exposure is bounded by the auth rate limit
+    // (20 requests per 5 minutes per IP), which makes enumerating a list slow rather than free.
     if (userRepository.existsByEmailIgnoreCase(email)) {
       throw new ValidationException("Email already exists");
     }
@@ -206,7 +216,7 @@ public class AuthService {
   public AuthResponseDto refresh(RefreshTokenRequestDto request) {
     RefreshToken stored =
         refreshTokenRepository
-            .findById(request.refreshToken())
+            .findById(TokenHasher.hash(request.refreshToken()))
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     if (tokenService.isRefreshTokenExpired(stored)) {
@@ -240,7 +250,7 @@ public class AuthService {
   public void resetPassword(ResetPasswordRequestDto request) {
     PasswordResetToken resetToken =
         passwordResetTokenRepository
-            .findById(request.token())
+            .findById(TokenHasher.hash(request.token()))
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     if (resetToken.getExpiresAt() == null
@@ -277,7 +287,7 @@ public class AuthService {
   public void verifyEmail(VerifyEmailRequestDto request) {
     EmailVerificationToken verificationToken =
         emailVerificationTokenRepository
-            .findById(request.token())
+            .findById(TokenHasher.hash(request.token()))
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     if (verificationToken.getExpiresAt() == null
@@ -307,7 +317,7 @@ public class AuthService {
   public AuthResponseDto loginWithMagicLink(MagicLinkLoginRequestDto request) {
     MagicLinkToken magicLinkToken =
         magicLinkTokenRepository
-            .findById(request.token())
+            .findById(TokenHasher.hash(request.token()))
             .orElseThrow(() -> new BadCredentialsException(INVALID_CREDENTIALS));
 
     magicLinkTokenRepository.delete(magicLinkToken);
@@ -327,13 +337,28 @@ public class AuthService {
           banDetailsService.describe(user.getId(), user.getBannedUntil()));
     }
 
+    // Redeeming a magic link proves the person controls the mailbox — which is the whole of what
+    // email verification asks. The exemption at authenticate() already says so in as many words;
+    // this line is that reasoning finishing its sentence, and it is what OAuthAuthService does on
+    // the same grounds for Google and GitHub.
+    //
+    // Without it a user who never opened their verification mail was stuck for good: password
+    // login refuses an unverified account, resetPassword refuses one too, there is no endpoint to
+    // resend the verification mail, and the 24-hour token is long gone. Magic link let them in and
+    // changed nothing, so the next login hit the same wall. They could sign in forever and never
+    // own a working password.
+    if (!user.isEmailVerified()) {
+      user.setEmailVerified(true);
+      userRepository.save(user);
+    }
+
     return tokenService.issueTokens(user);
   }
 
   @Transactional
   public void logout(RefreshTokenRequestDto request) {
     refreshTokenRepository
-        .findById(request.refreshToken())
+        .findById(TokenHasher.hash(request.refreshToken()))
         .ifPresent(refreshTokenRepository::delete);
   }
 
@@ -345,13 +370,13 @@ public class AuthService {
     }
 
     PasswordResetToken resetToken = new PasswordResetToken();
-    resetToken.setToken(generateSecureToken());
+    String rawToken = generateSecureToken();
+    resetToken.setToken(TokenHasher.hash(rawToken));
     resetToken.setUserId(user.getId());
     resetToken.setExpiresAt(OffsetDateTime.now().plusHours(RESET_TOKEN_EXPIRATION_HOURS));
     passwordResetTokenRepository.save(resetToken);
 
-    mailService.sendPasswordResetEmail(
-        user.getEmail(), getRecipientName(user), resetToken.getToken());
+    mailService.sendPasswordResetEmail(user.getEmail(), getRecipientName(user), rawToken);
   }
 
   /**
@@ -388,14 +413,14 @@ public class AuthService {
     emailVerificationTokenRepository.deleteByUserId(user.getId());
 
     EmailVerificationToken verificationToken = new EmailVerificationToken();
-    verificationToken.setToken(generateSecureToken());
+    String rawToken = generateSecureToken();
+    verificationToken.setToken(TokenHasher.hash(rawToken));
     verificationToken.setUserId(user.getId());
     verificationToken.setExpiresAt(
         OffsetDateTime.now().plusHours(VERIFICATION_TOKEN_EXPIRATION_HOURS));
     emailVerificationTokenRepository.save(verificationToken);
 
-    mailService.sendVerificationEmail(
-        user.getEmail(), getRecipientName(user), verificationToken.getToken());
+    mailService.sendVerificationEmail(user.getEmail(), getRecipientName(user), rawToken);
   }
 
   private void createMagicLinkTokenAndSendEmail(UserEntity user) {
@@ -406,13 +431,13 @@ public class AuthService {
     magicLinkTokenRepository.deleteByUserId(user.getId());
 
     MagicLinkToken magicLinkToken = new MagicLinkToken();
-    magicLinkToken.setToken(generateSecureToken());
+    String rawToken = generateSecureToken();
+    magicLinkToken.setToken(TokenHasher.hash(rawToken));
     magicLinkToken.setUserId(user.getId());
     magicLinkToken.setExpiresAt(OffsetDateTime.now().plusMinutes(MAGIC_LINK_EXPIRATION_MINUTES));
     magicLinkTokenRepository.save(magicLinkToken);
 
-    mailService.sendMagicLinkEmail(
-        user.getEmail(), getRecipientName(user), magicLinkToken.getToken());
+    mailService.sendMagicLinkEmail(user.getEmail(), getRecipientName(user), rawToken);
   }
 
   private String getRecipientName(UserEntity user) {

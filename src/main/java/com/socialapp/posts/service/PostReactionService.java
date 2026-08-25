@@ -184,12 +184,6 @@ public class PostReactionService {
         postReactionRepository.countByType(postId));
   }
 
-  private void verifyPostExists(Integer postId) {
-    if (!postRepository.existsById(postId)) {
-      throw new NotFoundException("Post not found with ID: " + postId);
-    }
-  }
-
   private PostEntity findPostOrThrow(Integer postId) {
     return postRepository
         .findById(postId)

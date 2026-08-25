@@ -24,6 +24,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.ratelimit.CostlyOperationProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
@@ -58,6 +60,7 @@ class ExplanationServiceTest {
   private static final Integer POST_ID = 100;
 
   @Mock private GeminiClient geminiClient;
+  @Mock private FixedWindowRateLimiter rateLimiter;
   @Mock private ExplanationRepository explanationRepository;
   @Mock private UserProfessionalProfileRepository profileRepository;
   @Mock private VaultNoteRepository vaultNoteRepository;
@@ -76,6 +79,10 @@ class ExplanationServiceTest {
     explanationService =
         new ExplanationService(
             geminiClient,
+            rateLimiter,
+            // Mockito's default false from isOverLimit means "budget available", so every existing
+            // test keeps its behaviour without stubbing the limiter.
+            new CostlyOperationProperties(),
             explanationRepository,
             profileRepository,
             vaultNoteRepository,

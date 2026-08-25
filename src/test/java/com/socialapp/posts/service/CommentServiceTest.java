@@ -3,6 +3,8 @@ package com.socialapp.posts.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -524,9 +526,9 @@ class CommentServiceTest {
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(false);
 
       // When / Then
-      assertThatThrownBy(() -> commentService.getComments(5, POST_ID))
+      assertThatThrownBy(() -> commentService.getComments(5, POST_ID, null, 20))
           .isInstanceOf(NotFoundException.class);
-      verify(commentRepository, never()).findByPostIdOrderByCreatedAtAsc(any());
+      verify(commentRepository, never()).findRootCommentsForPage(any(), any(), any());
     }
 
     @Test
@@ -776,7 +778,7 @@ class CommentServiceTest {
       blocked.setPostId(POST_ID);
       blocked.setAuthorId(8);
       blocked.setContent("hidden");
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(java.util.List.of(mine, blocked));
       when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of(8));
       when(userRepository.findAllById(java.util.Set.of(7))).thenReturn(java.util.List.of());
@@ -786,7 +788,7 @@ class CommentServiceTest {
           .thenReturn(java.util.Map.of());
 
       // When
-      var comments = commentService.getComments(5, POST_ID);
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then — a comment thread is where a blocked user can talk straight at the person who
       // blocked them, so leaving this unfiltered would undo most of what the block is for
@@ -814,7 +816,7 @@ class CommentServiceTest {
       // preview fell back to the two oldest and said so on screen
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(java.util.List.of(comment(1, AUTHOR_ID), comment(2, AUTHOR_ID)));
       when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
       when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
@@ -825,7 +827,7 @@ class CommentServiceTest {
           .thenReturn(java.util.Map.of(2, ReactionType.INSIGHT));
 
       // When
-      var comments = commentService.getComments(5, POST_ID);
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then — a comment nobody reacted to reads 0 rather than null, and myReaction stays null
       // where the caller has not chosen anything
@@ -843,7 +845,7 @@ class CommentServiceTest {
       // reaction row lost its labels the number beside a single glyph became unanswerable
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(java.util.List.of(comment(1, AUTHOR_ID), comment(2, AUTHOR_ID)));
       when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
       when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
@@ -857,7 +859,7 @@ class CommentServiceTest {
           .thenReturn(java.util.Map.of());
 
       // When
-      var comments = commentService.getComments(5, POST_ID);
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then - the breakdown adds up to the total beside it, and a comment nobody reacted to gets
       // an empty map rather than null: null would be indistinguishable from "not loaded"
@@ -874,7 +876,7 @@ class CommentServiceTest {
       // hurts most on exactly the posts people are reading
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(
               java.util.List.of(
                   comment(1, AUTHOR_ID), comment(2, AUTHOR_ID), comment(3, AUTHOR_ID)));
@@ -887,7 +889,7 @@ class CommentServiceTest {
       when(commentReactionRepository.findMyReactions(any(), any())).thenReturn(java.util.Map.of());
 
       // When
-      commentService.getComments(5, POST_ID);
+      commentService.getComments(5, POST_ID, null, 20);
 
       // Then - three queries for the thread, not three per comment
       verify(commentReactionRepository, times(1)).countByCommentIds(java.util.List.of(1, 2, 3));
@@ -902,7 +904,7 @@ class CommentServiceTest {
       // Given — the same gap the feed had, one level down
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(java.util.List.of(comment(1, AUTHOR_ID)));
       when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
       when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
@@ -911,7 +913,7 @@ class CommentServiceTest {
       when(commentReactionRepository.findMyReactions(any(), any())).thenReturn(java.util.Map.of());
 
       // When
-      var comments = commentService.getComments(5, POST_ID);
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then
       assertThat(comments.get(0).getAuthorUsername()).isEqualTo("author_" + AUTHOR_ID);
@@ -924,7 +926,7 @@ class CommentServiceTest {
       // than throw, which is why every author field is read through a null guard
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
-      when(commentRepository.findByPostIdOrderByCreatedAtAsc(POST_ID))
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
           .thenReturn(java.util.List.of(comment(1, AUTHOR_ID)));
       when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
       when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID))).thenReturn(java.util.List.of());
@@ -932,7 +934,7 @@ class CommentServiceTest {
       when(commentReactionRepository.findMyReactions(any(), any())).thenReturn(java.util.Map.of());
 
       // When
-      var comments = commentService.getComments(5, POST_ID);
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then
       assertThat(comments.get(0).getAuthorUsername()).isNull();

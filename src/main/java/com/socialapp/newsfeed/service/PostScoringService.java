@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.*;
 
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -35,10 +37,24 @@ public class PostScoringService {
   private static final long ENGAGEMENT_BOOST_MILLIS = 4 * 3600 * 1000L; // 4 hours
   private static final long AFFINITY_BOOST_MILLIS = 6 * 3600 * 1000L; // 6 hours
 
+  /**
+   * Rescores every feed, every five minutes.
+   *
+   * <p><b>{@code SCAN}, not {@code KEYS}.</b> {@code KEYS} walks the entire keyspace in one shot and
+   * Redis is single-threaded, so for the duration everything else queued behind it: the auth rate
+   * limiter, {@code CacheTemplate}, the Google OAuth nonces, and the feeds themselves. On this
+   * deployment Redis shares a box with everything else, which makes a periodic stop-the-world scan
+   * expensive in a way that does not show up in this job's own timings. {@code SCAN} returns in
+   * bounded batches and lets other commands interleave.
+   *
+   * <p>The cost still grows with the number of feed keys rather than with the number of people
+   * actually reading — each one costs a Postgres query for its affinity map. The feed TTL added in
+   * {@code NewsfeedService} bounds that set to accounts active in the last thirty days, which is
+   * the part that used to grow without limit.
+   */
   @Scheduled(fixedRate = 5 * 60 * 1000)
   public void recalculateScores() {
-    Set<String> feedKeys = redisTemplate.keys(FEED_KEY_PREFIX + "*");
-    // keys() returns null, not an empty set, when the connection hands back nothing.
+    Set<String> feedKeys = scanFeedKeys();
     if (CollectionUtils.isEmpty(feedKeys)) {
       return;
     }
@@ -59,6 +75,29 @@ public class PostScoringService {
         log.error("Failed to recalculate feed for key {}", feedKey, e);
       }
     }
+  }
+
+  /**
+   * Every {@code feed:*} key, read in batches rather than in one blocking sweep.
+   *
+   * <p>{@code SCAN} can return the same key twice when the keyspace changes mid-iteration, which is
+   * why the result is a {@code Set}: rescoring a feed twice in one tick is wasted work, not a bug,
+   * but there is no reason to pay for it.
+   */
+  private Set<String> scanFeedKeys() {
+    Set<String> keys = new HashSet<>();
+    ScanOptions options = ScanOptions.scanOptions().match(FEED_KEY_PREFIX + "*").count(500).build();
+
+    try (Cursor<String> cursor = redisTemplate.scan(options)) {
+      while (cursor.hasNext()) {
+        keys.add(cursor.next());
+      }
+    } catch (Exception e) {
+      log.error("Failed to scan feed keys; skipping this rescoring tick", e);
+      return Set.of();
+    }
+
+    return keys;
   }
 
   void recalculateFeedForUser(Integer userId) {

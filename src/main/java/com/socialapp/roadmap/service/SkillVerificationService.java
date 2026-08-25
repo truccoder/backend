@@ -7,7 +7,10 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.ConflictException;
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -73,6 +76,8 @@ public class SkillVerificationService {
     Optional<UserRoadmapProgressEntity> existingProgress =
         progressRepository.findByUserIdAndNodeId(userId, dto.getNodeId());
 
+    existingProgress.ifPresent(existing -> requireResubmittable(existing, dto.getTier()));
+
     UserRoadmapProgressEntity progress =
         existingProgress.orElseGet(
             () -> UserRoadmapProgressEntity.builder().user(user).node(node).build());
@@ -104,7 +109,63 @@ public class SkillVerificationService {
     progressRepository.save(progress);
 
     if (awardType != null) {
-      reputationEventPublisher.award(userId, awardType, progressSourceId(userId, dto.getNodeId()));
+      awardForNode(userId, dto.getNodeId(), awardType);
+    }
+  }
+
+  /**
+   * Records the points for one verified node, and clears the weaker award for the same node first.
+   *
+   * <p>The reputation ledger de-duplicates on {@code (userId, sourceType, sourceId)}. {@code
+   * sourceId} here is the node, but the <em>tier</em> decides the source type — so a node that was
+   * self-verified and later verified properly produced two ledger rows for one skill, and the user
+   * banked 5 + 20 instead of 20. Revoking the self-verified entry before granting the real one
+   * keeps one node worth one award, whichever route it took.
+   *
+   * <p>Revoking an award that was never granted is a no-op ({@code ReputationService#revoke}
+   * deletes by the same triple), so this is safe on the common path where no self-verification
+   * happened.
+   */
+  private void awardForNode(Integer userId, Integer nodeId, RepSourceType awardType) {
+    String sourceId = progressSourceId(userId, nodeId);
+
+    if (awardType == RepSourceType.ROADMAP_NODE_VERIFIED) {
+      reputationEventPublisher.revoke(userId, RepSourceType.ROADMAP_SELF_VERIFIED, sourceId);
+    }
+
+    reputationEventPublisher.award(userId, awardType, sourceId);
+  }
+
+  /**
+   * Refuses a re-submission that would let the claimant overwrite a decision already on the record.
+   *
+   * <p>{@code SELF_VERIFIED} is the tier with no reviewer: it writes {@code VERIFIED} immediately.
+   * Without this guard it could be pointed at a row a moderator had already {@code REJECTED} and
+   * flip it to verified — the person whose claim was refused erasing the refusal, and collecting
+   * the self-verified points for doing it. Nothing recorded that the rejection had ever happened.
+   *
+   * <p>The rule is therefore: <b>{@code SELF_VERIFIED} may only be used on a node nobody has ruled
+   * on yet.</b> Every other transition stays open, including re-submitting a rejected claim for
+   * review with better proof, and upgrading a self-verified node to a moderator-reviewed one —
+   * both of those go to {@code PENDING_APPROVAL} and are decided by somebody else.
+   */
+  private void requireResubmittable(
+      UserRoadmapProgressEntity existing, VerificationTier requestedTier) {
+    if (requestedTier != VerificationTier.SELF_VERIFIED) {
+      return;
+    }
+    if (existing.getStatus() == VerificationStatus.VERIFIED) {
+      throw new ValidationException("This skill is already verified");
+    }
+    if (existing.getStatus() == VerificationStatus.REJECTED) {
+      throw new ValidationException(
+          "This claim was reviewed and rejected. Submit it for review again with new proof rather"
+              + " than self-verifying it.");
+    }
+    if (existing.getStatus() == VerificationStatus.PENDING_APPROVAL) {
+      throw new ValidationException(
+          "This claim is waiting on a reviewer. Wait for the decision rather than self-verifying"
+              + " it.");
     }
   }
 
@@ -142,8 +203,17 @@ public class SkillVerificationService {
             .orElseThrow(() -> new NotFoundException("Progress not found"));
 
     if (progress.getStatus() != VerificationStatus.PENDING_APPROVAL) {
-      throw new IllegalStateException(
+      throw new ConflictException(
           "Cannot approve a verification request that is already " + progress.getStatus());
+    }
+
+    // Nobody signs off on their own claim, admin or not. Only admins reach this method (both
+    // @PreAuthorize and a SecurityConfig matcher say so), so this is not a privilege check — it is
+    // the same "no self-crediting" rule PostService#acceptAnswer and ProjectService#applyToPosition
+    // apply, on the highest-value award in the system (ROADMAP_NODE_VERIFIED, 20 points). An admin
+    // who wants the badge files the claim and another admin decides it.
+    if (moderatorId.equals(progress.getUser().getId())) {
+      throw new ForbiddenException("You cannot approve your own verification request");
     }
 
     UserEntity moderator =
@@ -156,10 +226,10 @@ public class SkillVerificationService {
     progress.setVerifiedAt(OffsetDateTime.now());
     progressRepository.save(progress);
 
-    reputationEventPublisher.award(
+    awardForNode(
         progress.getUser().getId(),
-        RepSourceType.ROADMAP_NODE_VERIFIED,
-        progressSourceId(progress.getUser().getId(), progress.getNode().getId()));
+        progress.getNode().getId(),
+        RepSourceType.ROADMAP_NODE_VERIFIED);
 
     notifyDecision(progress, NotificationType.SKILL_VERIFIED);
   }
@@ -172,7 +242,7 @@ public class SkillVerificationService {
             .orElseThrow(() -> new NotFoundException("Progress not found"));
 
     if (progress.getStatus() != VerificationStatus.PENDING_APPROVAL) {
-      throw new IllegalStateException(
+      throw new ConflictException(
           "Cannot reject a verification request that is already " + progress.getStatus());
     }
 
