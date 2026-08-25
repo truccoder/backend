@@ -11,6 +11,7 @@ import com.socialapp.trending.entity.enums.TrendingCategory;
 import com.socialapp.trending.entity.enums.TrendingSource;
 import com.socialapp.trending.service.TrendingService;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -31,7 +32,10 @@ public class TrendingController {
       @RequestParam(required = false) TrendingSource source,
       @RequestParam(defaultValue = "week") String timeRange,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return trendingService.getTrending(category, source, timeRange, page, size);
   }
 }

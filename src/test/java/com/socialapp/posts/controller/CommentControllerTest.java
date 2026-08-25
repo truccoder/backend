@@ -3,6 +3,7 @@ package com.socialapp.posts.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -34,6 +35,7 @@ import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.posts.dto.CommentPageResponseDto;
 import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.service.CommentService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -128,16 +130,17 @@ class CommentControllerTest {
               .build();
       // The authenticated user (id 1) is now passed through as the viewer, so that comments by
       // someone they have blocked can be filtered out.
-      when(commentService.getComments(1, 1)).thenReturn(List.of(comment));
+      when(commentService.getComments(eq(1), eq(1), isNull(), anyInt()))
+          .thenReturn(new CommentPageResponseDto(List.of(comment), null, false));
 
       // When / Then
       mockMvc
           .perform(authed(get(commentsUrl(1))))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$[0].id").value(10))
-          .andExpect(jsonPath("$[0].authorId").value(2))
-          .andExpect(jsonPath("$[0].authorFullName").value("Author Two"))
-          .andExpect(jsonPath("$[0].content").value("First!"));
+          .andExpect(jsonPath("$.comments[0].id").value(10))
+          .andExpect(jsonPath("$.comments[0].authorId").value(2))
+          .andExpect(jsonPath("$.comments[0].authorFullName").value("Author Two"))
+          .andExpect(jsonPath("$.comments[0].content").value("First!"));
     }
 
     @Test
@@ -146,7 +149,7 @@ class CommentControllerTest {
       // Given
       doThrow(new NotFoundException("Post not found with ID: 999"))
           .when(commentService)
-          .getComments(1, 999);
+          .getComments(eq(1), eq(999), isNull(), anyInt());
 
       // When / Then
       mockMvc

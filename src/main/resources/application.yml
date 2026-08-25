@@ -257,6 +257,19 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
 
+# Khoá AES-256 (base64, 32 byte) dùng để mã hoá các cột chứa token OAuth của bên thứ ba —
+# access token GitHub, và cặp access/refresh token Google Calendar. Xem EncryptedStringConverter.
+#
+# KHÔNG có giá trị mặc định, và đó là chủ ý: một khoá mặc định nằm trong repo thì tương đương không
+# mã hoá gì cả. Thiếu khoá thì việc LIÊN KẾT tài khoản GitHub/Google bị từ chối (503), phần còn lại
+# của ứng dụng vẫn chạy bình thường.
+#
+# Sinh khoá:  openssl rand -base64 32
+#
+# Đổi khoá thì các token đã mã hoá bằng khoá cũ không đọc được nữa — người dùng phải liên kết lại.
+security:
+  column-encryption-key: ${COLUMN_ENCRYPTION_KEY:}
+
 gemini:
   api-key: ${GEMINI_API_KEY:}
   model: gemini-2.5-flash-lite
@@ -342,6 +355,17 @@ rate-limit:
   #   requests/window          — theo IP nguồn, chặn dò mật khẩu
   #   mail-requests/mail-window — theo ĐỊA CHỈ NHẬN, chặn việc dội mail vào hòm thư người khác
   #                               từ nhiều IP mà mỗi IP đều nằm dưới hạn mức trên
+  # Hạn mức theo NGƯỜI DÙNG cho các endpoint tốn tiền thật (hiện là /knowledge/.../explain).
+  #
+  # Hai bộ lọc ở trên không phủ tới: guest thoát ngay khi người gọi đã đăng nhập, còn auth chỉ áp
+  # cho /v1/api/auth/**. Nghĩa là trước đây một tài khoản hợp lệ chạy vòng lặp trên endpoint gọi
+  # Gemini không gặp trần nào — và vì kiểm duyệt nội dung dùng CHUNG khoá Gemini, tiêu hết hạn mức
+  # nghĩa là kiểm duyệt cũng ngừng hoạt động.
+  costly:
+    enabled: ${COSTLY_RATE_LIMIT_ENABLED:true}
+    ai-requests: ${AI_RATE_LIMIT_REQUESTS:20}
+    ai-window: ${AI_RATE_LIMIT_WINDOW:1h}
+
   auth:
     enabled: ${AUTH_RATE_LIMIT_ENABLED:true}
     requests: ${AUTH_RATE_LIMIT_REQUESTS:20}

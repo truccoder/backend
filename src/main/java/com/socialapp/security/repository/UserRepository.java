@@ -48,6 +48,21 @@ public interface UserRepository extends JpaRepository<UserEntity, Integer> {
   boolean existsByUsernameIgnoreCase(@Param("username") String username);
 
   /**
+   * Resolves several handles at once, case-insensitively — the batch form of {@link
+   * #findByUsernameIgnoreCase}.
+   *
+   * <p>For {@code MentionScanner}: a comment can name up to ten people, and looking each one up in
+   * turn would be ten round trips on the write path of every comment that contains an {@code @}.
+   * Handles that match nobody are simply absent from the result, which is the answer the caller
+   * wants — a comment mentioning a handle that does not exist is a comment, not an error.
+   *
+   * <p>The handles are lower-cased by the caller and compared against {@code LOWER(u.username)}, so
+   * this uses the {@code uq_users_username_lower} index from {@code V47} rather than scanning.
+   */
+  @Query("SELECT u FROM UserEntity u WHERE LOWER(u.username) IN :usernames")
+  List<UserEntity> findAllByUsernameLowerIn(@Param("usernames") Collection<String> usernames);
+
+  /**
    * {@code excludedIds} carries the caller's block set: someone a user has blocked, or who has
    * blocked them, must not be findable by name — otherwise the block hides their posts while
    * leaving a working search box pointed at their profile. Like {@code friendIds} it must never be
