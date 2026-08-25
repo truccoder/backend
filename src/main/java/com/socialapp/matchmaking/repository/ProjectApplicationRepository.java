@@ -13,6 +13,9 @@ public interface ProjectApplicationRepository
     extends JpaRepository<ProjectApplicationEntity, Integer> {
   long countByPositionIdAndStatus(Integer positionId, ApplicationStatus status);
 
+  /** Whether this applicant has already applied to this position — one application each. */
+  boolean existsByPositionIdAndApplicantId(Integer positionId, Integer applicantId);
+
   /**
    * The applications sent to one project, newest first — a project owner's inbox.
    *

@@ -130,6 +130,21 @@ public class MomoService {
       return false;
     }
 
+    // A signed IPN naming an orderId this database has no row for means money may have moved with
+    // nothing on this side to attach it to — the one failure in this flow that loses evidence
+    // rather than just an update. Logged at ERROR with the whole payload before the exception
+    // leaves, because that payload carries MoMo's own signature and is the only record of the
+    // transaction we will ever hold. Rethrown unchanged so the caller still sees a 404 and MoMo
+    // still retries; the point is that the retries are now visible.
+    if (!purchaseRepository.findByTransactionRef(orderId).isPresent()) {
+      log.error(
+          "[orderId={}] MoMo IPN passed signature verification but no purchase holds this"
+              + " transaction ref. If resultCode is 0 this is a PAID order with no local record —"
+              + " reconcile by hand. Signed payload: {}",
+          orderId,
+          payload);
+    }
+
     return applyResult(
         orderId,
         resultCode,
@@ -142,8 +157,16 @@ public class MomoService {
    * development, where MoMo cannot reach an IPN URL on localhost.
    */
   @Transactional
-  public boolean syncPaymentStatus(String transactionRef) {
-    findPurchaseOrThrow(transactionRef);
+  public boolean syncPaymentStatus(Integer callerId, String transactionRef) {
+    BookPurchaseEntity purchase = findPurchaseOrThrow(transactionRef);
+
+    // The transaction ref comes straight off the path and used to be trusted on its own, so any
+    // signed-in user could drive somebody else's purchase to COMPLETED or FAILED — and trigger the
+    // author's "your book sold" notification with it. 404, not 403: someone else's order ref is
+    // not theirs to confirm the existence of.
+    if (!purchase.getBuyerId().equals(callerId)) {
+      throw new NotFoundException("Purchase not found: " + transactionRef);
+    }
 
     Map<String, Object> response = momoApiClient.queryPaymentStatus(transactionRef);
 
@@ -152,11 +175,18 @@ public class MomoService {
         transactionRef,
         response.get("resultCode"));
 
+    // Same guard as handleWebhook: a malformed resultCode from MoMo is their bad data, not a
+    // reason to throw NumberFormatException out of a user-facing endpoint.
+    int resultCode;
+    try {
+      resultCode = asInt(response.get("resultCode"));
+    } catch (NumberFormatException e) {
+      log.warn("[orderId={}] MoMo query returned a malformed resultCode", transactionRef);
+      return false;
+    }
+
     return applyResult(
-        transactionRef,
-        asInt(response.get("resultCode")),
-        String.valueOf(response.getOrDefault("transId", "")),
-        null);
+        transactionRef, resultCode, String.valueOf(response.getOrDefault("transId", "")), null);
   }
 
   private boolean applyResult(String orderId, int resultCode, String transId, String payType) {

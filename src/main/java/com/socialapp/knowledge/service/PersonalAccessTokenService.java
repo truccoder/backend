@@ -10,6 +10,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,16 +71,24 @@ public class PersonalAccessTokenService {
     return validateTokenAndGetEntity(rawToken).getUserId();
   }
 
+  /**
+   * Resolves a raw PAT to its row, or rejects it.
+   *
+   * <p>{@link BadCredentialsException} (401), not {@code NotFoundException} (404): the Obsidian
+   * plugin presents this token *as* its credential, so an unknown or expired one is a failure to
+   * authenticate, not a missing resource. 404 told the plugin its endpoint was wrong when the real
+   * answer was "your token needs replacing".
+   */
   public PersonalAccessTokenEntity validateTokenAndGetEntity(String rawToken) {
     String tokenHash = hashToken(rawToken);
     PersonalAccessTokenEntity entity =
         tokenRepository
             .findByTokenHash(tokenHash)
-            .orElseThrow(() -> new NotFoundException("Invalid token"));
+            .orElseThrow(() -> new BadCredentialsException("Invalid token"));
 
     if (Objects.nonNull(entity.getExpiresAt())
         && OffsetDateTime.now().isAfter(entity.getExpiresAt())) {
-      throw new NotFoundException("Token expired");
+      throw new BadCredentialsException("Token expired");
     }
 
     entity.setLastUsedAt(OffsetDateTime.now());

@@ -22,13 +22,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.SuggestionType;
 import com.socialapp.search.dto.UserDto;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -80,7 +80,7 @@ class SearchControllerTest {
   // /search/suggest now goes through its own service — see SuggestService for why the type-ahead
   // path is kept off the results-page code.
   @MockBean private SuggestService suggestService;
-  @MockBean private FriendshipQueryService friendshipQueryService;
+  @MockBean private FriendshipService friendshipService;
   @MockBean private JwtProvider jwtProvider;
 
   @MockBean
@@ -122,7 +122,7 @@ class SearchControllerTest {
     @DisplayName("shouldReturn200AndResults_happyPath")
     void shouldReturn200AndResults_happyPath() throws Exception {
       // Given
-      when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
       when(searchService.searchUsers(eq("reader"), eq(1), eq(10), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
@@ -153,7 +153,7 @@ class SearchControllerTest {
     @DisplayName("shouldPassSizeThrough_whenProvided")
     void shouldPassSizeThrough_whenProvided() throws Exception {
       // Given
-      when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
       when(searchService.searchUsers(eq("java"), eq(1), eq(5), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
