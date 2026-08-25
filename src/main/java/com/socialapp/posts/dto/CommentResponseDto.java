@@ -27,6 +27,26 @@ public class CommentResponseDto {
 
   private String authorFullName;
   private String authorProfilePictureUrl;
+
+  /**
+   * The commenter's reputation, the same pair {@code FeedPostDataDto} carries for a post author.
+   *
+   * <p>A comment's identity row and a post's identity row are the same row — face, name, score
+   * chip, time — four lines apart on one screen, and only one of them used to have the data to
+   * draw the chip. The client cannot derive the label from the score: the design system forbids
+   * deriving a level client-side, which is why {@code authorLevelName} travels resolved rather
+   * than as a number to be bucketed.
+   *
+   * <p>Free to carry. {@code CommentService#hydrate} already loads every author row of the page in
+   * one {@code findAllById}, and {@code elite_score} is a column on that row — so this replaces N
+   * calls to {@code GET /users/{id}/reputation} (one per distinct commenter in a thread) with no
+   * extra query at all. Both are null when the author row is gone, together with the rest of the
+   * author fields.
+   */
+  private Integer authorEliteScore;
+
+  private String authorLevelName;
+
   private String content;
   private Integer parentId;
   private OffsetDateTime createdAt;

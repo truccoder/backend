@@ -123,6 +123,8 @@ class CommentControllerTest {
               .authorId(2)
               .authorFullName("Author Two")
               .authorProfilePictureUrl("http://cdn.example.com/avatar2.png")
+              .authorEliteScore(1_200)
+              .authorLevelName("Practitioner")
               .content("First!")
               .parentId(null)
               .createdAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"))
@@ -140,6 +142,10 @@ class CommentControllerTest {
           .andExpect(jsonPath("$.comments[0].id").value(10))
           .andExpect(jsonPath("$.comments[0].authorId").value(2))
           .andExpect(jsonPath("$.comments[0].authorFullName").value("Author Two"))
+          // The score chip's two fields, on the wire. The label travels resolved because the
+          // design system forbids deriving a level from a score on the client.
+          .andExpect(jsonPath("$.comments[0].authorEliteScore").value(1_200))
+          .andExpect(jsonPath("$.comments[0].authorLevelName").value("Practitioner"))
           .andExpect(jsonPath("$.comments[0].content").value("First!"));
     }
 

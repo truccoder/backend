@@ -177,6 +177,7 @@ public class NotificationService {
             .body(request.getBody())
             .referenceId(request.getReferenceId())
             .referenceType(request.getReferenceType())
+            .postId(request.getPostId())
             .channel(request.getChannel())
             .build();
     return notificationRepository.save(entity);
@@ -222,6 +223,7 @@ public class NotificationService {
         .body(entity.getBody())
         .referenceId(entity.getReferenceId())
         .referenceType(entity.getReferenceType())
+        .postId(entity.getPostId())
         .channel(entity.getChannel())
         .isRead(entity.getIsRead())
         .createdAt(entity.getCreatedAt())

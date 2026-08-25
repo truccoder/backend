@@ -2,6 +2,7 @@ package com.socialapp.posts.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -175,6 +176,11 @@ class CommentServiceTest {
       // The COMMENT id and "COMMENT", not the post: a thread runs to hundreds of replies and the
       // notification has to open at the one that named you
       assertThat(mention.getReferenceType()).isEqualTo("COMMENT");
+
+      // And the post it lives under, which is what makes the row tappable at all. No client route
+      // is keyed by a comment id, so for a while this notification arrived, read correctly, and
+      // went nowhere when tapped — the whole point of the type is "somebody named you OVER THERE".
+      assertThat(mention.getPostId()).isEqualTo(POST_ID);
     }
 
     @Test
@@ -824,17 +830,19 @@ class CommentServiceTest {
       when(commentReactionRepository.countByCommentIds(java.util.List.of(1, 2)))
           .thenReturn(java.util.Map.of(1, 5L));
       when(commentReactionRepository.findMyReactions(5, java.util.List.of(1, 2)))
-          .thenReturn(java.util.Map.of(2, ReactionType.INSIGHT));
+          .thenReturn(java.util.Map.of(2, ReactionType.LIKE));
 
       // When
       var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then — a comment nobody reacted to reads 0 rather than null, and myReaction stays null
-      // where the caller has not chosen anything
+      // where the caller has not chosen anything. LIKE is the only value it can hold now; the
+      // field stays a ReactionType because narrowing it to a boolean would break the contract for
+      // nothing.
       assertThat(comments.get(0).getLikeCount()).isEqualTo(5);
       assertThat(comments.get(0).getMyReaction()).isNull();
       assertThat(comments.get(1).getLikeCount()).isZero();
-      assertThat(comments.get(1).getMyReaction()).isEqualTo(ReactionType.INSIGHT);
+      assertThat(comments.get(1).getMyReaction()).isEqualTo(ReactionType.LIKE);
     }
 
     @Test
@@ -853,8 +861,7 @@ class CommentServiceTest {
       when(commentReactionRepository.countByCommentIds(java.util.List.of(1, 2)))
           .thenReturn(java.util.Map.of(1, 3L));
       when(commentReactionRepository.countByTypeForCommentIds(java.util.List.of(1, 2)))
-          .thenReturn(
-              java.util.Map.of(1, java.util.Map.of(ReactionType.LIKE, 2L, ReactionType.CLAP, 1L)));
+          .thenReturn(java.util.Map.of(1, java.util.Map.of(ReactionType.LIKE, 3L)));
       when(commentReactionRepository.findMyReactions(5, java.util.List.of(1, 2)))
           .thenReturn(java.util.Map.of());
 
@@ -862,10 +869,14 @@ class CommentServiceTest {
       var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
       // Then - the breakdown adds up to the total beside it, and a comment nobody reacted to gets
-      // an empty map rather than null: null would be indistinguishable from "not loaded"
+      // an empty map rather than null: null would be indistinguishable from "not loaded".
+      //
+      // One key, because a comment may only be liked — the map used to be stubbed with LIKE and
+      // CLAP together, a shape no comment can be in any more. It stays a map rather than
+      // collapsing into likeCount so the contract holds and the post-level breakdown keeps a
+      // sibling of the same type.
       assertThat(comments.get(0).getReactionSummary())
-          .containsEntry(ReactionType.LIKE, 2L)
-          .containsEntry(ReactionType.CLAP, 1L);
+          .containsExactly(entry(ReactionType.LIKE, 3L));
       assertThat(comments.get(1).getReactionSummary()).isEmpty();
     }
 
@@ -896,6 +907,12 @@ class CommentServiceTest {
       verify(commentReactionRepository, times(1))
           .countByTypeForCommentIds(java.util.List.of(1, 2, 3));
       verify(commentReactionRepository, times(1)).findMyReactions(5, java.util.List.of(1, 2, 3));
+
+      // Then - and one author lookup for the whole thread. Pinned here because resolving each
+      // commenter's level is the obvious place to reach for ReputationService, which only answers
+      // one user at a time — the level name is derived from the score already on the row this
+      // single batch loaded.
+      verify(userRepository, times(1)).findAllById(java.util.Set.of(AUTHOR_ID));
     }
 
     @Test
@@ -936,9 +953,37 @@ class CommentServiceTest {
       // When
       var comments = commentService.getComments(5, POST_ID, null, 20).comments();
 
-      // Then
+      // Then — every author field goes null together, including the two the score chip needs
       assertThat(comments.get(0).getAuthorUsername()).isNull();
       assertThat(comments.get(0).getAuthorFullName()).isNull();
+      assertThat(comments.get(0).getAuthorEliteScore()).isNull();
+      assertThat(comments.get(0).getAuthorLevelName()).isNull();
+    }
+
+    @Test
+    @DisplayName("should carry the commenter's score and level, so the chip needs no extra request")
+    void shouldCarryAuthorReputation() {
+      // Given — a comment's identity row and a post's identity row are the same row four lines
+      // apart, and only the post's had the data to draw the score chip. The client may not derive
+      // the level from the score, so the label travels resolved.
+      UserEntity author = sampleUser("Author");
+      author.setEliteScore(1_200);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      when(postVisibilityService.isVisibleTo(any(), any())).thenReturn(true);
+      when(commentRepository.findRootCommentsForPage(eq(POST_ID), isNull(), any()))
+          .thenReturn(java.util.List.of(comment(1, AUTHOR_ID)));
+      when(blockQueryService.blockedPairIds(5)).thenReturn(java.util.Set.of());
+      when(userRepository.findAllById(java.util.Set.of(AUTHOR_ID)))
+          .thenReturn(java.util.List.of(author));
+      when(commentReactionRepository.countByCommentIds(any())).thenReturn(java.util.Map.of());
+      when(commentReactionRepository.findMyReactions(any(), any())).thenReturn(java.util.Map.of());
+
+      // When
+      var comments = commentService.getComments(5, POST_ID, null, 20).comments();
+
+      // Then — 1_200 sits inside PRACTITIONER, whose floor is 1_000 and whose successor's is 5_000
+      assertThat(comments.get(0).getAuthorEliteScore()).isEqualTo(1_200);
+      assertThat(comments.get(0).getAuthorLevelName()).isEqualTo("Practitioner");
     }
   }
 }

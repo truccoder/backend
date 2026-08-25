@@ -26,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Pageable;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
@@ -176,7 +177,9 @@ class CommentReactionServiceTest {
     @Test
     @DisplayName("should count only the requested type when one is given")
     void shouldCountOnlyTheFilteredType() {
-      // Given
+      // Given — CLAP on purpose, even though a comment can no longer be given one: the read path
+      // forwards whatever type it is handed rather than vetting it, and a filter that can only
+      // ever be LIKE would not prove the parameter reaches the repository at all
       givenReadableComment(COMMENT_AUTHOR_ID);
       when(commentReactionRepository.findReactorIds(
               eq(COMMENT_ID), eq(ReactionType.CLAP), isNull(), any()))
@@ -273,11 +276,11 @@ class CommentReactionServiceTest {
 
       // When
       commentReactionService.upsertReaction(
-          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.INSIGHT));
+          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.LIKE));
 
       // Then — the row carries the chosen type
       verify(commentReactionRepository).save(reactionCaptor.capture());
-      assertThat(reactionCaptor.getValue().getReactionType()).isEqualTo(ReactionType.INSIGHT);
+      assertThat(reactionCaptor.getValue().getReactionType()).isEqualTo(ReactionType.LIKE);
       assertThat(reactionCaptor.getValue().getId()).isEqualTo(id);
 
       // Then — and the notification points at the COMMENT, not the post: the client has to open
@@ -289,6 +292,45 @@ class CommentReactionServiceTest {
       assertThat(sent.getReferenceId()).isEqualTo(COMMENT_ID);
       assertThat(sent.getReferenceType()).isEqualTo("COMMENT");
       assertThat(sent.getBody()).contains("Alice");
+
+      // Then — and it carries the post as well, which is the half that makes it tappable: no
+      // client route is keyed by a comment id, so the reference alone addresses nothing
+      assertThat(sent.getPostId()).isEqualTo(POST_ID);
+    }
+
+    @Test
+    @DisplayName("should reject every reaction other than LIKE, before any other check")
+    void shouldThrowValidation_whenReactionIsNotLike() {
+      // Given — a comment may only be liked. Six of the seven ReactionType values are valid on a
+      // post and forbidden here, and the DTO cannot say so because the post path shares it.
+      for (ReactionType forbidden :
+          new ReactionType[] {
+            ReactionType.LOVE,
+            ReactionType.HAHA,
+            ReactionType.CRY,
+            ReactionType.ANGRY,
+            ReactionType.INSIGHT,
+            ReactionType.CLAP
+          }) {
+        // When / Then — 400, not 422: a real enum value that is forbidden on this path belongs
+        // with the other malformed requests, and this project maps @Valid failures to 422
+        assertThatThrownBy(
+                () ->
+                    commentReactionService.upsertReaction(
+                        USER_ID, POST_ID, COMMENT_ID, sampleRequest(forbidden)))
+            .isInstanceOf(ValidationException.class)
+            .hasMessageContaining("can only be liked");
+      }
+
+      // Then — nothing was looked up and nothing was written. The gate stands in front of the ban
+      // check too: CLAP on a comment is malformed whoever sends it, and answering 403 or 404 first
+      // would report the wrong problem.
+      verifyNoInteractions(
+          userBanService,
+          postRepository,
+          commentRepository,
+          commentReactionRepository,
+          notificationService);
     }
 
     @Test
@@ -312,10 +354,12 @@ class CommentReactionServiceTest {
     }
 
     @Test
-    @DisplayName("should change the reaction type without notifying again")
+    @DisplayName("should re-save an existing reaction without notifying again")
     void shouldNotNotifyTwice_whenReactionAlreadyExists() {
-      // Given — swapping LIKE for INSIGHT is the same single act of engagement; notifying again
-      // would let one reader ring somebody's bell as often as they liked
+      // Given — a row already exists for this reader. Since the LIKE-only rule this can no longer
+      // be a type swap, but the guard still matters for the narrower case it now covers: liking a
+      // comment you already like is one reader, and notifying again would let them ring somebody's
+      // bell as often as they liked.
       CommentReactionId id = new CommentReactionId(USER_ID, COMMENT_ID);
       CommentReactionEntity existing =
           new CommentReactionEntity(id, ReactionType.LIKE, OffsetDateTime.now());
@@ -326,11 +370,11 @@ class CommentReactionServiceTest {
 
       // When
       commentReactionService.upsertReaction(
-          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.INSIGHT));
+          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.LIKE));
 
       // Then
       verify(commentReactionRepository).save(reactionCaptor.capture());
-      assertThat(reactionCaptor.getValue().getReactionType()).isEqualTo(ReactionType.INSIGHT);
+      assertThat(reactionCaptor.getValue().getReactionType()).isEqualTo(ReactionType.LIKE);
       verifyNoInteractions(notificationService);
     }
 
@@ -346,7 +390,7 @@ class CommentReactionServiceTest {
 
       // When
       commentReactionService.upsertReaction(
-          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.CLAP));
+          USER_ID, POST_ID, COMMENT_ID, sampleRequest(ReactionType.LIKE));
 
       // Then
       verify(commentReactionRepository).save(any());

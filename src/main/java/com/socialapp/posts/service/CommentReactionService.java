@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
@@ -107,9 +108,25 @@ public class CommentReactionService {
     return new ReactorPageResponseDto(reactors, nextCursor, hasMore, totalCount);
   }
 
+  /**
+   * Sets the caller's reaction on a comment. {@code LIKE} is the only one a comment accepts.
+   *
+   * <p>Rejected before the ban check and before any lookup, because a request naming CLAP on a
+   * comment is malformed no matter who sends it or whether the comment exists — answering it with
+   * 404 or 403 first would report the wrong problem.
+   *
+   * <p>The rule is enforced here rather than on {@link UpsertPostReactionRequestDto}, which
+   * {@code PostReactionController} shares: a post still takes all seven. And it is a thrown {@link
+   * ValidationException} (400) rather than a bean-validation constraint, which this project maps
+   * to 422 — a value that is a real {@link ReactionType} but forbidden on this path belongs with
+   * the other 400s, next to an unparseable one.
+   */
   @Transactional
   public void upsertReaction(
       Integer userId, Integer postId, Integer commentId, UpsertPostReactionRequestDto request) {
+    if (!ReactionType.LIKE.equals(request.getReactionType())) {
+      throw new ValidationException("Comments can only be liked");
+    }
     checkBanStatus(userId);
     CommentEntity comment = requireVisibleComment(userId, postId, commentId);
 
@@ -122,9 +139,10 @@ public class CommentReactionService {
     reaction.setReactionType(request.getReactionType());
     commentReactionRepository.save(reaction);
 
-    // Guarded by isNewReaction exactly as the post path is: swapping LIKE for INSIGHT on a comment
-    // already reacted to is the same single act, and notifying again would let one reader ring
-    // somebody's bell as often as they liked.
+    // Guarded by isNewReaction exactly as the post path is. It survives the LIKE-only rule for a
+    // narrower case than the one it was written for: a reader who removes their like and puts it
+    // back is still one reader, and notifying on the second one would let them ring somebody's
+    // bell as often as they liked.
     if (isNewReaction) {
       notifyCommentAuthor(comment, userId);
     }
@@ -182,8 +200,10 @@ public class CommentReactionService {
    * Tells the comment's author, unless they reacted to their own comment.
    *
    * <p>{@code referenceId} is the comment id and {@code referenceType} is "COMMENT": the client
-   * has to open the thread at the reply that was reacted to, and a post id would only get it to
-   * the top of a page that may hold hundreds of comments.
+   * has to open the thread at the reply that was reacted to, and a post id alone would only get it
+   * to the top of a page that may hold hundreds of comments. {@code postId} rides along as the
+   * other half of that address — the reference says which reply, this says which page — because no
+   * client route is keyed by a comment id.
    */
   private void notifyCommentAuthor(CommentEntity comment, Integer reactorId) {
     if (comment.getAuthorId().equals(reactorId)) {
@@ -198,6 +218,7 @@ public class CommentReactionService {
             .body(actorName(reactorId) + " reacted to your comment")
             .referenceId(comment.getId())
             .referenceType("COMMENT")
+            .postId(comment.getPostId())
             .build());
   }
 

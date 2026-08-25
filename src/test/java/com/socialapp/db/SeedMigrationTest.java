@@ -290,6 +290,32 @@ class SeedMigrationTest {
                       + "   GROUP BY comment_id) AS totals"))
           .isGreaterThan(1);
     }
+
+    @Test
+    @DisplayName("should hold nothing but LIKE on a comment, while a post keeps all seven")
+    void shouldLeaveOnlyLikesOnComments() throws Exception {
+      // Given - a comment may only be liked. V65 wrote 7 rows of INSIGHT/CLAP/LOVE before that
+      // rule existed and V73 migrates them; without it likeCount and reactionSummary would keep
+      // telling a seven-type story under an interface that offers one.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_comment_reactions"
+                      + " WHERE reaction_type <> 'LIKE' OR reaction_type IS NULL"))
+          .isZero();
+
+      // Then - migrated, not deleted. The test above ranks comments by an unequal spread of
+      // reaction counts, and deleting the 7 rows would flatten it to one-each and take that case
+      // away. 11 rows in, 11 rows out.
+      assertThat(scalar("SELECT count(*) FROM socialapp.t_comment_reactions")).isEqualTo(11);
+
+      // Then - and the rule is the comment's alone: a post still carries the knowledge-shaped
+      // reactions the design calls for.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_post_reactions"
+                      + " WHERE reaction_type IN ('INSIGHT', 'CLAP')"))
+          .isGreaterThan(0);
+    }
   }
 
   @Nested
@@ -439,6 +465,46 @@ class SeedMigrationTest {
               scalar(
                   "SELECT count(*) FROM socialapp.t_notifications"
                       + " WHERE type = 'USER_MENTIONED' AND reference_type <> 'COMMENT'"))
+          .isZero();
+    }
+
+    @Test
+    @DisplayName("should give every COMMENT notification a post to open, including seeded ones")
+    void shouldBackfillPostIdOnCommentNotifications() throws Exception {
+      // Given - reference_id being the comment id is right, and on its own it addresses nothing:
+      // no client route is keyed by a comment id. V72 adds post_id and backfills it from
+      // t_comments, which is the only reason the rows V70 seeded are tappable rather than just
+      // the ones written after the deploy. This assertion is what proves the backfill ran at all.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE reference_type = 'COMMENT'"))
+          .isGreaterThan(0);
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE reference_type = 'COMMENT' AND post_id IS NULL"))
+          .isZero();
+
+      // Then - and it points at the post that actually holds the comment, not just any post
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications n"
+                      + "  JOIN socialapp.t_comments c ON c.id = n.reference_id"
+                      + " WHERE n.reference_type = 'COMMENT' AND n.post_id <> c.post_id"))
+          .isZero();
+    }
+
+    @Test
+    @DisplayName("should leave post_id null on notifications that are not about a comment")
+    void shouldLeavePostIdNullOnOtherNotifications() throws Exception {
+      // Given - the backfill is scoped to COMMENT rows. A friend request has no post, and NULL is
+      // the correct state there rather than missing data; a WHERE clause that drifted wider would
+      // quietly give every notification a post to open.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_notifications"
+                      + " WHERE reference_type <> 'COMMENT' AND post_id IS NOT NULL"))
           .isZero();
     }
 

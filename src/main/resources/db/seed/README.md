@@ -120,6 +120,19 @@ Vài trạng thái đặc biệt để thử các nhánh xử lý:
 | `V60__seed_reputation_and_notifications.sql` | 2367 sự kiện uy tín, 984 thông báo |
 | `V61__seed_trending_and_github.sql` | 12 tin xu hướng, thống kê GitHub |
 | `V65__seed_demo_fixtures.sql` | Fixture cho S1-S7: bài dài, snippet dài/đủ ngôn ngữ, các ca bình luận 0/1/2/6, cảm xúc `INSIGHT`/`CLAP`, cảm xúc cho bình luận, một sách có tệp thất lạc |
+| `V67__seed_markdown_explanation.sql` | Một bản giải thích AI có đủ bảy kiểu phần tử Markdown (S8) |
+| `V70__seed_comment_mentions.sql` | Ba bình luận có `@handle` + thông báo `USER_MENTIONED` tương ứng, gồm một ca âm |
+
+**Hai file trong `db/migration` sửa dữ liệu mà `db/seed` vừa đổ vào**, nên đọc chúng cùng lúc với
+bảng trên:
+
+- `V72__add_post_id_to_notifications.sql` điền `post_id` cho các thông báo `COMMENT` của `V70` —
+  không có nó thì thông báo nhắc tên hiện ra nhưng bấm không đi đâu.
+- `V73__comments_are_like_only.sql` đổi 7 hàng `INSIGHT`/`CLAP`/`LOVE` mà `V65` ghi vào
+  `t_comment_reactions` thành `LIKE`, vì bình luận chỉ được thích. **Đừng xoá chúng** — phân bố
+  lệch 5/3/1/1/1 là thứ duy nhất để kiểm "hai bình luận nổi nhất", và `SeedMigrationTest` assert
+  đúng điều đó. Các hàng `INSIGHT`/`CLAP` trên `t_post_reactions` ngay phía trên trong cùng file
+  thì giữ nguyên: luật chỉ-LIKE là của bình luận, bài viết vẫn đủ bảy cảm xúc.
 
 Và một file ở thư mục riêng, **không** chạy ở production:
 
@@ -180,11 +193,10 @@ API token thì không.
   `Migration checksum mismatch for migration version 61`. Ghi chú về dữ liệu seed thì đặt ở chỗ
   code đọc nó — Javadoc của repository, hoặc file README này — chứ không đặt vào file `.sql` đã
   chạy. Nếu buộc phải sửa nội dung, thêm file version mới thay vì sửa file cũ.
-- Số version tiếp tục từ `V67`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
-  một dãy version, nên không được giẫm số của nhau: `V62` và `V64` là schema
-  (`V62__create_post_reports.sql`, `V64__create_comment_reactions.sql`), `V63` và `V66` là
-  `db/seed-dev`, `V65` là `db/seed`. Thêm file mới ở bất kỳ thư mục nào thì lấy số kế tiếp còn
-  trống rồi cập nhật dòng này.
+- Số version tiếp tục từ `V74`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
+  một dãy version, nên không được giẫm số của nhau: `V62`, `V64`, `V68`, `V71`, `V72`, `V73` là
+  schema; `V63`, `V66`, `V69` là `db/seed-dev`; `V65`, `V67`, `V70` là `db/seed`. Thêm file mới ở
+  bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
 - `V65` phải đứng sau `V54`: số bình luận của bốn bài kiểm ca 0/1/2/6 phải CHÍNH XÁC, mà `V54`
   rải bình luận theo phép chia dư — nó chạy sau thì bài "đúng 2 bình luận" có thể thành ba.
 - Seed phải đứng sau mọi migration schema **tạo bảng mà seed ghi vào**. Một migration số cao hơn

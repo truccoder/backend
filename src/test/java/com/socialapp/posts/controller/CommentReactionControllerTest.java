@@ -252,7 +252,7 @@ class CommentReactionControllerTest {
           .perform(
               authed(put(reactionsUrl(POST_ID, COMMENT_ID)))
                   .contentType(MediaType.APPLICATION_JSON)
-                  .content(body("INSIGHT")))
+                  .content(body("LIKE")))
           .andExpect(status().isOk());
 
       // Then — the id comes from the security context, never from the path or the body
@@ -261,17 +261,27 @@ class CommentReactionControllerTest {
     }
 
     @Test
-    @DisplayName("shouldAcceptTheTwoNewReactionTypes_whenSentOnTheWire")
-    void shouldAcceptTheTwoNewReactionTypes_whenSentOnTheWire() throws Exception {
-      // Given — INSIGHT and CLAP were added to ReactionType for the knowledge-shaped reactions the
-      // design calls for; a comment must accept them as a post does
+    @DisplayName("shouldReturn400_whenReactionTypeIsAnythingOtherThanLike")
+    void shouldReturn400_whenReactionTypeIsAnythingOtherThanLike() throws Exception {
+      // Given — this test used to assert the opposite. INSIGHT and CLAP were added to ReactionType
+      // for the knowledge-shaped reactions the design calls for, and a comment accepted them as a
+      // post does — until the project owner settled that a comment may only be liked. The wire
+      // still carries the shared UpsertPostReactionRequestDto, so the narrowing is the service's
+      // and shows up here as the 400 it throws.
+      doThrow(new com.socialapp.common.exception.ValidationException("Comments can only be liked"))
+          .when(commentReactionService)
+          .upsertReaction(anyInt(), anyInt(), anyInt(), any());
+
+      // When / Then — 400 rather than the 422 an @Valid failure would give: the value is a real
+      // ReactionType, just not one this path takes
       for (ReactionType type : new ReactionType[] {ReactionType.INSIGHT, ReactionType.CLAP}) {
         mockMvc
             .perform(
                 authed(put(reactionsUrl(POST_ID, COMMENT_ID)))
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(body(type.name())))
-            .andExpect(status().isOk());
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("Comments can only be liked"));
       }
     }
 

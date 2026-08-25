@@ -33,6 +33,7 @@ import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.RepLevel;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -130,14 +131,12 @@ public class CommentService {
       Map<Integer, Long> likeCounts,
       Map<Integer, Map<ReactionType, Long>> reactionSummaries,
       Map<Integer, ReactionType> myReactions) {
-    UserEntity author = authorsById.get(comment.getAuthorId());
-    return CommentResponseDto.builder()
-        .id(comment.getId())
-        .postId(comment.getPostId())
-        .authorId(comment.getAuthorId())
-        .authorUsername(author != null ? author.getUsername() : null)
-        .authorFullName(author != null ? author.getFullName() : null)
-        .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
+    CommentResponseDto.CommentResponseDtoBuilder builder =
+        CommentResponseDto.builder()
+            .id(comment.getId())
+            .postId(comment.getPostId())
+            .authorId(comment.getAuthorId());
+    return withAuthor(builder, authorsById.get(comment.getAuthorId()))
         .content(comment.getContent())
         .parentId(comment.getParentId())
         .createdAt(comment.getCreatedAt())
@@ -148,6 +147,31 @@ public class CommentService {
         .reactionSummary(reactionSummaries.getOrDefault(comment.getId(), Map.of()))
         .myReaction(myReactions.get(comment.getId()))
         .build();
+  }
+
+  /**
+   * Fills in every field derived from the commenter's row, or none of them.
+   *
+   * <p>Extracted for the reason {@code SearchService#withAuthor} was: one {@code author != null}
+   * ternary per field reads as five independent decisions and PMD counts them as five, which puts
+   * the caller over both the cognitive-complexity and the NPath threshold. There is one decision
+   * here — the author row was loaded or it was not — and in the second case every author field
+   * stays null together.
+   *
+   * <p>A missing row is not an error. A comment outlives the account that wrote it, and a thread
+   * that renders with one blank byline is better than one that throws.
+   */
+  private static CommentResponseDto.CommentResponseDtoBuilder withAuthor(
+      CommentResponseDto.CommentResponseDtoBuilder builder, UserEntity author) {
+    if (author == null) {
+      return builder;
+    }
+    return builder
+        .authorUsername(author.getUsername())
+        .authorFullName(author.getFullName())
+        .authorProfilePictureUrl(author.getProfilePictureUrl())
+        .authorEliteScore(author.getEliteScore())
+        .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()));
   }
 
   @Transactional
@@ -228,6 +252,10 @@ public class CommentService {
               // point of the notification is to open at the one that named you.
               .referenceId(comment.getId())
               .referenceType("COMMENT")
+              // And the post it lives under, because no client route is keyed by comment id — the
+              // reference above says which reply, this says which page to open it on. Free here:
+              // the post is already a parameter.
+              .postId(post.getId())
               .build());
     }
   }

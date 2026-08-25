@@ -18,9 +18,16 @@ import lombok.RequiredArgsConstructor;
  * Reactions on a comment, the sibling of {@link PostReactionController}.
  *
  * <p>PUT, not POST, and that is what "symmetric with posts" means here: a caller has at most one
- * reaction per comment, so setting it is idempotent — sending INSIGHT twice leaves the same single
- * row, and switching from LIKE replaces it rather than adding a second. {@code
- * PostReactionController} settled this one level up and the two would be needlessly different.
+ * reaction per comment, so setting it is idempotent — sending LIKE twice leaves the same single
+ * row rather than adding a second. {@code PostReactionController} settled this one level up and
+ * the two would be needlessly different.
+ *
+ * <p><b>A comment can only be liked.</b> {@code LIKE} is the one value the PUT accepts; the other
+ * six are 400. The body still carries a {@link
+ * com.socialapp.posts.dto.UpsertPostReactionRequestDto} because the post path shares it — a post
+ * does take all seven — so the narrowing lives in {@code CommentReactionService#upsertReaction}
+ * and not in the DTO. That also means {@code reactionSummary} on a comment now holds at most one
+ * key; it stays a map because dropping it would break a contract for no gain.
  *
  * <p>No {@code /me} and no {@code /summary}: both would have no caller. The comment list already
  * carries {@code likeCount}, {@code reactionSummary} and {@code myReaction} per comment, which is

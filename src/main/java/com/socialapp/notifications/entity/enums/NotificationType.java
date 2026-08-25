@@ -38,8 +38,10 @@ public enum NotificationType {
    * routes on the type, so every comment reaction would have opened the post rather than the reply
    * it was about, and a notification list could not have worded the two differently.
    *
-   * <p>{@code referenceId} is the COMMENT id, not the post id — see {@code
-   * CommentReactionService#notifyCommentAuthor}.
+   * <p>{@code referenceId} is the COMMENT id, not the post id, and {@code postId} carries the post
+   * it lives under — see {@code CommentReactionService#notifyCommentAuthor}. Both are needed to
+   * address it: no client route is keyed by a comment id, so for a while this type was readable
+   * and un-tappable.
    */
   COMMENT_LIKED,
 
@@ -60,7 +62,10 @@ public enum NotificationType {
    * sharing one would open the post instead of the reply, and the two could not be worded
    * differently in a notification list.
    *
-   * <p>{@code referenceId} is the COMMENT id — see {@code CommentService#notifyMentionedUsers}.
+   * <p>{@code referenceId} is the COMMENT id and {@code postId} the post it lives under — see
+   * {@code CommentService#notifyMentionedUsers}. The pair matters more here than anywhere: the
+   * whole reason this type exists is "somebody named you OVER THERE", so a notification that
+   * cannot open "there" has lost most of its point.
    */
   USER_MENTIONED,
   FRIEND_REQUEST,
