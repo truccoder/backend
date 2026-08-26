@@ -37,6 +37,7 @@ import com.socialapp.friendships.repository.FriendRequestRepository;
 import com.socialapp.friendships.repository.FriendshipRepository;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.service.ProfileMatchScorer;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -445,29 +446,21 @@ public class FriendshipService {
 
   // Both helpers below are only ever called from rankByBackground() with an already
   // null-checked `caller` (see the `callerProfile == null` guard above), so `caller` itself is
-  // never null here.
+  // never null here. What they still do is unwrap a possibly-absent candidate profile before
+  // handing the raw fields to ProfileMatchScorer, which is shared with matchmaking and therefore
+  // knows nothing about this pool's "a candidate may have no profile at all" case.
   private boolean sameRole(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
     return candidate != null
-        && caller.getPrimaryRole() != null
-        && caller.getPrimaryRole().equals(candidate.getPrimaryRole());
+        && ProfileMatchScorer.sameRole(caller.getPrimaryRole(), candidate.getPrimaryRole());
   }
 
   private int techStackOverlap(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    if (candidate == null
-        || caller.getKnownTechStack() == null
-        || candidate.getKnownTechStack() == null) {
-      return 0;
-    }
-
-    Set<String> callerStack =
-        caller.getKnownTechStack().stream().map(String::toLowerCase).collect(Collectors.toSet());
-    return (int)
-        candidate.getKnownTechStack().stream()
-            .map(String::toLowerCase)
-            .filter(callerStack::contains)
-            .count();
+    return candidate == null
+        ? 0
+        : ProfileMatchScorer.skillOverlap(
+            caller.getKnownTechStack(), candidate.getKnownTechStack());
   }
 
   /**

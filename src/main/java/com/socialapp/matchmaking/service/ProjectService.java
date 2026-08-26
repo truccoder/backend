@@ -46,6 +46,7 @@ public class ProjectService {
     project.setTitle(request.getTitle());
     project.setDescription(request.getDescription());
     project.setBannerUrl(request.getBannerUrl());
+    project.setTags(request.getTags());
 
     if (request.getPositions() != null) {
       project.setPositions(

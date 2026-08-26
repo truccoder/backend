@@ -1,6 +1,7 @@
 package com.socialapp.matchmaking.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -33,6 +34,7 @@ import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
 import com.socialapp.matchmaking.dto.ProjectResponseDto;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
+import com.socialapp.matchmaking.dto.SuggestedProjectDto;
 import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.entity.enums.ApplicationStatus;
 import com.socialapp.matchmaking.service.MatchmakingService;
@@ -68,6 +70,11 @@ class ProjectControllerTest {
   private static final String URL = "/v1/api/projects";
   private static final String TOKEN = "a-valid-jwt-token";
   private static final Integer OWNER_ID = 1;
+
+  /** {@code Constants.DEFAULT_PAGINATION_PAGE_SIZE} — what the controller binds when the
+   * caller omits {@code limit}. Asserted rather than matched loosely, because "the default
+   * actually reaches the service" is part of the contract. */
+  private static final int DEFAULT_LIMIT = 10;
 
   @Autowired private MockMvc mockMvc;
 
@@ -590,6 +597,121 @@ class ProjectControllerTest {
   }
 
   // =====================================================================
+  // GET /v1/api/projects/suggested
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/projects/suggested")
+  class SuggestedProjectsTests {
+
+    private static SuggestedProjectDto suggestion(Integer projectId, int score) {
+      return new SuggestedProjectDto(
+          ProjectResponseDto.builder().id(projectId).title("Project " + projectId).build(),
+          score,
+          List.of("Java"),
+          List.of("API Design"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndTheRankedProjects_happyPath")
+    void shouldReturnSuggestions() throws Exception {
+      // Given
+      when(matchmakingService.suggestProjects(OWNER_ID, DEFAULT_LIMIT))
+          .thenReturn(List.of(suggestion(4001, 9), suggestion(4002, 3)));
+
+      // When / Then: the reason ships with the recommendation, so a client can explain the order.
+      mockMvc
+          .perform(authed(get(URL + "/suggested")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.length()").value(2))
+          .andExpect(jsonPath("$[0].project.id").value(4001))
+          .andExpect(jsonPath("$[0].matchScore").value(9))
+          .andExpect(jsonPath("$[0].matchedSkills[0]").value("Java"))
+          .andExpect(jsonPath("$[0].matchedDomains[0]").value("API Design"))
+          .andExpect(jsonPath("$[1].matchScore").value(3));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndAnEmptyList_whenTheCallerHasNoProfessionalProfile")
+    void shouldReturnEmptyList() throws Exception {
+      // Given: with nothing to rank against, the honest answer is an empty list rather than the
+      // ordinary newest-first project list wearing a "suggested" label.
+      when(matchmakingService.suggestProjects(OWNER_ID, DEFAULT_LIMIT)).thenReturn(List.of());
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(URL + "/suggested")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("shouldPassTheRequestedLimitThrough_whenGiven")
+    void shouldHonourExplicitLimit() throws Exception {
+      // Given
+      when(matchmakingService.suggestProjects(OWNER_ID, 3)).thenReturn(List.of());
+
+      // When / Then
+      mockMvc.perform(authed(get(URL + "/suggested?limit=3"))).andExpect(status().isOk());
+
+      verify(matchmakingService).suggestProjects(OWNER_ID, 3);
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitExceedsTheMaximumPageSize")
+    void shouldReject_whenLimitTooLarge() throws Exception {
+      // When / Then: same @Max(Constants.MAX_PAGINATION_PAGE_SIZE) guard as the browse endpoint,
+      // so one caller cannot ask for the whole pool in a single request.
+      //
+      // 422 rather than the 400 that GlobalExceptionHandler documents for @RequestParam failures:
+      // ProjectController carries @Validated, which moves its parameter constraints onto the older
+      // AOP path (ConstraintViolationException -> the jakarta ValidationException handler) instead
+      // of Spring 6.1's native HandlerMethodValidationException. BookController and
+      // SearchController
+      // are on the same path. Pre-existing and deliberate — asserting the real behaviour here
+      // rather than flipping a shared handler to make one new endpoint read nicer.
+      mockMvc
+          .perform(authed(get(URL + "/suggested?limit=51")))
+          .andExpect(status().isUnprocessableEntity());
+
+      verify(matchmakingService, never()).suggestProjects(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitIsNotPositive")
+    void shouldReject_whenLimitIsZero() throws Exception {
+      // When / Then: see the note above on 422 vs 400 for this controller.
+      mockMvc
+          .perform(authed(get(URL + "/suggested?limit=0")))
+          .andExpect(status().isUnprocessableEntity());
+
+      verify(matchmakingService, never()).suggestProjects(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("shouldRouteToSuggested_ratherThanBindingItAsAProjectId")
+    void shouldNotBeSwallowedByTheProjectIdRoute() throws Exception {
+      // Given: /{projectId} is constrained to digits precisely so literal sibling paths like this
+      // one keep routing. Loosening that regex turns this endpoint into a 400.
+      when(matchmakingService.suggestProjects(OWNER_ID, DEFAULT_LIMIT)).thenReturn(List.of());
+
+      // When / Then
+      mockMvc.perform(authed(get(URL + "/suggested"))).andExpect(status().isOk());
+
+      verify(projectQueryService, never()).getProject(any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      // When / Then
+      mockMvc.perform(get(URL + "/suggested")).andExpect(status().isUnauthorized());
+
+      verify(matchmakingService, never()).suggestProjects(any(), anyInt());
+    }
+  }
+
+  // =====================================================================
   // GET /v1/api/projects/positions/{positionId}/suggested-candidates
   // =====================================================================
 
@@ -603,7 +725,7 @@ class ProjectControllerTest {
     @DisplayName("shouldReturn200AndTheCandidateList_happyPath")
     void shouldReturnCandidates() throws Exception {
       // Given
-      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID))
+      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, DEFAULT_LIMIT))
           .thenReturn(
               List.of(
                   SuggestedCandidateDto.builder()
@@ -611,6 +733,8 @@ class ProjectControllerTest {
                       .jobTitle("Backend Engineer")
                       .yearsOfExperience(4)
                       .knownTechStack(List.of("Java", "Spring"))
+                      .matchScore(6)
+                      .matchedSkills(List.of("Java", "Spring"))
                       .build()));
 
       // When / Then
@@ -625,7 +749,8 @@ class ProjectControllerTest {
     @DisplayName("shouldReturn200AndAnEmptyList_whenThePositionListsNoRequiredSkills")
     void shouldReturnEmpty() throws Exception {
       // Given: suggestCandidates short-circuits to List.of() for a null/empty skill list
-      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID)).thenReturn(List.of());
+      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, DEFAULT_LIMIT))
+          .thenReturn(List.of());
 
       // When / Then
       mockMvc
@@ -638,7 +763,7 @@ class ProjectControllerTest {
     @DisplayName("shouldReturn404_whenThePositionDoesNotExist")
     void shouldReturn404() throws Exception {
       // Given
-      when(matchmakingService.suggestCandidates(999, OWNER_ID))
+      when(matchmakingService.suggestCandidates(999, OWNER_ID, DEFAULT_LIMIT))
           .thenThrow(new NotFoundException("Position not found"));
 
       // When / Then
@@ -653,7 +778,7 @@ class ProjectControllerTest {
       // Given: the reply carries other users' job title, seniority, years of experience and tech
       // stack. This endpoint used to take only a position id, so any signed-in caller could walk
       // ids and harvest the directory — it now passes the caller through like its siblings.
-      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID))
+      when(matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, DEFAULT_LIMIT))
           .thenThrow(new ForbiddenException("Not authorized to view candidates for this position"));
 
       // When / Then
@@ -670,7 +795,7 @@ class ProjectControllerTest {
           .perform(get(URL + "/positions/" + POSITION_ID + "/suggested-candidates"))
           .andExpect(status().isUnauthorized());
 
-      verify(matchmakingService, never()).suggestCandidates(any(), any());
+      verify(matchmakingService, never()).suggestCandidates(any(), any(), anyInt());
     }
   }
 }

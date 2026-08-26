@@ -34,6 +34,31 @@ public interface ProjectApplicationRepository
       """)
   List<ProjectApplicationEntity> findByProjectIdForInbox(@Param("projectId") Integer projectId);
 
+  /**
+   * Everyone who has already applied to this position, whatever came of it.
+   *
+   * <p>For filtering candidate suggestions. Deliberately not restricted to {@code PENDING}:
+   * re-suggesting someone the owner already rejected is worse than useless, and re-suggesting
+   * someone already accepted is plainly wrong.
+   *
+   * <p>Ids only rather than entities — the caller needs a {@code contains} check, and loading
+   * whole applications with their three associations to read one column each would be the same
+   * mistake {@code findByProjectIdForInbox} exists to avoid.
+   */
+  @Query("SELECT a.applicant.id FROM ProjectApplicationEntity a WHERE a.position.id = :positionId")
+  List<Integer> findApplicantIdsByPositionId(@Param("positionId") Integer positionId);
+
+  /**
+   * Every project this user has already applied to, through any of its positions.
+   *
+   * <p>{@code DISTINCT} because a project with several open roles can hold several applications
+   * from the same person, and the caller only asks "have I engaged with this project already?".
+   */
+  @Query(
+      "SELECT DISTINCT a.project.id FROM ProjectApplicationEntity a "
+          + "WHERE a.applicant.id = :applicantId")
+  List<Integer> findProjectIdsByApplicantId(@Param("applicantId") Integer applicantId);
+
   /** The applications one user has sent, newest first. Same join-fetch reasoning. */
   @Query(
       """
