@@ -41,12 +41,18 @@ public class MomoService {
   /**
    * Fallback label for {@code payment_method} when MoMo's answer carries no {@code payType}.
    *
-   * <p>Was {@code "ATM"}, which stopped being true when {@link MomoApiClient} moved to
-   * {@code captureWallet}: nothing about that flow is a card payment, so an absent {@code payType}
-   * would have recorded every wallet purchase as an ATM one. The gateway's own name is the honest
+   * <p>Was {@code "ATM"}, which stopped being true once the request type became configurable (see
+   * {@code MomoProperties#requestType}): the same code now serves the wallet flow and the card
+   * flow, so guessing either one is wrong half the time. The gateway's own name is the honest
    * answer when the gateway declines to be more specific.
    */
   private static final String DEFAULT_PAYMENT_METHOD = "MOMO";
+
+  /**
+   * {@code payment_method} written by {@link #settleAsPaidForDevelopment}, so a row settled by hand
+   * on a developer machine can never be mistaken for one MoMo actually collected money for.
+   */
+  private static final String DEV_PAYMENT_METHOD = "DEV";
 
   private static final int SUCCESS_RESULT_CODE = 0;
   // How long a pending transactionRef is assumed to still be payable before it is treated as
@@ -202,6 +208,51 @@ public class MomoService {
 
     return applyResult(
         transactionRef, resultCode, String.valueOf(response.getOrDefault("transId", "")), null);
+  }
+
+  /**
+   * Settles one of the caller's own purchases as if MoMo had reported it paid. <b>DEVELOPMENT
+   * ONLY.</b>
+   *
+   * <p>Exists because neither flow MoMo offers can be finished by one person at a desk: the QR of
+   * {@code captureWallet} needs a phone with the MoMo app, and {@code payWithATM} — the card-entry
+   * screen that is easy to fill in by hand — never leaves result code 7002 on the sandbox. Without
+   * this, "buy a book" cannot be demonstrated end to end at all.
+   *
+   * <p><b>Its only guard is the {@code dev} profile</b>, applied at
+   * {@code DevPaymentController}, which is the one bean that reaches this method. That gate is
+   * off by default everywhere — including production, where {@code SPRING_PROFILES_ACTIVE} comes
+   * from an {@code .env} maintained in the infra repo and can silently arrive empty (see the
+   * warning at the top of {@code application-prod.yml}). Gating on {@code !prod} would therefore
+   * have handed every signed-in user a free copy of any book the day that variable went missing;
+   * requiring {@code dev} to be named explicitly fails in the harmless direction instead.
+   *
+   * <p>Ownership is still checked, and still 404s rather than 403s, for the same reason
+   * {@link #syncPaymentStatus} does: even on a developer machine this must not be a way to settle —
+   * or merely confirm the existence of — somebody else's order.
+   */
+  @Transactional
+  public boolean settleAsPaidForDevelopment(Integer callerId, String transactionRef) {
+    BookPurchaseEntity purchase = findPurchaseOrThrow(transactionRef);
+
+    if (!purchase.getBuyerId().equals(callerId)) {
+      throw new NotFoundException("Purchase not found: " + transactionRef);
+    }
+
+    log.warn(
+        "[orderId={}] settleAsPaidForDevelopment: marking this purchase PAID WITHOUT ANY MONEY"
+            + " HAVING MOVED, on the caller's own request. This is only reachable under the `dev`"
+            + " profile.",
+        transactionRef);
+
+    // Deliberately the same applyResult the IPN uses, with the resultCode MoMo would have sent:
+    // the point of the endpoint is to exercise the real settlement path — COMPLETED, paidAt, the
+    // author's notification, the idempotency short-circuit — not a shortcut past it.
+    return applyResult(
+        transactionRef,
+        SUCCESS_RESULT_CODE,
+        "DEV-" + System.currentTimeMillis(),
+        DEV_PAYMENT_METHOD);
   }
 
   /**

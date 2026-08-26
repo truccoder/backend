@@ -585,6 +585,106 @@ class MomoServiceTest {
     }
   }
 
+  // =====================================================================
+  // settleAsPaidForDevelopment
+  // =====================================================================
+
+  @Nested
+  @DisplayName("settleAsPaidForDevelopment")
+  class SettleAsPaidForDevelopmentTests {
+
+    @Test
+    @DisplayName("should complete the purchase and notify the author without calling MoMo")
+    void shouldCompletePurchase_andNotifyAuthor() {
+      // Given: a PENDING purchase that MoMo's sandbox will never settle on its own — the QR needs
+      // a phone, and payWithATM parks at 7002 for ever.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      when(bookService.findBookOrThrow(BOOK_ID))
+          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
+      when(userRepository.findById(BUYER_ID))
+          .thenReturn(Optional.of(userWithName(BUYER_ID, "Dave")));
+
+      // When
+      boolean result = momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: the whole real settlement path runs, which is the point — a demo that skipped the
+      // author's notification would not be demonstrating the feature.
+      assertThat(result).isTrue();
+      assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.COMPLETED);
+      assertThat(purchase.getPaidAt()).isNotNull();
+      verify(notificationService).send(any());
+      // MoMo is never asked: there is nothing to ask it about, since no money moved.
+      verifyNoInteractions(momoApiClient);
+    }
+
+    @Test
+    @DisplayName("should record a payment method that cannot be mistaken for a real one")
+    void shouldRecordDevPaymentMethod() {
+      // Given
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      when(bookService.findBookOrThrow(BOOK_ID))
+          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
+      when(userRepository.findById(BUYER_ID)).thenReturn(Optional.empty());
+
+      // When
+      momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: "DEV", never "MOMO" or a payType — a row settled by hand must stay tellable apart
+      // from one MoMo actually collected money for, including months later in the database.
+      assertThat(purchase.getPaymentMethod()).isEqualTo("DEV");
+      assertThat(purchase.getGatewayTransactionNo()).startsWith("DEV-");
+    }
+
+    @Test
+    @DisplayName("should refuse to settle a purchase belonging to somebody else")
+    void shouldRefuse_whenCallerIsNotTheBuyer() {
+      // Given: the same exposure syncPaymentStatus had, and worse here — this path needs no
+      // agreement from MoMo at all, so an unguarded ref would be a free copy of anyone's book.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+
+      // When / Then: 404, not 403 — somebody else's order ref is not theirs to confirm exists
+      assertThatThrownBy(() -> momoService.settleAsPaidForDevelopment(BUYER_ID + 1, "REF1"))
+          .isInstanceOf(NotFoundException.class);
+      verify(purchaseRepository, never()).save(any());
+      verify(notificationService, never()).send(any());
+    }
+
+    @Test
+    @DisplayName("should reject when the transaction does not exist")
+    void shouldThrowNotFoundException_whenTransactionDoesNotExist() {
+      // Given
+      when(purchaseRepository.findByTransactionRef("REF404")).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> momoService.settleAsPaidForDevelopment(BUYER_ID, "REF404"))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("Purchase not found");
+    }
+
+    @Test
+    @DisplayName("should not re-notify a purchase that is already COMPLETED")
+    void shouldBeIdempotent_whenAlreadyCompleted() {
+      // Given: the button is easy to press twice.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.COMPLETED, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+
+      // When
+      boolean result = momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: applyResult's existing short-circuit covers this path too
+      assertThat(result).isTrue();
+      verify(notificationService, never()).send(any());
+      verify(purchaseRepository, never()).save(any());
+    }
+  }
+
   private static UserEntity userWithName(Integer id, String fullName) {
     UserEntity user = new UserEntity();
     user.setId(id);
