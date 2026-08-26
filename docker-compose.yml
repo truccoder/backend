@@ -14,6 +14,108 @@ services:
       - backend-network
     command: server /data --console-address ":9001"
     restart: always
+    # So minio-init waits for a MinIO that actually answers the S3 API. Same distinction as the
+    # neo4j healthcheck below: the container is up well before the API is. `mc` and a `local`
+    # alias pointing at this server ship inside the image, so this needs nothing installed.
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  # THE SEED SQL POINTS AT OBJECTS SQL CANNOT CREATE. `V55__seed_bookstore.sql` writes
+  # `t_books.file_key` / `cover_image_key` / `preview_file_key`, `V66` writes
+  # `t_users.profile_picture_url` and `V69` writes `t_posts.images` — every one of them a MinIO
+  # object key. Buckets alone are not enough: with the bucket present the backend signs a URL
+  # happily and the browser gets a 404 from MinIO, so covers and avatars render as BROKEN IMAGES
+  # rather than falling back to initials. That is worse than not seeding them at all.
+  #
+  # This used to be `scripts/seed/load-minio-objects.sh`, run by hand. A mandatory step you have
+  # to remember is a step somebody will forget, and every dev who forgot had a broken Library.
+  #
+  # The keys are read out of the SQL rather than copied, so editing the seed and running
+  # `docker compose up` keeps the two in step. Standard library only — no `pip install`, so this
+  # works offline.
+  minio-seed-objects:
+    image: python:3.12-alpine
+    container_name: minio-seed-objects
+    volumes:
+      - ./src/main/resources/db:/sql:ro
+      - ./docker/minio/generate-seed-objects.py:/generate-seed-objects.py:ro
+      - minio-seed-objects:/objects
+    networks:
+      - backend-network
+    # Invoked through the interpreter rather than executed directly, so the script does not need an
+    # exec bit — one less thing to lose on a Windows checkout, same as neo4j-seed.
+    entrypoint: ["python3", "/generate-seed-objects.py"]
+    restart: "no"
+
+  # THE APP DOES NOT CREATE THREE OF ITS OWN FOUR BUCKETS, which is why a fresh MinIO used to
+  # break the Library. `MinIOBucketInitializer` prepares `profile-pictures` and `post-media` at
+  # startup and deliberately skips the two book buckets, on the reasoning that book files are
+  # private and reached through presigned URLs. That reasoning is about the bucket's POLICY and
+  # says nothing about whether it EXISTS: `books` and `book-covers` were left to be created
+  # lazily by `MinIOService.uploadFile` on the first upload, so on a machine where nobody has
+  # uploaded a book they simply are not there.
+  #
+  # `GET /v1/api/books` then 503s on its first row. Signing needs the bucket even though it does
+  # not need the object — `BookStorageService.getPresignedUrl` asks MinIO for the bucket's region
+  # before it signs, that lookup answers "The specified bucket does not exist", and the resulting
+  # `StorageException` fails the whole page rather than the one book. (`getCoverUrl` catches
+  # exactly this and returns null; `getPreviewUrl` and `getDownloadUrl` do not.)
+  #
+  # Creating all four here means `docker compose up` is enough and no bucket is created as a side
+  # effect of somebody happening to upload something first.
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio-server:
+        condition: service_healthy
+      minio-seed-objects:
+        condition: service_completed_successfully
+    networks:
+      - backend-network
+    # Reached by service name on the compose network rather than through a published port, so this
+    # does not depend on 9000 being free on the host.
+    #
+    # `--ignore-existing` is what makes a re-run a no-op: the data directory is a bind mount that
+    # survives `docker compose down`, so on every start after the first these buckets are already
+    # there and creating them must not be an error.
+    #
+    # The two `anonymous set download` calls are not decoration. `t_users.profile_picture_url` and
+    # `t_posts.images` hold bare unsigned URLs that the browser loads directly, so without a
+    # public-read policy those images come back 403 — visibly broken pictures rather than the
+    # initials fallback. The book buckets get no policy for the opposite reason: everything in
+    # them is served through a URL the backend signs.
+    volumes:
+      - minio-seed-objects:/objects:ro
+    entrypoint: ["/bin/sh", "-c"]
+    # A LIST HOLDING ONE STRING, not a plain string. Compose word-splits a string `command` into
+    # separate argv entries, and `sh -c` reads only the first of those as the script and treats the
+    # rest as positional parameters — so the string form ran `mc` with no arguments and exited 1
+    # after printing its help. Keeping the whole script as a single element is what makes `sh -c`
+    # see a script.
+    command:
+      - |
+        set -e
+        mc alias set local http://minio-server:9000 minio_admin minio_admin_password
+        mc mb --ignore-existing local/books local/book-covers local/profile-pictures local/post-media
+        mc anonymous set download local/profile-pictures
+        mc anonymous set download local/post-media
+        # The five prefixes and the bucket each belongs to, per BookStorageService,
+        # ProfileService and MediaService. Object keys keep the prefix inside the bucket
+        # (`books/<authorId>/<file>`), which is what the seeded *_key columns hold.
+        [ -d /objects/books ]    && mc cp --recursive --quiet /objects/books/    local/books/books/                >/dev/null || true
+        [ -d /objects/previews ] && mc cp --recursive --quiet /objects/previews/ local/books/previews/             >/dev/null || true
+        [ -d /objects/covers ]   && mc cp --recursive --quiet /objects/covers/   local/book-covers/covers/         >/dev/null || true
+        [ -d /objects/avatars ]  && mc cp --recursive --quiet /objects/avatars/  local/profile-pictures/avatars/   >/dev/null || true
+        [ -d /objects/posts ]    && mc cp --recursive --quiet /objects/posts/    local/post-media/posts/           >/dev/null || true
+        echo "    buckets:  $$(mc ls local | wc -l)"
+        echo "    objects:  $$(mc ls --recursive local | wc -l)"
+    # One-shot: it creates the buckets and exits, same as neo4j-seed.
+    restart: "no"
 
   postgres:
       image: postgres:16
@@ -91,6 +193,11 @@ services:
       - backend-network
     command: redis-server --save 60 1 --loglevel warning
     restart: always
+
+volumes:
+  # Scratch space handed from minio-seed-objects to minio-init. Named rather than a bind mount
+  # because nothing outside those two ever reads it and it is rewritten on every `up`.
+  minio-seed-objects:
 
 networks:
   backend-network:

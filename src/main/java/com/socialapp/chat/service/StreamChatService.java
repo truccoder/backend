@@ -7,7 +7,6 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.chat.client.StreamChatClient;
@@ -72,7 +71,9 @@ public class StreamChatService {
    *     deliberately does not say "blocked" — same reasoning as the friend-request rejection: the
    *     product does not confirm to a blocked person that they were blocked.
    */
-  @Transactional(readOnly = true)
+  // No @Transactional: the only database work is one findAllById, which manages its own, and the
+  // method then makes an HTTP round trip to Stream. Wrapping the two together held a Postgres
+  // connection open for the duration of somebody else's network latency, for no isolation benefit.
   public void ensureChatParticipants(Integer callerId, Integer otherUserId) {
     if (callerId.equals(otherUserId)) {
       throw new ValidationException("You cannot start a conversation with yourself");

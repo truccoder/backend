@@ -2,6 +2,7 @@ package com.socialapp.trending.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,9 +57,14 @@ class TrendingCrawlSchedulerTest {
   }
 
   private static CrawledItem crawled(String sourceId, String summary) {
+    return crawled(sourceId, summary, null);
+  }
+
+  private static CrawledItem crawled(String sourceId, String summary, String imageUrl) {
     return CrawledItem.builder()
         .title("Title " + sourceId)
         .url("https://example.com/" + sourceId)
+        .imageUrl(imageUrl)
         .summary(summary)
         .source(TrendingSource.HACKER_NEWS)
         .sourceId(sourceId)
@@ -79,8 +85,8 @@ class TrendingCrawlSchedulerTest {
     void shouldSkipCrawler_whenNoNewItemsFound() {
       // Given
       when(crawlerA.crawl()).thenReturn(List.of(crawled("1", "s")));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(true);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList()))
+          .thenAnswer(inv -> inv.<List<String>>getArgument(1));
       TrendingCrawlScheduler scheduler =
           new TrendingCrawlScheduler(
               List.of(crawlerA), classificationService, trendingItemRepository);
@@ -99,8 +105,7 @@ class TrendingCrawlSchedulerTest {
       // Given
       CrawledItem item1 = crawled("1", "short summary");
       when(crawlerA.crawl()).thenReturn(List.of(item1));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item1)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -124,8 +129,7 @@ class TrendingCrawlSchedulerTest {
       // result never reached the row, so the whole table read back with empty tags
       CrawledItem item1 = crawled("1", "short summary");
       when(crawlerA.crawl()).thenReturn(List.of(item1));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item1)))
           .thenReturn(
               List.of(new TrendingClassification(TrendingCategory.TOOL, List.of("cli", "rust"))));
@@ -148,10 +152,9 @@ class TrendingCrawlSchedulerTest {
       CrawledItem existing = crawled("1", "s");
       CrawledItem fresh = crawled("2", "s");
       when(crawlerA.crawl()).thenReturn(List.of(existing, fresh));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(true);
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "2"))
-          .thenReturn(false);
+      // "1" is already stored, "2" is new. One query answers for the whole batch now, rather than
+      // one existence check per crawled item.
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of("1"));
       when(classificationService.classifyBatch(List.of(fresh)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -173,8 +176,7 @@ class TrendingCrawlSchedulerTest {
       when(crawlerA.crawl()).thenThrow(new RuntimeException("network down"));
       CrawledItem item = crawled("1", "s");
       when(crawlerB.crawl()).thenReturn(List.of(item));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -193,8 +195,7 @@ class TrendingCrawlSchedulerTest {
       // Given
       CrawledItem item = crawled("1", null);
       when(crawlerA.crawl()).thenReturn(List.of(item));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -216,8 +217,7 @@ class TrendingCrawlSchedulerTest {
       String summary = "a".repeat(100);
       CrawledItem item = crawled("1", summary);
       when(crawlerA.crawl()).thenReturn(List.of(item));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -239,8 +239,7 @@ class TrendingCrawlSchedulerTest {
       String summary = "a".repeat(600);
       CrawledItem item = crawled("1", summary);
       when(crawlerA.crawl()).thenReturn(List.of(item));
-      when(trendingItemRepository.existsBySourceAndSourceId(TrendingSource.HACKER_NEWS, "1"))
-          .thenReturn(false);
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
       when(classificationService.classifyBatch(List.of(item)))
           .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
       TrendingCrawlScheduler scheduler =
@@ -253,6 +252,73 @@ class TrendingCrawlSchedulerTest {
       // Then
       verify(trendingItemRepository).save(savedCaptor.capture());
       assertThat(savedCaptor.getValue().getSummary()).hasSize(500);
+    }
+
+    @Test
+    @DisplayName("should persist the image the crawler found")
+    void shouldPersistTheImageUrl() {
+      // Given — the column has existed since V12 and nothing ever wrote to it, so every trending
+      // card rendered as a block of text on the one surface whose content nobody here wrote
+      CrawledItem item = crawled("1", "summary", "https://cdn.example.com/cover.png");
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl())
+          .isEqualTo("https://cdn.example.com/cover.png");
+    }
+
+    @Test
+    @DisplayName("should truncate an image URL too long for the column")
+    void shouldTruncateAnOverlongImageUrl() {
+      // Given — BVA on the 2048-char column. The value comes from somebody else's API, and one
+      // row lost to an over-long CDN link would take the whole batch down with it.
+      CrawledItem item = crawled("1", "summary", "https://cdn.example.com/" + "a".repeat(2100));
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl()).hasSize(2048);
+    }
+
+    @Test
+    @DisplayName("should accept an item with no image, since one source never has one")
+    void shouldAcceptAMissingImage() {
+      // Given — Hacker News supplies nothing of its own, so null is a normal value here rather
+      // than a failure to be defended against
+      CrawledItem item = crawled("1", "summary", null);
+      when(crawlerA.crawl()).thenReturn(List.of(item));
+      when(trendingItemRepository.findExistingSourceIds(any(), anyList())).thenReturn(List.of());
+      when(classificationService.classifyBatch(List.of(item)))
+          .thenReturn(List.of(new TrendingClassification(TrendingCategory.TOOL, List.of())));
+      TrendingCrawlScheduler scheduler =
+          new TrendingCrawlScheduler(
+              List.of(crawlerA), classificationService, trendingItemRepository);
+
+      // When
+      scheduler.crawlAll();
+
+      // Then
+      verify(trendingItemRepository).save(savedCaptor.capture());
+      assertThat(savedCaptor.getValue().getImageUrl()).isNull();
     }
   }
 }

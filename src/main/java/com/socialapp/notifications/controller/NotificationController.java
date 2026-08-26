@@ -15,6 +15,7 @@ import com.socialapp.notifications.sse.NotificationStreamService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -28,7 +29,10 @@ public class NotificationController {
   @GetMapping
   public Page<NotificationResponseDto> getNotifications(
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE) @Positive int page,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive int size) {
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int size) {
     return notificationService.getNotifications(SecurityUtils.getCurrentUserId(), page, size);
   }
 

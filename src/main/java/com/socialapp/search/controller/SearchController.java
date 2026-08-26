@@ -9,12 +9,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialapp.common.utils.Constants;
+import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResponse;
 import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.UserDto;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.util.SecurityUtils;
@@ -39,15 +39,17 @@ import lombok.RequiredArgsConstructor;
 public class SearchController {
   private final SearchService searchService;
   private final SuggestService suggestService;
-  private final FriendshipQueryService friendshipQueryService;
+  private final FriendshipService friendshipService;
 
   @GetMapping
   public SearchResponse search(
       @RequestParam @NotBlank String q,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int size) {
     Integer currentUserId = SecurityUtils.getCurrentUserId();
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
+    List<Integer> friendIds = friendshipService.getFriendIds(currentUserId);
 
     List<UserDto> users =
         searchService.searchUsers(q, 1, size, currentUserId, friendIds).getItems();
