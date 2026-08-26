@@ -20,6 +20,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
@@ -364,7 +366,7 @@ class MomoServiceTest {
     }
 
     @Test
-    @DisplayName("should default the payment method to ATM when payType is absent")
+    @DisplayName("should default the payment method to MOMO when payType is absent")
     void shouldUseDefaultPaymentMethod_whenPayTypeIsNull() {
       // Given
       when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
@@ -380,7 +382,9 @@ class MomoServiceTest {
       momoService.handleWebhook(payload);
 
       // Then
-      assertThat(purchase.getPaymentMethod()).isEqualTo("ATM");
+      // "ATM" until the request type moved from payWithATM to captureWallet — nothing in the
+      // wallet flow is a card payment, so an absent payType must not record one.
+      assertThat(purchase.getPaymentMethod()).isEqualTo("MOMO");
     }
 
     @Test
@@ -553,6 +557,31 @@ class MomoServiceTest {
       // Then
       assertThat(result).isTrue();
       assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.COMPLETED);
+    }
+
+    @ParameterizedTest(name = "resultCode {0} leaves the purchase PENDING")
+    @ValueSource(ints = {1000, 7000, 7002})
+    @DisplayName("should not fail a purchase MoMo is still processing")
+    void shouldLeavePending_whenResultCodeIsNotFinal(int resultCode) {
+      // Given: the state `/payment/success` most often finds on its FIRST poll — the browser is
+      // back from MoMo before MoMo has settled. 1000 is "awaiting the user's confirmation",
+      // 7000/7002 are "being processed by the payment provider". None of them is a failure.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      Map<String, Object> response = new HashMap<>();
+      response.put("resultCode", resultCode);
+      when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
+
+      // When
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
+
+      // Then: still unpaid, but NOT written off. This used to land in the `else` branch and mark
+      // the row FAILED, so a healthy payment was destroyed by the very poll meant to confirm it —
+      // and the money would arrive against a row saying it had not been paid.
+      assertThat(result).isFalse();
+      assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.PENDING);
+      verify(notificationService, never()).send(any());
     }
   }
 

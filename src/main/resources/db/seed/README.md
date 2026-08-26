@@ -15,17 +15,25 @@ Thư mục **`db/seed-dev`** thì không — xem phần cuối.
 FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
 ```
 
-Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. Sau đó chạy
-thêm hai bước không thuộc Flyway:
+Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app.
 
-```bash
-docker exec -i neo4j cypher-shell -u neo4j -p neo4j_password < docker/neo4j/seed/friend-graph.cypher
-bash scripts/seed/load-minio-objects.sh
-```
+Hai phần dữ liệu nằm ngoài Flyway — đồ thị bạn bè trong Neo4j và object trong MinIO — **không còn
+bước tay nào nữa**. `docker compose up` lo cả hai:
 
-Bỏ bước Neo4j thì danh sách bạn bè rỗng dù lịch sử lời mời đầy đủ. Bỏ bước MinIO thì gian sách
-hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại, và ba tài khoản ở `V66` hiện
-ảnh đại diện vỡ thay vì rơi về chữ viết tắt.
+| Service | Việc nó làm |
+|---|---|
+| `neo4j-seed` | nạp `docker/neo4j/seed/friend-graph.cypher` sau khi Neo4j trả lời được Bolt |
+| `minio-seed-objects` | đọc key từ chính file SQL rồi sinh file PDF/EPUB/PNG mẫu |
+| `minio-init` | tạo 4 bucket, đặt policy công khai cho 2 bucket, tải các file đó lên |
+
+Cả ba đều một lần rồi thoát, và chạy lại được: bucket dùng `--ignore-existing`, cypher script tự
+idempotent.
+
+TRƯỚC ĐÂY HAI BƯỚC NÀY LÀ LỆNH GÕ TAY và đó chính là vấn đề. Bỏ bước Neo4j thì danh sách bạn bè
+rỗng dù lịch sử lời mời đầy đủ; bỏ bước MinIO thì gian sách trả 503 vì bucket `books` không tồn
+tại (`BookStorageService.getPresignedUrl` hỏi region của bucket trước khi ký), và khi bucket đã có
+mà object thì không, ba tài khoản ở `V66` hiện ảnh đại diện vỡ thay vì rơi về chữ viết tắt. Một
+bước bắt buộc mà phải nhớ gọi thì sớm muộn cũng có người quên.
 
 ### Bước thứ ba, không bỏ được: dựng lại bảng tin
 
@@ -211,8 +219,10 @@ API token thì không.
   kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55`, làm mất hẳn hai trạng thái thanh toán.
 - **Không đặt credential dùng được vào `db/seed`.** Thư mục đó chạy trên production. Token, khoá
   API, hay bất cứ thứ gì đăng nhập được mà không cần mật khẩu thì thuộc về `db/seed-dev`.
-- Không seed cột trỏ tới object MinIO trừ khi `scripts/seed/load-minio-objects.sh` có nạp file
-  tương ứng. Ảnh đại diện, ảnh bài viết, banner dự án đều để `NULL` vì lý do này.
+- Không seed cột trỏ tới object MinIO trừ khi `docker/minio/generate-seed-objects.py` có quét
+  file đó (xem `SOURCES` trong script). Banner dự án để `NULL` vì lý do này. Một cột trỏ tới
+  object không tồn tại thì tệ hơn `NULL`: URL vẫn dựng được nên trình duyệt hiện ảnh vỡ, chứ
+  không rơi về fallback.
 
 ## Database đã lỡ chạy seed cũ
 

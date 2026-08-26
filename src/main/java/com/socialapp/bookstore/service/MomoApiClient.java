@@ -29,7 +29,24 @@ public class MomoApiClient {
   private final MomoProperties momoProperties;
   private final WebClient momoWebClient;
 
-  private static final String REQUEST_TYPE = "payWithATM";
+  /**
+   * WAS {@code payWithATM}, THE DOMESTIC CARD (NAPAS) FLOW, AND IT COULD NOT BE COMPLETED ON THE
+   * SANDBOX. A card payment run end to end there stops after the bank leg and parks the order at
+   * MoMo result code 7002 — "Giao dịch đang được xử lý bởi nhà cung cấp loại hình thanh toán" —
+   * which is not a final state. MoMo only sends the browser to {@code redirectUrl} once an order
+   * settles, so the buyer was left sitting on MoMo's Napas callback page while the purchase row
+   * stayed PENDING for ever. Measured on five consecutive attempts, every one of which answered
+   * 7002 or 1000 to {@code /v2/gateway/api/query} and none 0.
+   *
+   * <p>{@code captureWallet} is the wallet/QR flow. It settles on the sandbox, which is what makes
+   * an end-to-end test of buy → redirect → sync → COMPLETED possible at all.
+   *
+   * <p>THE VALUE IS PART OF THE SIGNATURE. It appears in {@code rawSignature} below as
+   * {@code requestType}, so changing it here changes what is signed — which is correct, and is why
+   * there is exactly one constant rather than a literal in each place.
+   */
+  private static final String REQUEST_TYPE = "captureWallet";
+
   private static final int SUCCESS_RESULT_CODE = 0;
   private static final int ORDER_INFO_MAX_LENGTH = 100;
 

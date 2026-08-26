@@ -2,6 +2,7 @@ package com.socialapp.bookstore.service;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,10 +38,24 @@ public class MomoService {
   private final UserRepository userRepository;
   private final NotificationService notificationService;
 
-  private static final String DEFAULT_PAYMENT_METHOD = "ATM";
+  /**
+   * Fallback label for {@code payment_method} when MoMo's answer carries no {@code payType}.
+   *
+   * <p>Was {@code "ATM"}, which stopped being true when {@link MomoApiClient} moved to
+   * {@code captureWallet}: nothing about that flow is a card payment, so an absent {@code payType}
+   * would have recorded every wallet purchase as an ATM one. The gateway's own name is the honest
+   * answer when the gateway declines to be more specific.
+   */
+  private static final String DEFAULT_PAYMENT_METHOD = "MOMO";
+
   private static final int SUCCESS_RESULT_CODE = 0;
-  // MoMo's hosted payWithATM link is short-lived; matches the window we're willing to assume a
-  // pending transactionRef might still be paid against before treating it as abandoned.
+  // How long a pending transactionRef is assumed to still be payable before it is treated as
+  // abandoned and overwritten. Kept in step with MomoProperties.orderExpireMinutes, which is what
+  // MoMo is told; an order that outlives this window is one a customer can still pay after this
+  // side has forgotten the reference.
+  //
+  // IT IS ALSO HOW LONG A BUYER IS LOCKED OUT OF RETRYING, which is why the rejection below names
+  // the orderId and says when to come back rather than failing blankly.
   private static final long PENDING_PAYMENT_STALE_MINUTES = 15;
 
   @Transactional
@@ -189,6 +204,15 @@ public class MomoService {
         transactionRef, resultCode, String.valueOf(response.getOrDefault("transId", "")), null);
   }
 
+  /**
+   * MoMo result codes that mean "not finished yet", as opposed to "finished and failed".
+   *
+   * <p>{@code 1000} is "Giao dịch đã được khởi tạo, chờ người dùng xác nhận thanh toán" and
+   * {@code 7000}/{@code 7002} are "đang được xử lý" — a payment still in flight, which is the most
+   * likely thing MoMo has to say at the exact moment this is asked.
+   */
+  private static final Set<Integer> IN_FLIGHT_RESULT_CODES = Set.of(1000, 7000, 7002);
+
   private boolean applyResult(String orderId, int resultCode, String transId, String payType) {
     BookPurchaseEntity purchase = findPurchaseOrThrow(orderId);
     boolean success = resultCode == SUCCESS_RESULT_CODE;
@@ -200,6 +224,27 @@ public class MomoService {
     if (purchase.getPaymentStatus() == PaymentStatus.COMPLETED) {
       log.info("[orderId={}] applyResult: already COMPLETED, ignoring duplicate callback", orderId);
       return true;
+    }
+
+    /**
+     * NOT SUCCESS IS NOT THE SAME AS FAILED, and treating it as such destroyed live payments.
+     *
+     * <p>This method used to be `success ? COMPLETED : FAILED` on a single equality test against 0.
+     * Every other code MoMo can answer with went to FAILED — including the ones that mean the
+     * payment is still running. `/payment/success` polls `syncPaymentStatus` on arrival precisely
+     * because the browser usually beats the settlement, so the FIRST poll of a perfectly healthy
+     * purchase would routinely read 1000 or 7002 and write FAILED over a payment that then went on
+     * to succeed. The money arrives against a row that says it did not.
+     *
+     * <p>Leaving the row PENDING and returning false is what the caller already expects: the panel
+     * keeps polling on its bounded interval, and the IPN — or the next poll — settles it for real.
+     */
+    if (!success && IN_FLIGHT_RESULT_CODES.contains(resultCode)) {
+      log.info(
+          "[orderId={}] applyResult: resultCode={} is not final, leaving purchase PENDING",
+          orderId,
+          resultCode);
+      return false;
     }
 
     if (success) {

@@ -15,9 +15,10 @@
 -- rơi về chữ viết tắt. Nếu mọi tài khoản đều có ảnh thì nhánh chữ viết tắt không bao giờ chạy,
 -- và ngược lại — đó chính là tình trạng trước file này.
 --
--- Object tương ứng do scripts/seed/load-minio-objects.sh nạp lên, đọc key thẳng từ chính file
--- này. Bỏ bước đó thì ba tài khoản dưới đây hiện ảnh vỡ thay vì chữ viết tắt, tức là tệ hơn
--- trạng thái cũ — nên đừng chạy file này mà không chạy script.
+-- Object tương ứng do docker compose up nạp lên (minio-seed-objects đọc key thẳng từ chính file
+-- này, xem SOURCES trong docker/minio/generate-seed-objects.py). Không có object thì ba tài khoản
+-- dưới đây hiện ảnh vỡ thay vì chữ viết tắt, tức là tệ hơn trạng thái cũ — nên nếu thêm key vào
+-- file này thì kiểm tra script vẫn quét được nó.
 -- =============================================================================================
 
 UPDATE socialapp.t_users SET profile_picture_url =

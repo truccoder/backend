@@ -15,9 +15,9 @@
 -- Ghi cứng localhost vào db/seed là rải ảnh vỡ lên production. Ở seed-dev thì localhost:9000 là
 -- ĐÚNG chứ không phải xấp xỉ, vì docker-compose luôn dựng MinIO ở đó.
 --
--- Object tương ứng do scripts/seed/load-minio-objects.sh nạp lên, đọc key thẳng từ chính file
--- này (tiền tố `posts/` → bucket post-media). Chạy file này mà bỏ script thì mọi bài dưới đây
--- hiện ảnh vỡ — tệ hơn trạng thái cũ là không có ảnh nào.
+-- Object tương ứng do docker compose up nạp lên (minio-seed-objects đọc key thẳng từ chính file
+-- này; tiền tố `posts/` → bucket post-media). Không có object thì mọi bài dưới đây hiện ảnh vỡ —
+-- tệ hơn trạng thái cũ là không có ảnh nào.
 --
 -- ── UPDATE chứ không INSERT ─────────────────────────────────────────────────────────────────
 -- Gắn ảnh vào bài đã có thay vì thêm bài mới. Thêm bài mới sẽ phải tự lo author, hashtag, bình

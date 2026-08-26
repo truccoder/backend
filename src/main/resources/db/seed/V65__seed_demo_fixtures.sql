@@ -159,7 +159,7 @@ INSERT INTO socialapp.t_comment_reactions (user_id, comment_id, reaction_type, c
 
 -- ── S7 · Một quyển sách trỏ tới object không tồn tại ───────────────────────────────────────
 -- Nhánh "kho lưu trữ hỏng" (503) không dựng lại được sau khi bucket MinIO đã được tạo: mọi
--- quyển trong seed đều có file thật do load-minio-objects.sh nạp lên. Quyển này thì không —
+-- quyển trong seed đều có file thật do minio-seed-objects/minio-init nạp lên. Quyển này thì không —
 -- file_key trỏ tới một object cố ý không tồn tại, nên bấm tải hoặc xem thử sẽ đi đúng vào
 -- nhánh lỗi mà frontend đã dịch sẵn thông điệp nhưng chưa bao giờ chạy thật.
 --
