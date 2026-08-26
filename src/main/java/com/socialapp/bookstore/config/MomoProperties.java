@@ -20,4 +20,14 @@ public class MomoProperties {
   private String apiUrl = "https://test-payment.momo.vn";
   private String redirectUrl;
   private String ipnUrl;
+
+  /**
+   * Minutes MoMo keeps a created order payable.
+   *
+   * <p>Must stay in step with {@code MomoService.PENDING_PAYMENT_STALE_MINUTES}, which is how long
+   * a pending attempt is allowed to hold its {@code transaction_ref} before a new attempt takes it
+   * over. An order that outlives that window is one a customer can still pay after this side has
+   * forgotten the reference — see the comment where this is sent in {@code MomoApiClient}.
+   */
+  private int orderExpireMinutes = 15;
 }

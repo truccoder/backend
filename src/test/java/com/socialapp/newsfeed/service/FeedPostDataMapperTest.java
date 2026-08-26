@@ -2,6 +2,7 @@ package com.socialapp.newsfeed.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -27,6 +28,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -66,6 +68,7 @@ class FeedPostDataMapperTest {
   private static UserEntity user(Integer id) {
     UserEntity user = new UserEntity();
     user.setId(id);
+    user.setUsername("author_" + id);
     user.setFullName("Author " + id);
     user.setEliteScore(0);
     return user;
@@ -90,6 +93,55 @@ class FeedPostDataMapperTest {
       // Then
       assertThat(data.getLikeCount()).isEqualTo(4);
       assertThat(data.getCommentCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("carries the author's username, so a feed card can link to their profile")
+    void carriesAuthorUsername() {
+      // Given — the public profile page is keyed by username and nothing maps an id to one, so
+      // without this field the author's name on a card rendered but led nowhere
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+
+      // When
+      FeedPostDataDto data = mapper.toFeedPostData(post);
+
+      // Then — read off the same UserEntity the other four author fields come from, so it costs
+      // no extra query
+      assertThat(data.getAuthorUsername()).isEqualTo("author_" + AUTHOR_ID);
+      assertThat(data.getAuthorFullName()).isEqualTo("Author " + AUTHOR_ID);
+    }
+
+    @Test
+    @DisplayName("carries the per-type breakdown beside the total")
+    void carriesReactionSummary() {
+      // Given - the reaction row lost its text labels, so a glyph and a number is all a reader
+      // has left. GET /reactions/summary could answer per post; ten cards meant ten requests.
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByType(10))
+          .thenReturn(Map.of(ReactionType.LIKE, 3L, ReactionType.INSIGHT, 1L));
+
+      // When
+      FeedPostDataDto data = mapper.toFeedPostData(post);
+
+      // Then
+      assertThat(data.getReactionSummary())
+          .containsEntry(ReactionType.LIKE, 3L)
+          .containsEntry(ReactionType.INSIGHT, 1L);
+    }
+
+    @Test
+    @DisplayName("sends an empty breakdown, not null, for a post nobody reacted to")
+    void emptySummaryRatherThanNull() {
+      // Given - null is reserved for cache entries written before the field existed, where the
+      // client genuinely does not know; "nobody has reacted" is a known answer
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByType(10)).thenReturn(Map.of());
+
+      // When / Then
+      assertThat(mapper.toFeedPostData(post).getReactionSummary()).isEmpty();
     }
 
     @Test
@@ -128,6 +180,25 @@ class FeedPostDataMapperTest {
       assertThat(page.get(1).getCommentCount()).isEqualTo(5);
       verify(postReactionRepository, never()).countByIdPostId(10);
       verify(commentRepository, never()).countByPostId(10);
+    }
+
+    @Test
+    @DisplayName("batches the reaction breakdown too, one group-by for the whole page")
+    void batchesReactionSummaries() {
+      // Given - the third aggregate. Left per-post it would be twenty more round trips on a page
+      // that already runs three queries in total.
+      when(userRepository.findAllById(List.of(AUTHOR_ID))).thenReturn(List.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByTypeForPostIds(List.of(10, 11)))
+          .thenReturn(Map.of(10, Map.of(ReactionType.CLAP, 2L)));
+
+      // When
+      List<FeedPostDataDto> page =
+          mapper.toFeedPostDataPage(List.of(post(10, AUTHOR_ID), post(11, AUTHOR_ID)));
+
+      // Then - a post absent from the map defaults to an empty breakdown, not to null
+      assertThat(page.get(0).getReactionSummary()).containsExactly(entry(ReactionType.CLAP, 2L));
+      assertThat(page.get(1).getReactionSummary()).isEmpty();
+      verify(postReactionRepository, never()).countByType(10);
     }
 
     @Test

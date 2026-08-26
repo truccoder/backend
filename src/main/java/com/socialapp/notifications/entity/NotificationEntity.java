@@ -44,6 +44,19 @@ public class NotificationEntity {
 
   private String referenceType;
 
+  /**
+   * The post a {@code COMMENT} reference lives under, so the client has somewhere to navigate.
+   *
+   * <p>Null for every other {@code referenceType}: only a comment needs a second coordinate,
+   * because no route is keyed by comment id and a comment row does not announce its post to a
+   * client that only holds the notification.
+   *
+   * <p>Written at send time rather than resolved at read time — both emitting sites already hold
+   * the post, while the read path maps a whole page outside a transaction.
+   */
+  @Column(name = "post_id")
+  private Integer postId;
+
   @Enumerated(EnumType.STRING)
   private NotificationChannel channel;
 
