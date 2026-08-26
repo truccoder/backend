@@ -115,4 +115,78 @@ public interface UserRepository extends JpaRepository<UserEntity, Integer> {
       @Param("query") String query,
       @Param("excludedIds") Collection<Integer> excludedIds,
       Pageable pageable);
+
+  /**
+   * The friends the caller may tag, for an {@code @}-dropdown opened before anything is typed.
+   *
+   * <p>Its own query rather than {@link #suggestMentions} with an empty {@code query}: an empty
+   * pattern matches the whole user table, so reusing that one here would answer "who can I tag?"
+   * with a page of strangers ordered by name — a user-directory dump, handed out one keystroke
+   * after somebody types {@code @}. Before a query narrows anything, the only safe answer is the
+   * people the caller already has an edge to.
+   *
+   * <p>Both id lists follow the never-empty sentinel rule of {@link #search}: {@code IN ()} and
+   * {@code NOT IN ()} are not valid SQL. {@code excludedIds} always holds at least the caller's own
+   * id, and {@code friendIds} is substituted with a sentinel when the caller has no friends — which
+   * then correctly matches nobody.
+   */
+  @Query(
+      """
+                      SELECT u FROM UserEntity u
+                      WHERE u.id IN :friendIds
+                        AND u.id NOT IN :excludedIds
+                      ORDER BY u.fullName ASC, u.id ASC
+                    """)
+  List<UserEntity> findMentionableFriends(
+      @Param("friendIds") Collection<Integer> friendIds,
+      @Param("excludedIds") Collection<Integer> excludedIds,
+      Pageable pageable);
+
+  /**
+   * The {@code @}-dropdown once the caller has typed something: same match as {@link #suggest},
+   * ranked for tagging rather than for navigating.
+   *
+   * <p>Three sort keys, in the order the composer needs them.
+   *
+   * <ol>
+   *   <li><b>Friends first.</b> The whole point of the endpoint. It costs the caller a Neo4j round
+   *       trip to fetch the friend ids — the exact cost {@link #suggest} refuses to pay per
+   *       keystroke — and it is worth paying here because the search box is guessing where you want
+   *       to go, while this box already knows you are naming a person, and the people anyone names
+   *       are overwhelmingly the ones they are connected to.
+   *   <li><b>Prefix before substring.</b> Somebody typing {@code @tr} means a name that starts with
+   *       "tr", not one that happens to contain it; without this key {@code Nguyen Tran} and {@code
+   *       Bui Van Trong} are ordered by whichever comes first alphabetically. Free — it is one more
+   *       ORDER BY expression on rows already being fetched, not a second query.
+   *   <li><b>Name, then id.</b> A total order, so paging and repeat keystrokes stay stable.
+   * </ol>
+   *
+   * <p>Non-friends are still returned, after every friend: people tag colleagues and authors they
+   * have not friended, and a dropdown that cannot reach them sends the user back to typing the
+   * handle from memory. The client tells the two groups apart by {@code isFriend}, not by position.
+   *
+   * <p>{@code f_unaccent} rather than {@code unaccent}, for the reason {@link #search} gives: the
+   * trigram indexes from {@code V48} are built on the wrapper.
+   */
+  @Query(
+      """
+                      SELECT u FROM UserEntity u
+                      WHERE (cast(function('f_unaccent', LOWER(u.fullName)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
+                         OR cast(function('f_unaccent', LOWER(u.username)) as string)
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\')
+                        AND u.id NOT IN :excludedIds
+                      ORDER BY CASE WHEN u.id IN :friendIds THEN 0 ELSE 1 END,
+                               CASE WHEN cast(function('f_unaccent', LOWER(u.username)) as string)
+                                          LIKE cast(function('f_unaccent', LOWER(CONCAT(:query, '%'))) as string) ESCAPE '\\'
+                                      OR cast(function('f_unaccent', LOWER(u.fullName)) as string)
+                                          LIKE cast(function('f_unaccent', LOWER(CONCAT(:query, '%'))) as string) ESCAPE '\\'
+                                    THEN 0 ELSE 1 END,
+                               u.fullName ASC, u.id ASC
+                    """)
+  List<UserEntity> suggestMentions(
+      @Param("query") String query,
+      @Param("friendIds") Collection<Integer> friendIds,
+      @Param("excludedIds") Collection<Integer> excludedIds,
+      Pageable pageable);
 }

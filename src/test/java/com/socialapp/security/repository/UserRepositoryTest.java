@@ -294,4 +294,157 @@ class UserRepositoryTest extends AbstractIntegrationTest {
           .isInstanceOf(DataIntegrityViolationException.class);
     }
   }
+
+  @Nested
+  @DisplayName("findMentionableFriends")
+  class FindMentionableFriends {
+
+    @Test
+    @DisplayName("returns only the caller's friends, ordered by full name")
+    void returnsOnlyFriendsAlphabetically() {
+      // Given: the @-dropdown before anything is typed answers with friends and nobody else
+      UserEntity zoe = userRepository.saveAndFlush(user("fmf-z@example.com", "fmf-zoe", "Zoe Fmf"));
+      UserEntity abe = userRepository.saveAndFlush(user("fmf-a@example.com", "fmf-abe", "Abe Fmf"));
+      userRepository.saveAndFlush(user("fmf-s@example.com", "fmf-cat", "Cat Fmf"));
+
+      // When
+      List<UserEntity> result =
+          userRepository.findMentionableFriends(
+              List.of(zoe.getId(), abe.getId()), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(UserEntity::getId).containsExactly(abe.getId(), zoe.getId());
+    }
+
+    @Test
+    @DisplayName("drops a friend who is in the exclusion list")
+    void dropsExcludedFriend() {
+      // Given: blocking ends the friendship, but the reader-side filter is enforced anyway
+      UserEntity kept =
+          userRepository.saveAndFlush(user("fmx-k@example.com", "fmx-kept", "Kept Fmx"));
+      UserEntity blocked =
+          userRepository.saveAndFlush(user("fmx-b@example.com", "fmx-blocked", "Blocked Fmx"));
+
+      // When
+      List<UserEntity> result =
+          userRepository.findMentionableFriends(
+              List.of(kept.getId(), blocked.getId()),
+              List.of(blocked.getId()),
+              PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(UserEntity::getId).containsExactly(kept.getId());
+    }
+
+    @Test
+    @DisplayName("returns nothing for the sentinel a caller with no friends is given")
+    void returnsNothingForSentinel() {
+      // Given
+      userRepository.saveAndFlush(user("fms-a@example.com", "fms-alone", "Alone Fms"));
+
+      // When: MentionSuggestService substitutes -1 for an empty friend list
+      List<UserEntity> result =
+          userRepository.findMentionableFriends(List.of(-1), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).isEmpty();
+    }
+  }
+
+  @Nested
+  @DisplayName("suggestMentions")
+  class SuggestMentions {
+
+    @Test
+    @DisplayName("ranks a friend above a non-friend even when the non-friend matches better")
+    void ranksFriendsFirst() {
+      // Given: the friend only contains the query, the stranger starts with it and sorts first
+      UserEntity friend =
+          userRepository.saveAndFlush(user("sm1-f@example.com", "sub-qmentiona", "Zzz Qmentiona"));
+      UserEntity stranger =
+          userRepository.saveAndFlush(user("sm1-s@example.com", "qmentiona-pre", "Aaa Qmentiona"));
+
+      // When
+      List<UserEntity> result =
+          userRepository.suggestMentions(
+              "qmentiona", List.of(friend.getId()), List.of(-1), PageRequest.of(0, 10));
+
+      // Then: friendship outranks both the prefix key and the name key
+      assertThat(result)
+          .extracting(UserEntity::getId)
+          .containsExactly(friend.getId(), stranger.getId());
+    }
+
+    @Test
+    @DisplayName("ranks a prefix match above a substring match among equals")
+    void ranksPrefixBeforeSubstring() {
+      // Given: typing "qmentionb" means a name that STARTS with it, not one containing it
+      UserEntity prefix =
+          userRepository.saveAndFlush(user("sm2-p@example.com", "qmentionb-pre", "Zed Qm"));
+      UserEntity substring =
+          userRepository.saveAndFlush(user("sm2-s@example.com", "sub-qmentionb", "Abe Qm"));
+
+      // When: neither is a friend, so the name key would put "Abe" first without the prefix key
+      List<UserEntity> result =
+          userRepository.suggestMentions(
+              "qmentionb", List.of(-1), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result)
+          .extracting(UserEntity::getId)
+          .containsExactly(prefix.getId(), substring.getId());
+    }
+
+    @Test
+    @DisplayName("matches a full name ignoring diacritics, like the search box does")
+    void matchesAccentInsensitively() {
+      // Given
+      UserEntity target =
+          userRepository.saveAndFlush(user("sm3@example.com", "qmentionc-u", "Trần Qmentionc"));
+
+      // When
+      List<UserEntity> result =
+          userRepository.suggestMentions(
+              "tran qmentionc", List.of(-1), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(UserEntity::getId).containsExactly(target.getId());
+    }
+
+    @Test
+    @DisplayName("drops anyone in the exclusion list, which always holds the caller")
+    void dropsExcluded() {
+      // Given
+      UserEntity caller =
+          userRepository.saveAndFlush(user("sm4-c@example.com", "qmentiond-me", "Me Qmentiond"));
+      UserEntity other =
+          userRepository.saveAndFlush(user("sm4-o@example.com", "qmentiond-you", "You Qmentiond"));
+
+      // When
+      List<UserEntity> result =
+          userRepository.suggestMentions(
+              "qmentiond", List.of(-1), List.of(caller.getId()), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(UserEntity::getId).containsExactly(other.getId());
+    }
+
+    @Test
+    @DisplayName("respects the requested page size")
+    void respectsPageSize() {
+      // Given
+      for (int i = 0; i < 3; i++) {
+        userRepository.saveAndFlush(
+            user("sm5-" + i + "@example.com", "qmentione-" + i, "Qmentione User " + i));
+      }
+
+      // When
+      List<UserEntity> result =
+          userRepository.suggestMentions(
+              "qmentione", List.of(-1), List.of(-1), PageRequest.of(0, 2));
+
+      // Then
+      assertThat(result).hasSize(2);
+    }
+  }
 }

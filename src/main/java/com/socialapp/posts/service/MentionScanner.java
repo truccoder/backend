@@ -57,8 +57,20 @@ public class MentionScanner {
    * {@code @Ada} for a person called Ada, and the lookup this feeds is case-insensitive too. The
    * result is lower-cased here so the caller compares like with like.
    */
-  private static final Pattern MENTION =
-      Pattern.compile("(?<![^\\s])@([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})");
+  private static final String HANDLE = "[a-zA-Z0-9][a-zA-Z0-9_-]{2,29}";
+
+  private static final Pattern MENTION = Pattern.compile("(?<![^\\s])@(" + HANDLE + ")");
+
+  /**
+   * The same handle body, anchored — for asking about one handle rather than scanning a sentence.
+   *
+   * <p>Built from the same {@link #HANDLE} string as {@link #MENTION} on purpose: the two
+   * questions "would this text notify anybody" and "is this handle worth offering in the
+   * @-dropdown" have to be answered by one rule. Two copies that drift apart put a name in the
+   * suggestion list that, once tapped, notifies nobody — the silent half-failure this scanner
+   * exists to close.
+   */
+  private static final Pattern HANDLE_ONLY = Pattern.compile(HANDLE);
 
   /**
    * How many distinct handles one piece of text may notify.
@@ -72,6 +84,23 @@ public class MentionScanner {
    * comment over the limit still notifies the people named at the top of it.
    */
   public static final int MAX_MENTIONS = 10;
+
+  /**
+   * Whether {@code handle} is one this scanner would find if somebody typed {@code @handle}.
+   *
+   * <p>For the mention dropdown, which must not offer a name that cannot be tagged. Every
+   * username is written by {@code UsernameSlugger} or seeded, and both produce handles this
+   * pattern accepts — except at the short end: a person called "Ly" slugs to {@code ly}, two
+   * characters, below the three this pattern requires. Suggesting them would produce a tag the
+   * client renders as a link and that notifies nobody, which is exactly the failure {@code
+   * CommentService#notifyMentionedUsers} was added to end.
+   *
+   * <p>Null is answered {@code false} rather than thrown on: the column is {@code NOT NULL}
+   * since {@code V47}, but a caller filtering a candidate list should not have to know that.
+   */
+  public static boolean isMentionable(String handle) {
+    return handle != null && HANDLE_ONLY.matcher(handle).matches();
+  }
 
   /**
    * The handles mentioned in {@code text}, lower-cased, de-duplicated, in the order they appear,

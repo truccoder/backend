@@ -172,4 +172,54 @@ class MentionScannerTest {
       assertThat(MentionScanner.scan(text)).containsExactly("ada", "bob");
     }
   }
+
+  @Nested
+  @DisplayName("isMentionable — what the @-dropdown may offer")
+  class IsMentionableTests {
+
+    @Test
+    @DisplayName("should accept every shape of handle scan() finds")
+    void shouldAcceptRealHandles() {
+      // Given / When / Then — the dropdown and the scanner have to agree, or a suggested name
+      // produces a tag that notifies nobody
+      assertThat(MentionScanner.isMentionable("ada")).isTrue();
+      assertThat(MentionScanner.isMentionable("backend_truc_anh")).isTrue();
+      assertThat(MentionScanner.isMentionable("tran-phu-thinh")).isTrue();
+      assertThat(MentionScanner.isMentionable("user2")).isTrue();
+    }
+
+    @Test
+    @DisplayName("should reject a handle one character below the floor_boundary")
+    void shouldRejectTooShort() {
+      // BVA on the 3-character minimum: "Ly" slugs to a handle scan() would never find
+      assertThat(MentionScanner.isMentionable("ly")).isFalse();
+      assertThat(MentionScanner.isMentionable("lyn")).isTrue();
+    }
+
+    @Test
+    @DisplayName("should reject a handle one character above the ceiling_boundary")
+    void shouldRejectTooLong() {
+      // BVA on the 30-character maximum
+      assertThat(MentionScanner.isMentionable("a".repeat(30))).isTrue();
+      assertThat(MentionScanner.isMentionable("a".repeat(31))).isFalse();
+    }
+
+    @Test
+    @DisplayName("should reject characters scan() would cut the handle short at")
+    void shouldRejectForeignCharacters() {
+      // A stored handle with a period is real enough, but "@minh.tran" scans as "minh" — so
+      // offering it would tag the wrong person, or nobody
+      assertThat(MentionScanner.isMentionable("minh.tran")).isFalse();
+      assertThat(MentionScanner.isMentionable("-leading")).isFalse();
+      assertThat(MentionScanner.isMentionable("has space")).isFalse();
+    }
+
+    @Test
+    @DisplayName("should answer false for null rather than throwing")
+    void shouldAnswerFalseForNull() {
+      // The column is NOT NULL since V47, but a caller filtering a list should not have to know
+      assertThat(MentionScanner.isMentionable(null)).isFalse();
+      assertThat(MentionScanner.isMentionable("")).isFalse();
+    }
+  }
 }
