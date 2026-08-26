@@ -26,6 +26,7 @@ public class ProjectResponseDto {
   private String title;
   private String description;
   private String bannerUrl;
+  private List<String> tags;
   private ProjectStatus status;
   private Integer authorId;
   private String authorFullName;
@@ -48,6 +49,7 @@ public class ProjectResponseDto {
         .title(project.getTitle())
         .description(project.getDescription())
         .bannerUrl(project.getBannerUrl())
+        .tags(project.getTags())
         .status(project.getStatus())
         .authorId(project.getAuthor() == null ? null : project.getAuthor().getId())
         .authorFullName(project.getAuthor() == null ? null : project.getAuthor().getFullName())

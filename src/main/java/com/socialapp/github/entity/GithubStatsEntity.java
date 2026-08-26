@@ -8,6 +8,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.crypto.EncryptedStringConverter;
 import com.socialapp.security.entity.UserEntity;
 
 import jakarta.persistence.*;
@@ -43,7 +44,12 @@ public class GithubStatsEntity {
   @Column(name = "github_username", nullable = false)
   private String githubUsername;
 
-  @Column(name = "access_token")
+  /**
+   * Encrypted at rest — the scope is {@code read:user user:email}, so in plaintext this row reads
+   * a user's private GitHub email addresses to anyone who can read the database.
+   */
+  @Convert(converter = EncryptedStringConverter.class)
+  @Column(name = "access_token", length = 1024)
   private String accessToken;
 
   @Column(name = "public_repos_count")

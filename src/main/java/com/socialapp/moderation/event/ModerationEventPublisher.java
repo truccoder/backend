@@ -21,8 +21,8 @@ public class ModerationEventPublisher {
         PostModerationEvent.builder()
             .postId(post.getId())
             .authorId(post.getAuthorId())
-            .content(post.getContent())
-            .imageUrls(post.getImages())
+            .content(post.moderatableText())
+            .imageUrls(post.moderatableImageUrls())
             .taggedUserIds(taggedUserIds)
             .build();
 

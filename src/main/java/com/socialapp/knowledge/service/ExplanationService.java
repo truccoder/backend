@@ -1,6 +1,7 @@
 package com.socialapp.knowledge.service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -11,6 +12,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.ratelimit.CostlyOperationProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
@@ -26,6 +29,7 @@ import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.posts.service.PostVisibilityService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,25 +38,55 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class ExplanationService {
+
+  private static final String AI_RATE_LIMIT_KEY_PREFIX = "ratelimit:ai:explain:";
+
+  /** How many vault notes may be summarised into one prompt — see {@code loadVaultContext}. */
+  private static final int MAX_VAULT_NOTES_IN_CONTEXT = 50;
+
   private final GeminiClient geminiClient;
+  private final FixedWindowRateLimiter rateLimiter;
+  private final CostlyOperationProperties costlyOperationProperties;
   private final ExplanationRepository explanationRepository;
   private final UserProfessionalProfileRepository profileRepository;
   private final VaultNoteRepository vaultNoteRepository;
   private final PersonalAccessTokenRepository tokenRepository;
   private final PostRepository postRepository;
+  private final PostVisibilityService postVisibilityService;
   private final ObjectMapper objectMapper;
 
   /**
    * Generate explanation without saving. Returns result for user to decide whether to save.
    * Throws 428 if professional profile is not set up.
+   *
+   * <p><b>Deliberately not {@code @Transactional}.</b> The slow part of this method is {@code
+   * geminiClient.generateContent}, seconds of waiting on somebody else's model, and a transaction
+   * opened around the reads above it would hold its Hikari connection for that whole wait — a
+   * handful of concurrent explanations is then enough to starve the pool for every other request
+   * in the app. Nothing here needs one: the three reads are independent lookups, none of them
+   * needs a shared snapshot, each repository call is transactional on its own, and neither the
+   * visibility check nor the vault context touches a LAZY association — {@code
+   * PostVisibilityService.isVisibleTo} reads scalar columns, and {@code VaultNoteEntity.tags} and
+   * {@code links} are jsonb columns that arrive with the row.
    */
-  public ExplanationResponseDto explainPost(Integer userId, Integer postId, String feedbackNote) {
+  public ExplanationResponseDto explainPost(
+      Integer userId, Integer postId, String feedbackNote, String language) {
     PostEntity post =
         postRepository
             .findById(postId)
             .orElseThrow(
                 () ->
                     new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found: " + postId));
+
+    // This method returns the post body verbatim as originalContent AND sends it to Gemini, so it
+    // has to clear the same rule as every other read path. Existence alone was not enough: post
+    // ids are sequential (see PostQueryService), so any signed-in user could walk them and read
+    // the full text of PRIVATE, FRIENDS-only, PENDING or REJECTED posts — and have a third party
+    // read them too. Same 404-not-403 choice as PostReactionService#requireVisiblePost: a post you
+    // may not read must not be distinguishable from one that does not exist.
+    if (!postVisibilityService.isVisibleTo(post, userId)) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found: " + postId);
+    }
 
     UserProfessionalProfileEntity profile = profileRepository.findById(userId).orElse(null);
     if (Objects.isNull(profile)) {
@@ -61,8 +95,10 @@ public class ExplanationService {
           "Professional profile required. Please set up your profile first.");
     }
 
+    requireAiBudget(userId);
+
     String vaultContext = loadVaultContext(userId);
-    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext);
+    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
     GeminiExplanationResult parsed = parseGeminiResponse(geminiResponse);
 
@@ -108,6 +144,33 @@ public class ExplanationService {
     return KnowledgeLibraryResponseDto.builder().explanations(dtos).totalCount(dtos.size()).build();
   }
 
+  /**
+   * Refuses the call when this user has spent their AI budget for the window.
+   *
+   * <p>Keyed on the user rather than the IP: the endpoint requires a session, so the account is the
+   * accountable thing, and an IP key would let one person spread a loop across networks while
+   * punishing everyone behind a shared one.
+   *
+   * <p>Uses the same {@code FixedWindowRateLimiter} as the auth and guest limiters — including its
+   * fail-open behaviour, so a Redis outage degrades the ceiling rather than blocking study.
+   */
+  private void requireAiBudget(Integer userId) {
+    if (!costlyOperationProperties.isEnabled()) {
+      return;
+    }
+    boolean overLimit =
+        rateLimiter.isOverLimit(
+            AI_RATE_LIMIT_KEY_PREFIX + userId,
+            costlyOperationProperties.getAiRequests(),
+            costlyOperationProperties.getAiWindow());
+    if (overLimit) {
+      log.warn("AI explanation budget exhausted for user {}", userId);
+      throw new ResponseStatusException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          "You have requested a lot of explanations recently. Please try again later.");
+    }
+  }
+
   private String loadVaultContext(Integer userId) {
     boolean hasBidirectionalAccess =
         tokenRepository.findByUserId(userId).stream()
@@ -120,6 +183,14 @@ public class ExplanationService {
     List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdWithTags(userId);
     if (notes.isEmpty()) {
       return null;
+    }
+
+    // Capped. Every note here goes into the prompt of every /explain call, so an untrimmed vault
+    // multiplies the token cost of each request by its own size and eventually overruns the model's
+    // context window outright. Only filenames, tags and links are sent — not note bodies — so
+    // taking a slice costs little context and bounds the cost.
+    if (notes.size() > MAX_VAULT_NOTES_IN_CONTEXT) {
+      notes = notes.subList(0, MAX_VAULT_NOTES_IN_CONTEXT);
     }
 
     return notes.stream()
@@ -138,7 +209,8 @@ public class ExplanationService {
       String postContent,
       UserProfessionalProfileEntity profile,
       String feedbackNote,
-      String vaultContext) {
+      String vaultContext,
+      String language) {
     StringBuilder sb = new StringBuilder();
 
     sb.append(
@@ -151,7 +223,18 @@ public class ExplanationService {
     sb.append("3. Each annotation must reference which part of the original it explains\n");
     sb.append("4. Use analogies appropriate for the reader's experience level\n");
     sb.append("5. If a concept has prerequisites, list them explicitly\n");
-    sb.append("6. Respond in the same language as the original post\n");
+    String targetLanguage = resolveLanguage(language);
+    if (Objects.isNull(targetLanguage)) {
+      sb.append("6. Respond in the same language as the original post\n");
+    } else {
+      // Overrides rule 6 rather than being appended after it: two instructions that can disagree
+      // ("match the post" and "answer in Vietnamese") leave the model to pick, and it picked the
+      // post's language often enough that the reader's choice looked ignored at random.
+      sb.append("6. Write EVERY field of your response entirely in ")
+          .append(targetLanguage)
+          .append(", whatever language the original post is written in. Do not translate the")
+          .append(" original post itself — it is quoted below for reference only.\n");
+    }
     sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n\n");
 
     sb.append("=== READER PROFILE ===\n");
@@ -208,6 +291,28 @@ public class ExplanationService {
         """);
 
     return sb.toString();
+  }
+
+  /**
+   * Turns a caller-supplied language tag into a language name the prompt can use, or {@code null}
+   * when the caller stated nothing usable.
+   *
+   * <p>The tag is resolved through {@link Locale} and it is the JDK's <em>English display name</em>
+   * that goes into the prompt, never the caller's own text. That is the second half of the
+   * validation on {@code ExplainRequestDto.language}: even a tag that satisfies the pattern only
+   * reaches Gemini as a word taken from the JDK's language table.
+   *
+   * <p>A well-formed tag the JDK has no name for ({@code "zz"}) comes back as the tag itself. That
+   * is left alone rather than rejected: the pattern has already limited it to letters, digits and
+   * hyphens, so nothing dangerous survives that far, and a request naming a language nobody can
+   * name is not worth a 400 when the model will make a reasonable job of a bare tag.
+   */
+  private String resolveLanguage(String language) {
+    if (Objects.isNull(language) || language.isBlank()) {
+      return null;
+    }
+    String displayName = Locale.forLanguageTag(language).getDisplayName(Locale.ENGLISH);
+    return displayName.isBlank() ? null : displayName;
   }
 
   private String explanationStyleInstruction(ExplanationStyle style) {

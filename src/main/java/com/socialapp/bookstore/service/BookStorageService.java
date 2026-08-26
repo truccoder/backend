@@ -1,6 +1,5 @@
 package com.socialapp.bookstore.service;
 
-import java.io.InputStream;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -28,33 +27,47 @@ public class BookStorageService {
 
   private static final String BOOKS_BUCKET = "books";
   private static final String COVERS_BUCKET = "book-covers";
-  private static final int URL_EXPIRY_HOURS = 24;
+
+  /**
+   * How long a signed cover or preview URL stays valid.
+   *
+   * <p>Generous on purpose: these render on the feed and on search results for every viewer on
+   * every page, so a short life would mean re-signing constantly and would break any page a reader
+   * left open.
+   */
+  private static final int DISPLAY_URL_EXPIRY_HOURS = 24;
+
+  /**
+   * How long a signed URL for a <em>paid</em> book file stays valid.
+   *
+   * <p>Deliberately much shorter than {@link #DISPLAY_URL_EXPIRY_HOURS}. A presigned URL is a
+   * bearer token: whoever holds the string downloads the file, with no account and no purchase
+   * check — {@code BookService#getFullDownloadUrl} verifies the purchase before signing, and after
+   * that the string is on its own. Twenty-four hours was long enough for a link to be pasted
+   * somewhere public; five minutes is long enough for a browser to start the download it was
+   * issued for.
+   */
+  private static final int DOWNLOAD_URL_EXPIRY_MINUTES = 5;
 
   public String uploadBook(Integer authorId, MultipartFile file) {
     requireFile(file);
     String extension = FileExtensions.getExtension(file.getOriginalFilename(), "pdf");
     String objectKey = "books/" + authorId + "/" + UUID.randomUUID() + "." + extension;
 
-    try (InputStream inputStream = file.getInputStream()) {
-      minIOService.uploadFile(BOOKS_BUCKET, objectKey, file);
-      log.info("Uploaded book file: {}", objectKey);
-      return objectKey;
-    } catch (Exception e) {
-      throw new StorageException("Failed to upload book file", e);
-    }
+    // MinIOService throws StorageException itself now, so there is nothing to translate here and
+    // no catch wide enough to swallow an unrelated bug by accident.
+    minIOService.uploadFile(BOOKS_BUCKET, objectKey, file);
+    log.info("Uploaded book file: {}", objectKey);
+    return objectKey;
   }
 
   public String uploadPreview(Integer authorId, byte[] previewBytes, String extension) {
     String objectKey = "previews/" + authorId + "/" + UUID.randomUUID() + "." + extension;
     String contentType = "epub".equals(extension) ? "application/epub+zip" : "application/pdf";
 
-    try {
-      minIOService.uploadBytes(BOOKS_BUCKET, objectKey, previewBytes, contentType);
-      log.info("Uploaded book preview file: {}", objectKey);
-      return objectKey;
-    } catch (Exception e) {
-      throw new StorageException("Failed to upload book preview file", e);
-    }
+    minIOService.uploadBytes(BOOKS_BUCKET, objectKey, previewBytes, contentType);
+    log.info("Uploaded book preview file: {}", objectKey);
+    return objectKey;
   }
 
   /**
@@ -69,21 +82,18 @@ public class BookStorageService {
     String extension = FileExtensions.getExtension(file.getOriginalFilename(), "pdf");
     String objectKey = "covers/" + authorId + "/" + UUID.randomUUID() + "." + extension;
 
-    try {
-      minIOService.uploadFile(COVERS_BUCKET, objectKey, file);
-      log.info("Uploaded cover image: {}", objectKey);
-      return objectKey;
-    } catch (Exception e) {
-      throw new StorageException("Failed to upload cover image", e);
-    }
+    minIOService.uploadFile(COVERS_BUCKET, objectKey, file);
+    log.info("Uploaded cover image: {}", objectKey);
+    return objectKey;
   }
 
   public String getDownloadUrl(String fileKey) {
-    return getPresignedUrl(BOOKS_BUCKET, fileKey);
+    return getPresignedUrl(BOOKS_BUCKET, fileKey, DOWNLOAD_URL_EXPIRY_MINUTES, TimeUnit.MINUTES);
   }
 
+  /** The free sample, so it gets the display lifetime rather than the paid-download one. */
   public String getPreviewUrl(String fileKey) {
-    return getPresignedUrl(BOOKS_BUCKET, fileKey);
+    return getPresignedUrl(BOOKS_BUCKET, fileKey, DISPLAY_URL_EXPIRY_HOURS, TimeUnit.HOURS);
   }
 
   /**
@@ -101,7 +111,7 @@ public class BookStorageService {
     }
 
     try {
-      return getPresignedUrl(COVERS_BUCKET, coverKey);
+      return getPresignedUrl(COVERS_BUCKET, coverKey, DISPLAY_URL_EXPIRY_HOURS, TimeUnit.HOURS);
     } catch (Exception e) {
       log.warn("Failed to sign cover key '{}': {}", coverKey, e.getMessage());
       return null;
@@ -136,14 +146,14 @@ public class BookStorageService {
     return COVERS_BUCKET;
   }
 
-  private String getPresignedUrl(String bucket, String objectKey) {
+  private String getPresignedUrl(String bucket, String objectKey, int expiry, TimeUnit expiryUnit) {
     try {
       return minioClient.getPresignedObjectUrl(
           GetPresignedObjectUrlArgs.builder()
               .method(Method.GET)
               .bucket(bucket)
               .object(objectKey)
-              .expiry(URL_EXPIRY_HOURS, TimeUnit.HOURS)
+              .expiry(expiry, expiryUnit)
               .build());
     } catch (Exception e) {
       throw new StorageException("Failed to generate download URL", e);

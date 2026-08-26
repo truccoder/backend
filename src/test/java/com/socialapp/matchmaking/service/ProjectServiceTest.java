@@ -19,8 +19,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.matchmaking.dto.ProjectPositionRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectApplicationEntity;
@@ -217,7 +219,26 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.applyToPosition(APPLICANT_ID, POSITION_ID, "hire me"))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse an application to the applicant's own project")
+    void shouldThrowValidationException_whenApplyingToOwnProject() {
+      // Given — the project author is the one applying. Left open, this is the whole of a
+      // reputation-minting loop: apply to your own position, accept yourself, collect
+      // PROJECT_APPLICATION_ACCEPTED, repeat for a new position. The ledger cannot de-duplicate
+      // it because its idempotency key is the application id and each loop creates a fresh one.
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      when(userRepository.findById(OWNER_ID)).thenReturn(Optional.of(user(OWNER_ID)));
+      when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position));
+
+      // When / Then
+      assertThatThrownBy(() -> projectService.applyToPosition(OWNER_ID, POSITION_ID, "hire me"))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("your own project");
+      verify(applicationRepository, never()).save(any());
     }
 
     @Test
@@ -289,8 +310,30 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should not award reputation when the owner accepts their own application")
+    void shouldNotAwardReputation_whenApplicantIsTheOwner() {
+      // Given — a row where the applicant and the project owner are the same person.
+      // applyToPosition now refuses to create one, so this covers the second guard: even if such a
+      // row reaches acceptApplication by another route, the points must not be granted. The accept
+      // itself still succeeds — it is the self-crediting that is refused, not the state change.
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, OWNER_ID, ApplicationStatus.PENDING);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
+      when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      projectService.acceptApplication(OWNER_ID, APPLICATION_ID);
+
+      // Then
+      verify(reputationEventPublisher, never()).award(any(), any(), any());
     }
 
     @Test
@@ -306,7 +349,7 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
     }
 
@@ -452,7 +495,7 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.rejectApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
     }
 
