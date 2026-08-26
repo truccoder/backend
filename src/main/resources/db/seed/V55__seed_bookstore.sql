@@ -2,8 +2,9 @@
 -- Gian sách: 20 đầu sách, đánh giá, và lịch sử mua.
 --
 -- CÁC CỘT *_key TRỎ VÀO OBJECT TRONG MINIO MÀ SQL KHÔNG TẠO ĐƯỢC.
--- Chạy scripts/seed/load-minio-objects.sh để nạp file mẫu lên đúng những key này, nếu không
--- danh sách sách hiển thị bình thường nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
+-- docker compose up nạp file mẫu lên đúng những key này (minio-seed-objects đọc key thẳng từ
+-- file này, minio-init tải lên). Không có bước đó thì danh sách sách vẫn hiện bình thường nhưng
+-- bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
 --
 -- Quy ước key lấy đúng theo BookStorageService:
 --   nội dung sách   bucket `books`        key `books/<authorId>/<tên>.<pdf|epub>`

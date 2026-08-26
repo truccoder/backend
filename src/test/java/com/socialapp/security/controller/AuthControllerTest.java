@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -33,6 +34,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BanDetailsDto;
 import com.socialapp.moderation.enums.ViolationType;
@@ -43,6 +45,7 @@ import com.socialapp.security.config.JwtAuthenticationFilter;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.config.SecurityConfig;
 import com.socialapp.security.dto.AuthResponseDto;
+import com.socialapp.security.dto.OAuthUrlResponseDto;
 import com.socialapp.security.exception.AccountBannedException;
 import com.socialapp.security.repository.UserRepository;
 import com.socialapp.security.service.AuthService;
@@ -774,6 +777,194 @@ class AuthControllerTest {
       mockMvc
           .perform(post(LOGOUT_URL).contentType(MediaType.APPLICATION_JSON).content(requestJson))
           .andExpect(status().isUnprocessableEntity());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/auth/google/url  &  POST /v1/api/auth/google/callback
+  // =====================================================================
+
+  @Nested
+  @DisplayName("Google OAuth")
+  class GoogleOAuthTests {
+
+    private static final String GOOGLE_URL = "/v1/api/auth/google/url";
+    private static final String GOOGLE_CALLBACK_URL = "/v1/api/auth/google/callback";
+
+    @Test
+    @DisplayName("shouldReturn200AndTheConsentUrl_happyPath")
+    void shouldReturnConsentUrl() throws Exception {
+      // Given
+      when(oAuthAuthService.getGoogleOAuthUrl())
+          .thenReturn(new OAuthUrlResponseDto("https://accounts.google.com/o/oauth2/v2/auth?x=1"));
+
+      // When / Then: the whole /v1/api/auth/** tree is permitAll — a signed-out visitor is
+      // exactly who needs this URL.
+      mockMvc
+          .perform(get(GOOGLE_URL))
+          .andExpect(status().isOk())
+          .andExpect(
+              jsonPath("$.oauthUrl").value("https://accounts.google.com/o/oauth2/v2/auth?x=1"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndIssueTokens_whenTheCodeIsExchanged")
+    void shouldLogIn() throws Exception {
+      // Given
+      when(oAuthAuthService.loginWithGoogle("valid-code"))
+          .thenReturn(
+              new AuthResponseDto("access-jwt", "refresh-jwt", "Bearer", 3600, false, false));
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(GOOGLE_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"valid-code\"}"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.accessToken").value("access-jwt"))
+          .andExpect(jsonPath("$.tokenType").value("Bearer"));
+    }
+
+    @Test
+    @DisplayName("shouldReportIsNewUserAndIsAutoLinked_soTheClientCanBranch")
+    void shouldExposeLinkingFlags() throws Exception {
+      // Given: a first-time Google sign-in that matched an existing local account by email
+      when(oAuthAuthService.loginWithGoogle("link-code"))
+          .thenReturn(new AuthResponseDto("access-jwt", "refresh-jwt", "Bearer", 3600, true, true));
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(GOOGLE_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"link-code\"}"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.isAutoLinked").value(true))
+          .andExpect(jsonPath("$.isNewUser").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenTheCodeIsBlank")
+    void shouldReturn422OnBlankCode() throws Exception {
+      // When / Then: @NotBlank on the body is a 422 in this API
+      mockMvc
+          .perform(
+              post(GOOGLE_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"   \"}"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenGoogleRejectsTheCode")
+    void shouldReturn401OnBadCode() throws Exception {
+      // Given: a spent or forged code is an authentication failure, not a server fault
+      when(oAuthAuthService.loginWithGoogle("bad-code"))
+          .thenThrow(new BadCredentialsException("Invalid Google authorization code"));
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(GOOGLE_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"bad-code\"}"))
+          .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenTheBodyIsMalformedJson")
+    void shouldReturn400OnMalformedJson() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(
+              post(GOOGLE_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":"))
+          .andExpect(status().isBadRequest());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/auth/github/url  &  POST /v1/api/auth/github/callback
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GitHub OAuth")
+  class GithubOAuthTests {
+
+    private static final String GITHUB_URL = "/v1/api/auth/github/url";
+    private static final String GITHUB_CALLBACK_URL = "/v1/api/auth/github/callback";
+
+    @Test
+    @DisplayName("shouldReturn200AndTheAuthorizeUrl_happyPath")
+    void shouldReturnAuthorizeUrl() throws Exception {
+      // Given
+      when(oAuthAuthService.getGithubOAuthUrl())
+          .thenReturn(new OAuthUrlResponseDto("https://github.com/login/oauth/authorize?x=1"));
+
+      // When / Then
+      mockMvc
+          .perform(get(GITHUB_URL))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.oauthUrl").value("https://github.com/login/oauth/authorize?x=1"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndIssueTokens_whenTheCodeIsExchanged")
+    void shouldLogIn() throws Exception {
+      // Given: sign-in through GitHub is distinct from linking GitHub to an account you are
+      // already signed into — that one is POST /v1/api/github/oauth/callback and needs a JWT.
+      when(oAuthAuthService.loginWithGithub("valid-code"))
+          .thenReturn(
+              new AuthResponseDto("access-jwt", "refresh-jwt", "Bearer", 3600, false, true));
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(GITHUB_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"valid-code\"}"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.accessToken").value("access-jwt"))
+          .andExpect(jsonPath("$.isNewUser").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenTheCodeIsBlank")
+    void shouldReturn422OnBlankCode() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(
+              post(GITHUB_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"\"}"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn503_whenGithubItselfIsUnreachable")
+    void shouldReturn503() throws Exception {
+      // Given: a downstream outage is not the caller's fault -> 503, not 500
+      when(oAuthAuthService.loginWithGithub("valid-code"))
+          .thenThrow(new ExternalApiException("Failed to get GitHub access token"));
+
+      // When / Then
+      mockMvc
+          .perform(
+              post(GITHUB_CALLBACK_URL)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"code\":\"valid-code\"}"))
+          .andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
+    @DisplayName("shouldReturn415_whenContentTypeIsMissing")
+    void shouldReturn415() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(post(GITHUB_CALLBACK_URL).content("{\"code\":\"valid-code\"}"))
+          .andExpect(status().isUnsupportedMediaType());
     }
   }
 }

@@ -10,9 +10,12 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
@@ -21,10 +24,12 @@ import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.FriendSuggestionCache;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.friendships.dto.FriendListResponseDto;
+import com.socialapp.friendships.dto.FriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.dto.MutualFriendCountDto;
 import com.socialapp.friendships.dto.PendingFriendRequestDto;
 import com.socialapp.friendships.dto.SentFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
@@ -32,6 +37,7 @@ import com.socialapp.friendships.repository.FriendRequestRepository;
 import com.socialapp.friendships.repository.FriendshipRepository;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.service.ProfileMatchScorer;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -139,9 +145,30 @@ public class FriendshipService {
     request.setStatus(FriendRequestStatus.ACCEPTED);
     friendRequestRepository.save(request);
 
-    friendshipRepository.mergeUser(request.getRequesterId());
-    friendshipRepository.mergeUser(request.getAddresseeId());
-    friendshipRepository.createFriendship(request.getRequesterId(), request.getAddresseeId());
+    // The graph write happens AFTER Postgres commits, not alongside it.
+    //
+    // These are two stores with two transaction managers and no shared transaction: JPA is
+    // @Primary and owns this method, while FriendshipRepository is a Neo4jRepository wired to
+    // neo4jTransactionManager (see Neo4jConfig). Written inline, the Cypher committed immediately
+    // and the row committed at the end of the method, so anything failing in between — the
+    // notification below, a constraint, a dropped connection — left the graph saying the two are
+    // friends while the request sat PENDING. That is the dangerous direction: getFriends, the
+    // suggestion query and the fan-out audience all read the graph, so the pair would see each
+    // other's FRIENDS-only posts off the back of a request nobody ever accepted, and unfriend
+    // could not clean it up because deleteAcceptedBetween would find no row.
+    //
+    // Deferring inverts the skew. If the graph write fails now, Postgres says ACCEPTED and the
+    // graph has no edge: the two are not yet friends anywhere it matters, nobody sees anything
+    // they should not, and re-accepting or a reconciliation pass repairs it. Same afterCommit
+    // pattern as BlockService, and for the same reason.
+    Integer requesterId = request.getRequesterId();
+    Integer addresseeId = request.getAddresseeId();
+    afterCommit(
+        () -> {
+          friendshipRepository.mergeUser(requesterId);
+          friendshipRepository.mergeUser(addresseeId);
+          friendshipRepository.createFriendship(requesterId, addresseeId);
+        });
 
     friendSuggestionCache.evict(request.getRequesterId());
     friendSuggestionCache.evict(request.getAddresseeId());
@@ -156,6 +183,29 @@ public class FriendshipService {
             .referenceId(request.getId())
             .referenceType("FRIEND_REQUEST")
             .build());
+  }
+
+  /**
+   * Runs {@code action} once the surrounding transaction has committed, or immediately when there
+   * is none.
+   *
+   * <p>Same helper, and the same reasoning, as {@code BlockService#afterCommit}: work that reaches
+   * a second store must not be done speculatively inside a transaction that may still roll back.
+   * Kept local rather than shared because the two modules have no dependency on one another and one
+   * short method is a smaller cost than a new coupling.
+   */
+  private void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            action.run();
+          }
+        });
   }
 
   @Transactional
@@ -251,56 +301,75 @@ public class FriendshipService {
    * <p>The sent-requests list needs no equivalent: blocking cancels pending requests in both
    * directions, so a request the caller sent to someone who then blocked them is already gone.
    */
-  public List<PendingFriendRequestDto> getPendingRequests(Integer userId) {
+  public FriendRequestPageResponseDto getPendingRequests(
+      Integer userId, Integer cursor, int limit) {
+    // limit + 1 to answer hasMore without a COUNT, and the cursor is taken from the last row READ
+    // rather than the last one kept — block filtering happens after, and a cursor taken after it
+    // would rewind whenever the last request on a page came from a blocked user.
+    List<FriendRequestEntity> rows =
+        friendRequestRepository.findIncomingForPage(
+            userId, FriendRequestStatus.PENDING, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = rows.size() > limit;
+    List<FriendRequestEntity> page = hasMore ? rows.subList(0, limit) : rows;
+    Integer nextCursor = hasMore ? page.get(page.size() - 1).getId() : null;
+
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
     List<FriendRequestEntity> requests =
-        friendRequestRepository
-            .findByAddresseeIdAndStatusOrderByCreatedAtDesc(userId, FriendRequestStatus.PENDING)
-            .stream()
-            .filter(request -> !blockedIds.contains(request.getRequesterId()))
-            .toList();
+        page.stream().filter(request -> !blockedIds.contains(request.getRequesterId())).toList();
 
     Map<Integer, UserProfileDto> profilesById =
         loadProfiles(
             requests.stream().map(FriendRequestEntity::getRequesterId).collect(Collectors.toSet()));
 
-    return requests.stream()
-        .map(
-            request -> {
-              UserProfileDto profile = profilesById.get(request.getRequesterId());
-              return new PendingFriendRequestDto(
-                  request.getId(),
-                  request.getRequesterId(),
-                  profile != null ? profile.fullName() : null,
-                  profile != null ? profile.profilePictureUrl() : null,
-                  request.getStatus(),
-                  request.getCreatedAt());
-            })
-        .toList();
+    List<PendingFriendRequestDto> dtos =
+        requests.stream()
+            .map(
+                request -> {
+                  UserProfileDto profile = profilesById.get(request.getRequesterId());
+                  return new PendingFriendRequestDto(
+                      request.getId(),
+                      request.getRequesterId(),
+                      profile != null ? profile.fullName() : null,
+                      profile != null ? profile.profilePictureUrl() : null,
+                      request.getStatus(),
+                      request.getCreatedAt());
+                })
+            .toList();
+
+    return new FriendRequestPageResponseDto(dtos, nextCursor, hasMore);
   }
 
-  public List<SentFriendRequestDto> getSentRequests(Integer userId) {
-    List<FriendRequestEntity> requests =
-        friendRequestRepository.findByRequesterIdAndStatusOrderByCreatedAtDesc(
-            userId, FriendRequestStatus.PENDING);
+  public SentFriendRequestPageResponseDto getSentRequests(
+      Integer userId, Integer cursor, int limit) {
+    List<FriendRequestEntity> rows =
+        friendRequestRepository.findOutgoingForPage(
+            userId, FriendRequestStatus.PENDING, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = rows.size() > limit;
+    List<FriendRequestEntity> requests = hasMore ? rows.subList(0, limit) : rows;
+    Integer nextCursor = hasMore ? requests.get(requests.size() - 1).getId() : null;
 
     Map<Integer, UserProfileDto> profilesById =
         loadProfiles(
             requests.stream().map(FriendRequestEntity::getAddresseeId).collect(Collectors.toSet()));
 
-    return requests.stream()
-        .map(
-            request -> {
-              UserProfileDto profile = profilesById.get(request.getAddresseeId());
-              return new SentFriendRequestDto(
-                  request.getId(),
-                  request.getAddresseeId(),
-                  profile != null ? profile.fullName() : null,
-                  profile != null ? profile.profilePictureUrl() : null,
-                  request.getStatus(),
-                  request.getCreatedAt());
-            })
-        .toList();
+    List<SentFriendRequestDto> dtos =
+        requests.stream()
+            .map(
+                request -> {
+                  UserProfileDto profile = profilesById.get(request.getAddresseeId());
+                  return new SentFriendRequestDto(
+                      request.getId(),
+                      request.getAddresseeId(),
+                      profile != null ? profile.fullName() : null,
+                      profile != null ? profile.profilePictureUrl() : null,
+                      request.getStatus(),
+                      request.getCreatedAt());
+                })
+            .toList();
+
+    return new SentFriendRequestPageResponseDto(dtos, nextCursor, hasMore);
   }
 
   public List<FriendSuggestionDto> getSuggestions(Integer userId, int limit) {
@@ -377,29 +446,21 @@ public class FriendshipService {
 
   // Both helpers below are only ever called from rankByBackground() with an already
   // null-checked `caller` (see the `callerProfile == null` guard above), so `caller` itself is
-  // never null here.
+  // never null here. What they still do is unwrap a possibly-absent candidate profile before
+  // handing the raw fields to ProfileMatchScorer, which is shared with matchmaking and therefore
+  // knows nothing about this pool's "a candidate may have no profile at all" case.
   private boolean sameRole(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
     return candidate != null
-        && caller.getPrimaryRole() != null
-        && caller.getPrimaryRole().equals(candidate.getPrimaryRole());
+        && ProfileMatchScorer.sameRole(caller.getPrimaryRole(), candidate.getPrimaryRole());
   }
 
   private int techStackOverlap(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    if (candidate == null
-        || caller.getKnownTechStack() == null
-        || candidate.getKnownTechStack() == null) {
-      return 0;
-    }
-
-    Set<String> callerStack =
-        caller.getKnownTechStack().stream().map(String::toLowerCase).collect(Collectors.toSet());
-    return (int)
-        candidate.getKnownTechStack().stream()
-            .map(String::toLowerCase)
-            .filter(callerStack::contains)
-            .count();
+    return candidate == null
+        ? 0
+        : ProfileMatchScorer.skillOverlap(
+            caller.getKnownTechStack(), candidate.getKnownTechStack());
   }
 
   /**
