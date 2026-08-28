@@ -9,6 +9,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 
 import jakarta.persistence.*;
@@ -69,6 +70,18 @@ public class ExplanationEntity {
 
   private Integer complexityScore;
 
+  /**
+   * Chủ đề, do Gemini gán ngay trong lần sinh giải thích — xem {@code
+   * ExplanationService.parseGeminiResponse}.
+   *
+   * <p>Lưu thành cột riêng chứ không suy lại từ {@link #concepts} mỗi lần đọc: {@code concepts}
+   * là chuỗi tự do model tự đặt tên, nên hai lần sinh cho cùng một bài có thể ra hai tập từ khác
+   * nhau, và Kho lưu trữ sẽ tự đổi tab dưới tay người dùng.
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(nullable = false, length = 32)
+  private LearningCategory category = LearningCategory.OTHER;
+
   @Column(columnDefinition = "TEXT")
   private String feedbackNote;
 
@@ -89,6 +102,7 @@ public class ExplanationEntity {
       List<String> prerequisites,
       List<ExplanationResponseDto.ExternalLink> externalLinks,
       Integer complexityScore,
+      LearningCategory category,
       String feedbackNote,
       Integer version,
       OffsetDateTime createdAt,
@@ -102,6 +116,9 @@ public class ExplanationEntity {
     this.prerequisites = prerequisites == null ? null : new ArrayList<>(prerequisites);
     this.externalLinks = externalLinks == null ? null : new ArrayList<>(externalLinks);
     this.complexityScore = complexityScore;
+    // Cùng lý do với version bên dưới: @Builder ở đây là @Builder trên constructor, không đi
+    // cùng @Builder.Default được. Cột là NOT NULL (V77), nên "không khai báo" phải thành OTHER.
+    this.category = category == null ? LearningCategory.OTHER : category;
     this.feedbackNote = feedbackNote;
     // No @Builder.Default here: it's incompatible with a constructor-level @Builder (Lombok
     // compile error). This plain null-coalesce achieves the same "unset -> 1" behavior for the

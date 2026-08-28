@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import com.socialapp.bookstore.dto.*;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookService;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.utils.Constants;
 import com.socialapp.security.util.SecurityUtils;
 
@@ -34,15 +35,21 @@ public class BookController {
    *
    * <p>{@code limit} is capped at 50: this endpoint signs a storage URL per row, so an uncapped
    * limit is a request that makes the server do unbounded crypto work.
+   *
+   * <p>{@code category} vắng mặt nghĩa là toàn bộ Thư viện — tab "Tất cả" của FE không gửi tham
+   * số này chứ không gửi chuỗi rỗng. Một giá trị không thuộc {@code LearningCategory} thì Spring
+   * từ chối bind và trả 400; đó là hành vi mong muốn, vì tab gõ sai tên mà im lặng trả về toàn bộ
+   * danh sách sẽ trông y hệt như một bộ lọc hỏng.
    */
   @GetMapping
   public BookPageResponseDto getLibrary(
       @RequestParam(required = false) Integer cursor,
+      @RequestParam(required = false) LearningCategory category,
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
           @Positive
           @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int limit) {
-    return bookService.getLibraryPage(cursor, limit, SecurityUtils.getCurrentUserId());
+    return bookService.getLibraryPage(cursor, limit, category, SecurityUtils.getCurrentUserId());
   }
 
   @GetMapping("/{bookId}")

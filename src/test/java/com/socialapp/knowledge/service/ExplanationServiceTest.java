@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.ratelimit.CostlyOperationProperties;
 import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
@@ -275,6 +276,40 @@ class ExplanationServiceTest {
     }
 
     @Test
+    @DisplayName("should persist the category the client sends back")
+    void shouldPersistCategory() {
+      // Given: cùng vết xe của externalLinks — model phân loại đúng, người dùng bấm lưu, và nhãn
+      // biến mất vì DTO lưu không có chỗ để chứa nó.
+      SaveExplanationRequestDto dto = request();
+      dto.setCategory(LearningCategory.DEVOPS);
+      when(explanationRepository.findMaxVersion(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(explanationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      ExplanationResponseDto result = explanationService.saveExplanation(USER_ID, dto);
+
+      // Then
+      ArgumentCaptor<ExplanationEntity> saved = ArgumentCaptor.forClass(ExplanationEntity.class);
+      verify(explanationRepository).save(saved.capture());
+      assertThat(saved.getValue().getCategory()).isEqualTo(LearningCategory.DEVOPS);
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.DEVOPS);
+    }
+
+    @Test
+    @DisplayName("should store OTHER when the client sends no category")
+    void shouldStoreOtherWhenCategoryOmitted() {
+      // Given: cột là NOT NULL ở V77, nên một client cũ không gửi trường này vẫn phải lưu được.
+      when(explanationRepository.findMaxVersion(POST_ID, USER_ID)).thenReturn(Optional.empty());
+      when(explanationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      ExplanationResponseDto result = explanationService.saveExplanation(USER_ID, request());
+
+      // Then
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.OTHER);
+    }
+
+    @Test
     @DisplayName("should increment the version when previous versions exist")
     void shouldIncrementVersion_whenPreviousVersionExists() {
       // Given
@@ -336,6 +371,27 @@ class ExplanationServiceTest {
       assertThat(result.getExplanations().get(0).getExternalLinks())
           .extracting(ExplanationResponseDto.ExternalLink::getUrl)
           .containsExactly("https://spring.io");
+    }
+
+    @Test
+    @DisplayName("should echo the stored category, which is what the tabs are built from")
+    void shouldEchoCategory() {
+      // Given: /my-library trả về toàn bộ kho của một người và FE tự gom nhóm, nên nhãn phải đi
+      // cùng từng hàng ở CHÍNH danh sách này.
+      when(explanationRepository.findByUserIdOrderByCreatedAtDesc(USER_ID))
+          .thenReturn(
+              List.of(
+                  ExplanationEntity.builder()
+                      .id(1)
+                      .postId(POST_ID)
+                      .category(LearningCategory.QA)
+                      .build()));
+
+      // When
+      KnowledgeLibraryResponseDto result = explanationService.getLibrary(USER_ID);
+
+      // Then
+      assertThat(result.getExplanations().get(0).getCategory()).isEqualTo(LearningCategory.QA);
     }
   }
 
@@ -467,6 +523,25 @@ class ExplanationServiceTest {
 
       // Then
       assertThat(prompt).doesNotContain("EXISTING KNOWLEDGE");
+    }
+
+    @Test
+    @DisplayName("should list every category constant, so a new one cannot go unasked for")
+    void shouldListEveryCategoryInThePrompt() {
+      // Given: danh sách trong prompt được sinh từ chính enum. Nếu ai đó gõ tay danh sách vào
+      // text block rồi thêm một chủ đề mới mà quên sửa, model sẽ không bao giờ trả về chủ đề đó
+      // và mọi bài thuộc về nó lặng lẽ rơi vào OTHER. Bài kiểm thử này là thứ phát hiện ra.
+      stubGeminiEcho();
+      stubHappyPathUpTo(profile(null, null));
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      String prompt = promptCaptor.getValue();
+      for (LearningCategory category : LearningCategory.values()) {
+        assertThat(prompt).contains(category.name());
+      }
     }
 
     @Test
@@ -684,6 +759,52 @@ class ExplanationServiceTest {
       // Then
       assertThat(result.getExternalLinks()).hasSize(1);
       assertThat(result.getExternalLinks().get(0).getTitle()).isEqualTo("Doc");
+    }
+
+    @Test
+    @DisplayName("should read the category the model chose")
+    void shouldParseCategory() {
+      // Given
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn("{\"explanation\": \"e\", \"category\": \"SECURITY\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.SECURITY);
+    }
+
+    @Test
+    @DisplayName("should keep OTHER when the model answers with a category that does not exist")
+    void shouldFallBackToOtherCategory_whenUnknown() {
+      // Given: một nhãn lạ chỉ làm hỏng cái tab. Ném lỗi ở đây sẽ vứt bỏ cả bản giải thích —
+      // thứ người dùng đang chờ và đã trả tiền model để có.
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn("{\"explanation\": \"e\", \"category\": \"BLOCKCHAIN\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(result.getExplanationContent()).isEqualTo("e");
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.OTHER);
+    }
+
+    @Test
+    @DisplayName("should keep OTHER when the model omits the category entirely")
+    void shouldDefaultCategoryToOther_whenMissing() {
+      // Given
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString())).thenReturn("{\"explanation\": \"e\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.OTHER);
     }
 
     @Test

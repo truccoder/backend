@@ -1,5 +1,6 @@
 package com.socialapp.knowledge.service;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -12,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.ratelimit.CostlyOperationProperties;
 import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.knowledge.client.GeminiClient;
@@ -110,6 +112,7 @@ public class ExplanationService {
         .prerequisites(parsed.prerequisites)
         .complexityScore(parsed.complexityScore)
         .externalLinks(parsed.externalLinks)
+        .category(parsed.category)
         .build();
   }
 
@@ -128,6 +131,7 @@ public class ExplanationService {
             .prerequisites(request.getPrerequisites())
             .externalLinks(request.getExternalLinks())
             .complexityScore(request.getComplexityScore())
+            .category(request.getCategory())
             .version(nextVersion)
             .build();
 
@@ -280,6 +284,7 @@ public class ExplanationService {
           "concepts": ["concept1", "concept2"],
           "prerequisites": ["prerequisite knowledge 1", "prerequisite knowledge 2"],
           "complexityScore": 3,
+          "category": "BACKEND",
           "externalLinks": [
             {"title": "Resource title", "url": "https://...", "reason": "Why this helps"}
           ]
@@ -289,6 +294,16 @@ public class ExplanationService {
         The "explanation" field should be comprehensive and directly help the reader understand the post without modifying the original meaning.
         externalLinks should be real, reputable URLs (official docs, well-known blogs, conference talks).
         """);
+
+    // Danh sách hằng số sinh từ chính enum, không gõ tay vào text block ở trên: thêm một chủ đề
+    // mới mà quên sửa prompt thì model sẽ không bao giờ trả về nó, và lỗi đó im lặng tuyệt đối —
+    // mọi bài thuộc chủ đề mới chỉ lặng lẽ rơi vào OTHER.
+    String allowedCategories =
+        Arrays.stream(LearningCategory.values()).map(Enum::name).collect(Collectors.joining(", "));
+    sb.append("\"category\" must be exactly one of: ")
+        .append(allowedCategories)
+        .append(". Pick the single closest one; use OTHER only when none of the others fit.")
+        .append('\n');
 
     return sb.toString();
   }
@@ -338,6 +353,7 @@ public class ExplanationService {
               root.path("prerequisites"),
               objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
       int complexityScore = root.path("complexityScore").asInt(3);
+      LearningCategory category = parseCategory(root.path("category").asText("OTHER"));
 
       List<ExplanationResponseDto.ExternalLink> externalLinks = List.of();
       JsonNode linksNode = root.path("externalLinks");
@@ -352,10 +368,27 @@ public class ExplanationService {
       }
 
       return new GeminiExplanationResult(
-          explanation, concepts, prerequisites, complexityScore, externalLinks);
+          explanation, concepts, prerequisites, complexityScore, externalLinks, category);
     } catch (Exception e) {
       log.warn("Failed to parse structured Gemini response, using raw text: {}", e.getMessage());
-      return new GeminiExplanationResult(response, List.of(), List.of(), 3, List.of());
+      return new GeminiExplanationResult(
+          response, List.of(), List.of(), 3, List.of(), LearningCategory.OTHER);
+    }
+  }
+
+  /**
+   * Đọc nhãn chủ đề model trả về, hoặc {@code OTHER} nếu nó trả về thứ không có trong enum.
+   *
+   * <p>Không ném lỗi: một nhãn lạ chỉ làm hỏng cái tab, còn bản giải thích — thứ người dùng chờ
+   * và đã trả tiền model để có — thì vẫn dùng được nguyên vẹn. Cùng cách xử lý với {@code
+   * TrendingClassificationService.parseCategory}, nơi cũng là một nhãn do model đặt.
+   */
+  private LearningCategory parseCategory(String category) {
+    try {
+      return LearningCategory.valueOf(category);
+    } catch (IllegalArgumentException e) {
+      log.warn("Unknown learning category '{}' from Gemini, keeping OTHER", category);
+      return LearningCategory.OTHER;
     }
   }
 
@@ -371,6 +404,7 @@ public class ExplanationService {
         // the loss actually showed up, since that is where the user goes back to find them.
         .externalLinks(entity.getExternalLinks())
         .complexityScore(entity.getComplexityScore())
+        .category(entity.getCategory())
         .version(entity.getVersion())
         .createdAt(entity.getCreatedAt())
         .build();
@@ -381,5 +415,6 @@ public class ExplanationService {
       List<String> concepts,
       List<String> prerequisites,
       int complexityScore,
-      List<ExplanationResponseDto.ExternalLink> externalLinks) {}
+      List<ExplanationResponseDto.ExternalLink> externalLinks,
+      LearningCategory category) {}
 }

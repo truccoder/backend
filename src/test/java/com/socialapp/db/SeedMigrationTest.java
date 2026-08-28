@@ -567,4 +567,70 @@ class SeedMigrationTest {
           .isGreaterThan(0);
     }
   }
+
+  @Nested
+  @DisplayName("V79 · chủ đề của sách, lộ trình và bản giải thích")
+  class LearningCategoryTests {
+
+    @Test
+    @DisplayName("should leave no seeded book in the catch-all category")
+    void shouldCategoriseEverySeededBook() throws Exception {
+      // V78 thêm cột với DEFAULT 'OTHER'. Quên V79 thì bộ lọc vẫn chạy đúng và Thư viện vẫn có
+      // đúng một tab — hỏng theo kiểu không có lỗi nào được ném ra.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_books"
+                      + " WHERE id BETWEEN 3001 AND 3014 AND category = 'OTHER'"))
+          .isZero();
+    }
+
+    @Test
+    @DisplayName("should spread the seeded books over at least seven categories")
+    void shouldSpreadBooksAcrossCategories() throws Exception {
+      // Ngưỡng, không phải phép đếm lại: một bộ lọc mà mọi cuốn sách rơi vào hai tab thì không
+      // kiểm được là nó có thật sự lọc hay không.
+      assertThat(
+              scalar(
+                  "SELECT count(DISTINCT category) FROM socialapp.t_books"
+                      + " WHERE id BETWEEN 3001 AND 3014"))
+          .isGreaterThanOrEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("should keep a category with exactly one book, off the first page")
+    void shouldKeepASingleBookCategory() throws Exception {
+      // Đây là hàng chứng minh bộ lọc chạy ở SQL: MOBILE có đúng một cuốn, và cuốn đó không nằm
+      // trong trang đầu của danh sách không lọc (id giảm dần, limit mặc định 20 trên 14 cuốn thì
+      // vẫn thấy — nên điều đáng giữ là "đúng một cuốn", để bài kiểm thử phân trang có mốc).
+      assertThat(scalar("SELECT count(*) FROM socialapp.t_books WHERE category = 'MOBILE'"))
+          .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should give the five roadmaps five different categories")
+    void shouldCategoriseEveryRoadmap() throws Exception {
+      assertThat(
+              scalar(
+                  "SELECT count(DISTINCT category) FROM socialapp.t_roadmaps"
+                      + " WHERE id BETWEEN 2001 AND 2005"))
+          .isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("should categorise the seeded explanations without touching anyone else's")
+    void shouldCategoriseSeededExplanations() throws Exception {
+      // Chặn theo dải id tài khoản seed: db/seed chạy cả trên production, nên một UPDATE không
+      // giới hạn sẽ dán lại nhãn cho các bản giải thích Gemini đã phân loại đúng.
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_explanations"
+                      + " WHERE user_id BETWEEN 9001 AND 9058 AND category = 'OTHER'"))
+          .isZero();
+      assertThat(
+              scalar(
+                  "SELECT count(*) FROM socialapp.t_explanations"
+                      + " WHERE user_id NOT BETWEEN 9001 AND 9058"))
+          .isZero();
+    }
+  }
 }
