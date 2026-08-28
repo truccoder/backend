@@ -18,6 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
@@ -186,6 +188,59 @@ class MomoApiClientTest {
 
       String orderInfo = (String) requestBodyCaptor.getValue().get("orderInfo");
       assertThat(orderInfo).isEqualTo("Mua sach: Short Title");
+    }
+
+    @ParameterizedTest(name = "requestType {0} is both sent and signed")
+    @ValueSource(strings = {"captureWallet", "payWithATM"})
+    @DisplayName("should send the configured request type and sign that same value")
+    void shouldSendAndSignTheConfiguredRequestType(String requestType) {
+      // Given: requestType is configuration now, not a constant, because a demo needs the card
+      // screen (payWithATM) while anything that has to actually settle needs the wallet
+      // (captureWallet) — see MomoProperties#requestType.
+      momoProperties.setRequestType(requestType);
+      stubResponse(Mono.just(successResponse()));
+
+      // When
+      momoApiClient.requestPaymentLink("ORDER1", "ORDER1", "1000", "Mua sach: Book", "");
+
+      // Then: it reaches MoMo...
+      Map<String, Object> body = requestBodyCaptor.getValue();
+      assertThat(body.get("requestType")).isEqualTo(requestType);
+
+      // ...and the signature covers THE SAME value. requestType is part of rawSignature, so a
+      // build that signed one flow and requested another would be rejected by MoMo as a signature
+      // mismatch — the one way this change could break every payment at once.
+      String expectedSignature =
+          hmacSHA256(
+              momoProperties.getSecretKey(),
+              "accessKey="
+                  + momoProperties.getAccessKey()
+                  + "&amount=1000"
+                  + "&extraData="
+                  + "&ipnUrl="
+                  + momoProperties.getIpnUrl()
+                  + "&orderId=ORDER1"
+                  + "&orderInfo=Mua sach: Book"
+                  + "&partnerCode="
+                  + momoProperties.getPartnerCode()
+                  + "&redirectUrl="
+                  + momoProperties.getRedirectUrl()
+                  + "&requestId=ORDER1"
+                  + "&requestType="
+                  + requestType);
+      assertThat(body.get("signature")).isEqualTo(expectedSignature);
+    }
+
+    @Test
+    @DisplayName("should default the request type to the wallet flow")
+    void shouldDefaultToCaptureWallet() {
+      // The default matters on its own: captureWallet is the only flow measured to settle on the
+      // sandbox, so an unset MOMO_REQUEST_TYPE must not silently land on the one that cannot.
+      stubResponse(Mono.just(successResponse()));
+
+      momoApiClient.requestPaymentLink("ORDER1", "ORDER1", "1000", "Book", "");
+
+      assertThat(requestBodyCaptor.getValue().get("requestType")).isEqualTo("captureWallet");
     }
 
     @Test

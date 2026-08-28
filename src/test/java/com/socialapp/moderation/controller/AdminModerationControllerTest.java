@@ -24,6 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.AppealDto;
 import com.socialapp.moderation.dto.BannedUserDto;
@@ -312,7 +313,7 @@ class AdminModerationControllerTest {
     @DisplayName("shouldReturn409_whenPostIsNotInPendingReviewStatus")
     void shouldReturn409_whenPostIsNotInPendingReviewStatus() throws Exception {
       // Given
-      org.mockito.Mockito.doThrow(new IllegalStateException("Post is not in PENDING_REVIEW status"))
+      org.mockito.Mockito.doThrow(new ConflictException("Post is not in PENDING_REVIEW status"))
           .when(adminModerationService)
           .reviewPost(org.mockito.ArgumentMatchers.anyInt(), any(), any(), any());
       String requestJson =

@@ -4,7 +4,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import com.socialapp.matchmaking.entity.enums.ProjectStatus;
 import com.socialapp.security.entity.UserEntity;
@@ -37,6 +39,16 @@ public class ProjectEntity {
   private String description;
 
   private String bannerUrl;
+
+  /**
+   * What the project is <em>about</em>, as opposed to what it needs built — the roles carry the
+   * skills. Fed to {@code MatchmakingService.suggestProjects}, where it is crossed with a user's
+   * {@code interestedDomains}; see {@code V74__add_tags_to_projects.sql} for why this is a column
+   * rather than something inferred from the description.
+   */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private List<String> tags;
 
   @Enumerated(EnumType.STRING)
   private ProjectStatus status = ProjectStatus.OPEN;

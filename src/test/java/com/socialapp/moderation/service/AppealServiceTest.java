@@ -100,8 +100,9 @@ class AppealServiceTest {
       // Given
       when(violationRepository.findByUserIdOrderByCreatedAtDesc(USER_ID))
           .thenReturn(List.of(violation(VIOLATION_ID, USER_ID)));
-      when(appealRepository.existsByViolationIdAndStatus(VIOLATION_ID, AppealStatus.PENDING))
-          .thenReturn(true);
+      // One query for the whole list now, not an exists() per violation.
+      when(appealRepository.findViolationIdsWithStatus(List.of(VIOLATION_ID), AppealStatus.PENDING))
+          .thenReturn(List.of(VIOLATION_ID));
 
       // When
       List<UserViolationDto> result = appealService.getMyViolations(USER_ID);

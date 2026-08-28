@@ -153,6 +153,50 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("should persist the post a COMMENT reference lives under")
+    void shouldPersistPostId_whenReferenceIsAComment() {
+      // Given — a notification about a comment. referenceId is deliberately the comment id, so
+      // that a client opens the thread at the reply in question rather than the top of the page —
+      // but no client route is keyed by a comment id, so on its own it addresses nothing.
+      NotificationPreferenceEntity prefs = preference(false, false, null, null);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(
+          baseRequest(NotificationChannel.BOTH)
+              .type(NotificationType.USER_MENTIONED)
+              .referenceId(88)
+              .referenceType("COMMENT")
+              .postId(500)
+              .build());
+
+      // Then — written at send time rather than resolved on read: the emitting side already holds
+      // the post, while the read path maps a whole page outside a transaction
+      verify(notificationRepository, times(2)).save(entityCaptor.capture());
+      assertThat(entityCaptor.getValue().getReferenceId()).isEqualTo(88);
+      assertThat(entityCaptor.getValue().getReferenceType()).isEqualTo("COMMENT");
+      assertThat(entityCaptor.getValue().getPostId()).isEqualTo(500);
+    }
+
+    @Test
+    @DisplayName("should leave the post null for a reference that is not a comment")
+    void shouldLeavePostIdNull_whenReferenceIsNotAComment() {
+      // Given — a friend request has no post, and NULL is the correct state rather than missing
+      // data. The response DTO drops the key entirely in this case.
+      NotificationPreferenceEntity prefs = preference(false, false, null, null);
+      when(preferenceRepository.findByUserId(RECIPIENT_ID)).thenReturn(Optional.of(prefs));
+      when(notificationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      notificationService.send(baseRequest(NotificationChannel.BOTH).build());
+
+      // Then
+      verify(notificationRepository, times(2)).save(entityCaptor.capture());
+      assertThat(entityCaptor.getValue().getPostId()).isNull();
+    }
+
+    @Test
     @DisplayName("should send a push notification when channel is PUSH, enabled, with a player id")
     void shouldSendPush_whenChannelIsPush() {
       // Given
@@ -465,6 +509,36 @@ class NotificationServiceTest {
       // Then
       assertThat(result.getContent()).hasSize(1);
       assertThat(result.getContent().get(0).getId()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should carry the post through to the DTO for a COMMENT reference")
+    void shouldMapPostId() {
+      // Given — a stored comment notification, the shape V72's backfill also produces for rows
+      // written before the column existed
+      NotificationEntity entity =
+          NotificationEntity.builder()
+              .id(2)
+              .actorId(ACTOR_ID)
+              .type(NotificationType.COMMENT_LIKED)
+              .title("t")
+              .body("b")
+              .referenceId(88)
+              .referenceType("COMMENT")
+              .postId(500)
+              .channel(NotificationChannel.BOTH)
+              .isRead(false)
+              .build();
+      when(notificationRepository.findByRecipientIdOrderByCreatedAtDesc(
+              eq(RECIPIENT_ID), eq(PageRequest.of(0, 10))))
+          .thenReturn(new PageImpl<>(List.of(entity)));
+
+      // When
+      var result = notificationService.getNotifications(RECIPIENT_ID, 1, 10);
+
+      // Then — read straight off the row. Resolving it here instead would be an N+1 across the
+      // page, and this method has no transaction to hold it open.
+      assertThat(result.getContent().get(0).getPostId()).isEqualTo(500);
     }
   }
 

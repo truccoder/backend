@@ -6,10 +6,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialapp.common.utils.Constants;
 import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -35,7 +37,8 @@ public class UserPostsController {
   public PostPageResponseDto getUserPosts(
       @PathVariable Integer userId,
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = "20") @Positive int limit) {
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
     // Open to guests — a null viewer is the "stranger" level, see PostVisibilityService.
     return postQueryService.getPostsByAuthor(
         SecurityUtils.getCurrentUserIdOrNull(), userId, cursor, limit);

@@ -42,15 +42,16 @@ spring:
 
     # Production CÓ nạp db/seed (quyết định 2026-08-21: cần dữ liệu demo trên môi trường thật).
     #
-    # Điều làm việc này chấp nhận được: ba personal access token — credential dùng được ngay cho
-    # /v1/api/knowledge/sync/** — đã tách sang db/seed-dev, và thư mục đó KHÔNG có ở dòng dưới.
+    # Dòng này GIỐNG HỆT máy dev từ 2026-08-28. Trước đó có một thư mục thứ ba, db/seed-dev, giữ
+    # ba personal access token và cố ý không có ở production. Thư mục đó đã bị XOÁ HẲN: người dùng
+    # tự tạo token qua POST /v1/api/tokens trong vài giây, nên ba token seed sẵn chỉ đổi lấy ba
+    # credential nằm công khai trong repo — mà /v1/api/knowledge/sync/** là permitAll và tự xác
+    # thực bằng chính chuỗi token, tức ai đọc repo là ghi được vào vault của tài khoản tương ứng.
     #
-    # Điều KHÔNG được che giấu: mật khẩu của 60 tài khoản seed vẫn nằm trong repo (xem V51 — tài
-    # khoản thường dùng "12345678", hai tài khoản ADMIN dùng một chuỗi riêng). Tách hai mật khẩu
-    # chỉ chặn được bot dò chuỗi phổ biến, KHÔNG chặn được người đọc repo. Muốn đóng hẳn thì đổi
-    # mật khẩu hai tài khoản ADMIN qua API ngay sau khi seed xong.
-    #
-    # Đừng thêm classpath:db/seed-dev vào dòng này.
+    # Điều KHÔNG được che giấu: mật khẩu của 500 tài khoản seed vẫn nằm trong repo (xem V81 — tài
+    # khoản thường dùng "12qwaszx", hai tài khoản ADMIN dùng "1234qwer"). Tách hai mật khẩu chỉ
+    # chặn được bot dò chuỗi phổ biến, KHÔNG chặn được người đọc repo. Muốn đóng hẳn thì đổi mật
+    # khẩu hai tài khoản ADMIN qua API NGAY SAU KHI SEED XONG — đó là bước bắt buộc của runbook.
     locations: classpath:db/migration,classpath:db/seed
 
 # Đặc tả OpenAPI liệt kê mọi endpoint và mọi trường DTO, còn Swagger UI là một bảng điều khiển

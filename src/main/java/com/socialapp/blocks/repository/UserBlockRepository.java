@@ -1,5 +1,6 @@
 package com.socialapp.blocks.repository;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -30,4 +31,21 @@ public interface UserBlockRepository extends JpaRepository<UserBlockEntity, User
          OR (b.id.blockerId = :b AND b.id.blockedId = :a)
       """)
   boolean existsBetween(@Param("a") Integer a, @Param("b") Integer b);
+
+  /**
+   * Every block that stands between two members of the given set, in either direction.
+   *
+   * <p>For group membership, where the pair-at-a-time {@link #existsBetween} would mean one query
+   * per pair to answer a single question. The set is small — a Stream channel holds 100 people —
+   * and both columns are indexed, so this stays one scan regardless of group size.
+   *
+   * <p><b>Callers must not pass an empty collection:</b> an empty {@code IN} list is a syntax error
+   * in Postgres. {@code BlockQueryService#blocksAmong} guards it.
+   */
+  @Query(
+      """
+      SELECT b FROM UserBlockEntity b
+      WHERE b.id.blockerId IN :ids AND b.id.blockedId IN :ids
+      """)
+  List<UserBlockEntity> findBlocksAmong(@Param("ids") Collection<Integer> ids);
 }
