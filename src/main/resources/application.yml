@@ -331,7 +331,7 @@ momo:
   # demo by hand but parks at resultCode 7002 for ever there — pair it with the `dev` profile's
   # POST /v1/api/payments/{transactionRef}/dev-settle to reach COMPLETED. See
   # MomoProperties#requestType for the measurements.
-  request-type: ${MOMO_REQUEST_TYPE:captureWallet}
+  request-type: ${MOMO_REQUEST_TYPE:payWithATM}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
 
