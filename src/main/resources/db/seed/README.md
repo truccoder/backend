@@ -15,16 +15,51 @@ Thư mục **`db/seed-dev`** thì không — xem phần cuối.
 FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
 ```
 
-Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. Sau đó chạy
-thêm hai bước không thuộc Flyway:
+Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app.
+
+Hai phần dữ liệu nằm ngoài Flyway — đồ thị bạn bè trong Neo4j và object trong MinIO — **không còn
+bước tay nào nữa**. `docker compose up` lo cả hai:
+
+| Service | Việc nó làm |
+|---|---|
+| `neo4j-seed` | nạp `docker/neo4j/seed/friend-graph.cypher` sau khi Neo4j trả lời được Bolt |
+| `minio-seed-objects` | đọc key từ chính file SQL rồi sinh file PDF/EPUB/PNG mẫu |
+| `minio-init` | tạo 4 bucket, đặt policy công khai cho 2 bucket, tải các file đó lên |
+
+Cả ba đều một lần rồi thoát, và chạy lại được: bucket dùng `--ignore-existing`, cypher script tự
+idempotent.
+
+TRƯỚC ĐÂY HAI BƯỚC NÀY LÀ LỆNH GÕ TAY và đó chính là vấn đề. Bỏ bước Neo4j thì danh sách bạn bè
+rỗng dù lịch sử lời mời đầy đủ; bỏ bước MinIO thì gian sách trả 503 vì bucket `books` không tồn
+tại (`BookStorageService.getPresignedUrl` hỏi region của bucket trước khi ký), và khi bucket đã có
+mà object thì không, ba tài khoản ở `V66` hiện ảnh đại diện vỡ thay vì rơi về chữ viết tắt. Một
+bước bắt buộc mà phải nhớ gọi thì sớm muộn cũng có người quên.
+
+### Bước thứ ba, không bỏ được: dựng lại bảng tin
 
 ```bash
-docker exec -i neo4j cypher-shell -u neo4j -p neo4j_password < docker/neo4j/seed/friend-graph.cypher
-bash scripts/seed/load-minio-objects.sh
+curl -XPOST http://localhost:8080/v1/api/admin/newsfeed/rebuild      -H "Authorization: Bearer <token của admin_one@seed.test>"
 ```
 
-Bỏ bước Neo4j thì danh sách bạn bè rỗng dù lịch sử lời mời đầy đủ. Bỏ bước MinIO thì gian sách
-hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
+**Không chạy lệnh này thì `GET /v1/api/feed` rỗng với MỌI tài khoản seed**, dù database đầy bài.
+Bảng tin đọc duy nhất từ Redis (`NewsfeedService.loadPostsFromCache`) và không bao giờ đọc bù từ
+Postgres; đường duy nhất ghi vào Redis là `fanOutPost`, chỉ chạy khi có người đăng bài qua API.
+Bài do SQL đổ vào không đi qua đường đó. Màn `/newsfeed` sẽ trống trơn trong khi `/posts/public`
+vẫn đầy — triệu chứng dễ bị nhầm thành lỗi frontend.
+
+Cùng lý do, chạy lại lệnh này sau bất kỳ lần nào mất Redis.
+
+### Sau khi deploy một thay đổi có thêm trường vào bài viết
+
+`FeedPostDataDto` được cache 7 ngày. Bản JSON cũ trong Redis không có trường mới, nên bài đang
+nằm trong cache sẽ trả `null` ở trường đó cho tới hết TTL — `authorUsername` là ca gần nhất. Xoá
+cache bài rồi dựng lại:
+
+```bash
+docker exec -i redis redis-cli --scan --pattern 'feedpost:*'   | xargs -r docker exec -i redis redis-cli DEL
+```
+
+(Tiền tố thật đọc ở `POST_CACHE_KEY_PREFIX` trong `PostScoringService`.)
 
 ## Tài khoản
 
@@ -92,14 +127,30 @@ Vài trạng thái đặc biệt để thử các nhánh xử lý:
 | `V59__seed_moderation.sql` | 167 log kiểm duyệt, vi phạm, lệnh cấm, khiếu nại |
 | `V60__seed_reputation_and_notifications.sql` | 2367 sự kiện uy tín, 984 thông báo |
 | `V61__seed_trending_and_github.sql` | 12 tin xu hướng, thống kê GitHub |
+| `V65__seed_demo_fixtures.sql` | Fixture cho S1-S7: bài dài, snippet dài/đủ ngôn ngữ, các ca bình luận 0/1/2/6, cảm xúc `INSIGHT`/`CLAP`, cảm xúc cho bình luận, một sách có tệp thất lạc |
+| `V67__seed_markdown_explanation.sql` | Một bản giải thích AI có đủ bảy kiểu phần tử Markdown (S8) |
+| `V70__seed_comment_mentions.sql` | Ba bình luận có `@handle` + thông báo `USER_MENTIONED` tương ứng, gồm một ca âm |
+
+**Hai file trong `db/migration` sửa dữ liệu mà `db/seed` vừa đổ vào**, nên đọc chúng cùng lúc với
+bảng trên:
+
+- `V72__add_post_id_to_notifications.sql` điền `post_id` cho các thông báo `COMMENT` của `V70` —
+  không có nó thì thông báo nhắc tên hiện ra nhưng bấm không đi đâu.
+- `V73__comments_are_like_only.sql` đổi 7 hàng `INSIGHT`/`CLAP`/`LOVE` mà `V65` ghi vào
+  `t_comment_reactions` thành `LIKE`, vì bình luận chỉ được thích. **Đừng xoá chúng** — phân bố
+  lệch 5/3/1/1/1 là thứ duy nhất để kiểm "hai bình luận nổi nhất", và `SeedMigrationTest` assert
+  đúng điều đó. Các hàng `INSIGHT`/`CLAP` trên `t_post_reactions` ngay phía trên trong cùng file
+  thì giữ nguyên: luật chỉ-LIKE là của bình luận, bài viết vẫn đủ bảy cảm xúc.
 
 Và một file ở thư mục riêng, **không** chạy ở production:
 
 | File | Nội dung |
 |---|---|
 | `db/seed-dev/V63__seed_dev_tokens.sql` | 3 personal access token — credential dùng được ngay |
+| `db/seed-dev/V66__seed_dev_avatars.sql` | Ảnh đại diện cho 3 tài khoản — URL tuyệt đối trỏ localhost |
 
-Kết quả: **34/39 bảng** có dữ liệu (33 nếu không nạp `db/seed-dev`).
+Kết quả: **35/40 bảng** có dữ liệu (34 nếu không nạp `db/seed-dev`) — `t_comment_reactions` là
+bảng mới, thêm ở `V64`.
 
 ## Năm bảng cố ý để trống
 
@@ -144,10 +195,18 @@ API token thì không.
 
 ## Quy ước khi thêm dữ liệu
 
-- Số version tiếp tục từ `V64`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
-  một dãy version, nên không được giẫm số của nhau: `V62` là schema
-  (`V62__create_post_reports.sql`), `V63` là `db/seed-dev/V63__seed_dev_tokens.sql`. Thêm file mới
-  ở bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
+- **Không sửa file đã apply lên production — kể cả comment.** Flyway tính checksum trên toàn bộ
+  nội dung file, dòng `--` cũng tính, và `application-prod.yml` bật `validate-on-migrate: true`.
+  Thêm đúng 5 dòng ghi chú vào `V61` (commit d6f6dd1) đã làm production không khởi động được:
+  `Migration checksum mismatch for migration version 61`. Ghi chú về dữ liệu seed thì đặt ở chỗ
+  code đọc nó — Javadoc của repository, hoặc file README này — chứ không đặt vào file `.sql` đã
+  chạy. Nếu buộc phải sửa nội dung, thêm file version mới thay vì sửa file cũ.
+- Số version tiếp tục từ `V74`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
+  một dãy version, nên không được giẫm số của nhau: `V62`, `V64`, `V68`, `V71`, `V72`, `V73` là
+  schema; `V63`, `V66`, `V69` là `db/seed-dev`; `V65`, `V67`, `V70` là `db/seed`. Thêm file mới ở
+  bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
+- `V65` phải đứng sau `V54`: số bình luận của bốn bài kiểm ca 0/1/2/6 phải CHÍNH XÁC, mà `V54`
+  rải bình luận theo phép chia dư — nó chạy sau thì bài "đúng 2 bình luận" có thể thành ba.
 - Seed phải đứng sau mọi migration schema **tạo bảng mà seed ghi vào**. Một migration số cao hơn
   seed chỉ an toàn khi nó tạo bảng mới (như `V62`); nếu nó sửa bảng mà seed đã đổ dữ liệu thì
   phải đánh số thấp hơn dải seed.
@@ -160,8 +219,10 @@ API token thì không.
   kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55`, làm mất hẳn hai trạng thái thanh toán.
 - **Không đặt credential dùng được vào `db/seed`.** Thư mục đó chạy trên production. Token, khoá
   API, hay bất cứ thứ gì đăng nhập được mà không cần mật khẩu thì thuộc về `db/seed-dev`.
-- Không seed cột trỏ tới object MinIO trừ khi `scripts/seed/load-minio-objects.sh` có nạp file
-  tương ứng. Ảnh đại diện, ảnh bài viết, banner dự án đều để `NULL` vì lý do này.
+- Không seed cột trỏ tới object MinIO trừ khi `docker/minio/generate-seed-objects.py` có quét
+  file đó (xem `SOURCES` trong script). Banner dự án để `NULL` vì lý do này. Một cột trỏ tới
+  object không tồn tại thì tệ hơn `NULL`: URL vẫn dựng được nên trình duyệt hiện ảnh vỡ, chứ
+  không rơi về fallback.
 
 ## Database đã lỡ chạy seed cũ
 

@@ -10,7 +10,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
 import org.junit.jupiter.api.DisplayName;
@@ -45,11 +44,13 @@ class BookStorageServiceTest {
 
   @InjectMocks private BookStorageService bookStorageService;
 
-  /** For {@code uploadBook}, which reads the stream via try-with-resources. */
-  private MultipartFile mockBookFile(String filename) throws IOException {
+  /**
+   * For {@code uploadBook}. It no longer opens the stream itself — reading and storing both live
+   * inside {@code MinIOService} now — so only the filename is stubbed here.
+   */
+  private MultipartFile mockBookFile(String filename) {
     MultipartFile file = mock(MultipartFile.class);
     when(file.getOriginalFilename()).thenReturn(filename);
-    when(file.getInputStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
     return file;
   }
 
@@ -114,13 +115,14 @@ class BookStorageServiceTest {
       // Given
       MultipartFile file = mockBookFile("novel.pdf");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 
@@ -165,13 +167,14 @@ class BookStorageServiceTest {
       // Given
       byte[] bytes = {1, 2, 3};
       when(minIOService.uploadBytes(anyString(), anyString(), any(), anyString()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadPreview(AUTHOR_ID, bytes, "pdf"))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book preview file")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 
@@ -205,13 +208,14 @@ class BookStorageServiceTest {
       // Given
       MultipartFile file = mockCoverFile("cover.jpg");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload cover image")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 

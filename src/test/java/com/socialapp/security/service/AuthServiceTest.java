@@ -33,6 +33,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.ratelimit.AuthRateLimitProperties;
 import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
+import com.socialapp.common.utils.TokenHasher;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.notifications.services.MailService;
 import com.socialapp.security.dto.AuthResponseDto;
@@ -66,6 +67,17 @@ class AuthServiceTest {
 
   private static final Integer USER_ID = 1;
   private static final String EMAIL = "user@example.com";
+  private static final String RAW_TOKEN = "tok";
+
+  /**
+   * What the database actually holds for {@link #RAW_TOKEN}.
+   *
+   * <p>Bearer secrets are stored as SHA-256 hashes (see {@code TokenHasher}), so the service hashes
+   * whatever the client sent before looking it up. A stub keyed on the raw value would simply never
+   * match, and the test would fail for a reason unrelated to what it is checking.
+   */
+  private static final String HASHED_TOK = TokenHasher.hash(RAW_TOKEN);
+
   private static final String RAW_PASSWORD = "password123";
   private static final String ENCODED_PASSWORD = "{bcrypt}encoded";
 
@@ -313,7 +325,7 @@ class AuthServiceTest {
     @DisplayName("should reject an unknown refresh token")
     void shouldThrowBadCredentials_whenRefreshTokenNotFound() {
       // Given
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.empty());
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequestDto("tok")))
@@ -325,7 +337,7 @@ class AuthServiceTest {
     void shouldThrowBadCredentials_whenRefreshTokenExpired() {
       // Given
       RefreshToken stored = new RefreshToken("tok", USER_ID, OffsetDateTime.now().minusDays(1));
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(true);
 
       // When / Then
@@ -340,7 +352,7 @@ class AuthServiceTest {
     void shouldThrowBadCredentials_whenOwnerNotFound() {
       // Given
       RefreshToken stored = new RefreshToken("tok", USER_ID, OffsetDateTime.now().plusDays(1));
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(false);
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
@@ -354,7 +366,7 @@ class AuthServiceTest {
     void shouldThrowAccountBanned_whenOwnerIsBanned() {
       // Given
       RefreshToken stored = new RefreshToken("tok", USER_ID, OffsetDateTime.now().plusDays(1));
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(false);
       when(userRepository.findById(USER_ID))
           .thenReturn(Optional.of(verifiedUser(USER_ID, EMAIL, true)));
@@ -371,7 +383,7 @@ class AuthServiceTest {
       // Given
       RefreshToken stored = new RefreshToken("tok", USER_ID, OffsetDateTime.now().plusDays(1));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(stored));
       when(tokenService.isRefreshTokenExpired(stored)).thenReturn(false);
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
       AuthResponseDto expected =
@@ -467,7 +479,7 @@ class AuthServiceTest {
     @DisplayName("should reject an unknown reset token")
     void shouldThrowBadCredentials_whenTokenNotFound() {
       // Given
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.empty());
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(
@@ -480,7 +492,7 @@ class AuthServiceTest {
     void shouldThrowBadCredentials_whenExpiresAtIsNull() {
       // Given
       PasswordResetToken token = new PasswordResetToken("tok", USER_ID, null);
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(
@@ -495,7 +507,7 @@ class AuthServiceTest {
       // Given
       PasswordResetToken token =
           new PasswordResetToken("tok", USER_ID, OffsetDateTime.now().minusHours(1));
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(
@@ -510,7 +522,7 @@ class AuthServiceTest {
       // Given
       PasswordResetToken token =
           new PasswordResetToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
@@ -527,7 +539,7 @@ class AuthServiceTest {
           new PasswordResetToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       user.setEmailVerified(false);
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
 
       // When / Then
@@ -544,7 +556,7 @@ class AuthServiceTest {
       PasswordResetToken token =
           new PasswordResetToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
       when(passwordEncoder.matches("samepass", ENCODED_PASSWORD)).thenReturn(true);
 
@@ -562,7 +574,7 @@ class AuthServiceTest {
       PasswordResetToken token =
           new PasswordResetToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
-      when(passwordResetTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(passwordResetTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
       when(passwordEncoder.matches("newpass1", ENCODED_PASSWORD)).thenReturn(false);
       when(passwordEncoder.encode("newpass1")).thenReturn("{bcrypt}newEncoded");
@@ -589,7 +601,7 @@ class AuthServiceTest {
     @DisplayName("should reject an unknown verification token")
     void shouldThrowBadCredentials_whenTokenNotFound() {
       // Given
-      when(emailVerificationTokenRepository.findById("tok")).thenReturn(Optional.empty());
+      when(emailVerificationTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequestDto("tok")))
@@ -601,7 +613,7 @@ class AuthServiceTest {
     void shouldThrowBadCredentials_whenExpiresAtIsNull() {
       // Given
       EmailVerificationToken token = new EmailVerificationToken("tok", USER_ID, null);
-      when(emailVerificationTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(emailVerificationTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequestDto("tok")))
@@ -615,7 +627,7 @@ class AuthServiceTest {
       // Given
       EmailVerificationToken token =
           new EmailVerificationToken("tok", USER_ID, OffsetDateTime.now().minusHours(1));
-      when(emailVerificationTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(emailVerificationTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequestDto("tok")))
@@ -628,7 +640,7 @@ class AuthServiceTest {
       // Given
       EmailVerificationToken token =
           new EmailVerificationToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
-      when(emailVerificationTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(emailVerificationTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
@@ -644,7 +656,7 @@ class AuthServiceTest {
           new EmailVerificationToken("tok", USER_ID, OffsetDateTime.now().plusHours(1));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
       user.setEmailVerified(false);
-      when(emailVerificationTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(emailVerificationTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
 
       // When
@@ -707,7 +719,7 @@ class AuthServiceTest {
     @DisplayName("should reject an unknown magic link token")
     void shouldThrowBadCredentials_whenTokenNotFound() {
       // Given
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.empty());
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(() -> authService.loginWithMagicLink(new MagicLinkLoginRequestDto("tok")))
@@ -719,7 +731,7 @@ class AuthServiceTest {
     void shouldThrowBadCredentials_whenExpiresAtIsNull() {
       // Given
       MagicLinkToken token = new MagicLinkToken("tok", USER_ID, null);
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(() -> authService.loginWithMagicLink(new MagicLinkLoginRequestDto("tok")))
@@ -733,7 +745,7 @@ class AuthServiceTest {
       // Given
       MagicLinkToken token =
           new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().minusMinutes(1));
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
 
       // When / Then
       assertThatThrownBy(() -> authService.loginWithMagicLink(new MagicLinkLoginRequestDto("tok")))
@@ -747,7 +759,7 @@ class AuthServiceTest {
       // Given
       MagicLinkToken token =
           new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().plusMinutes(10));
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
       // When / Then
@@ -761,7 +773,7 @@ class AuthServiceTest {
       // Given
       MagicLinkToken token =
           new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().plusMinutes(10));
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID))
           .thenReturn(Optional.of(verifiedUser(USER_ID, EMAIL, true)));
 
@@ -777,7 +789,7 @@ class AuthServiceTest {
       MagicLinkToken token =
           new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().plusMinutes(10));
       UserEntity user = verifiedUser(USER_ID, EMAIL, false);
-      when(magicLinkTokenRepository.findById("tok")).thenReturn(Optional.of(token));
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
       AuthResponseDto expected =
           new AuthResponseDto("access", "refresh", "Bearer", 900, false, false);
@@ -789,6 +801,47 @@ class AuthServiceTest {
       // Then
       assertThat(result).isEqualTo(expected);
       verify(magicLinkTokenRepository).delete(token);
+    }
+
+    @Test
+    @DisplayName("should mark the email verified when an unverified user redeems a magic link")
+    void shouldMarkEmailVerified_whenUnverifiedUserSignsIn() {
+      // Given — an account that never opened its verification mail. Redeeming the link proves the
+      // person holds the mailbox, which is the whole of what verification asks, and the exemption
+      // in authenticate() says exactly that. Until this was written the flag stayed false, so the
+      // user could sign in by link forever and never get a working password: password login and
+      // resetPassword both refuse an unverified account, there is no resend endpoint, and the
+      // 24-hour verification token is long expired.
+      MagicLinkToken token =
+          new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().plusMinutes(10));
+      UserEntity user = verifiedUser(USER_ID, EMAIL, false);
+      user.setEmailVerified(false);
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+      // When
+      authService.loginWithMagicLink(new MagicLinkLoginRequestDto("tok"));
+
+      // Then
+      assertThat(user.isEmailVerified()).isTrue();
+      verify(userRepository).save(user);
+    }
+
+    @Test
+    @DisplayName("should not rewrite an account that is already verified")
+    void shouldNotSaveUser_whenEmailAlreadyVerified() {
+      // Given
+      MagicLinkToken token =
+          new MagicLinkToken("tok", USER_ID, OffsetDateTime.now().plusMinutes(10));
+      UserEntity user = verifiedUser(USER_ID, EMAIL, false);
+      when(magicLinkTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(token));
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+      // When
+      authService.loginWithMagicLink(new MagicLinkLoginRequestDto("tok"));
+
+      // Then — an UPDATE on every magic-link sign-in would be a write for nothing
+      verify(userRepository, never()).save(any());
     }
   }
 
@@ -805,7 +858,7 @@ class AuthServiceTest {
     void shouldDeleteToken_whenFound() {
       // Given
       RefreshToken stored = new RefreshToken("tok", USER_ID, OffsetDateTime.now().plusDays(1));
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.of(stored));
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.of(stored));
 
       // When
       authService.logout(new RefreshTokenRequestDto("tok"));
@@ -818,7 +871,7 @@ class AuthServiceTest {
     @DisplayName("should do nothing when the refresh token does not exist")
     void shouldDoNothing_whenNotFound() {
       // Given
-      when(refreshTokenRepository.findById("tok")).thenReturn(Optional.empty());
+      when(refreshTokenRepository.findById(HASHED_TOK)).thenReturn(Optional.empty());
 
       // When
       authService.logout(new RefreshTokenRequestDto("tok"));

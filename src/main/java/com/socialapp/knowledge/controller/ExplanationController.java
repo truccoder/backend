@@ -18,12 +18,18 @@ import lombok.RequiredArgsConstructor;
 public class ExplanationController {
   private final ExplanationService explanationService;
 
+  /**
+   * The body is optional — an explanation with no feedback and no stated language is the normal
+   * first request — so both fields are read through a null check rather than assumed present.
+   */
   @PostMapping("/posts/{postId}/explain")
   public ExplanationResponseDto explainPost(
       @PathVariable Integer postId,
       @Valid @RequestBody(required = false) ExplainRequestDto request) {
     String feedbackNote = request != null ? request.getFeedbackNote() : null;
-    return explanationService.explainPost(SecurityUtils.getCurrentUserId(), postId, feedbackNote);
+    String language = request != null ? request.getLanguage() : null;
+    return explanationService.explainPost(
+        SecurityUtils.getCurrentUserId(), postId, feedbackNote, language);
   }
 
   @PostMapping("/save")

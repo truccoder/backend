@@ -3,6 +3,8 @@ package com.socialapp.blocks.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -142,6 +144,52 @@ class UserBlockRepositoryTest extends AbstractIntegrationTest {
       // When / Then — ck_user_blocks_not_self; the service refuses too, this is the backstop
       assertThatThrownBy(() -> block(alice, alice))
           .isInstanceOf(DataIntegrityViolationException.class);
+    }
+  }
+
+  /**
+   * The group-chat query. Worth a database test rather than a mock because the two things that can
+   * go wrong here are both SQL: reusing one bound parameter in two {@code IN} clauses, and the fact
+   * that an empty list makes {@code IN ()} a syntax error in Postgres — which is why the guard
+   * lives in {@code BlockQueryService#blocksAmong} and is asserted there, not here.
+   */
+  @Nested
+  @DisplayName("findBlocksAmong")
+  class BlocksAmong {
+
+    @Test
+    @DisplayName("finds a block between two members of the set, whichever way round it was placed")
+    void findsBlockInsideTheSet() {
+      // Given: carol blocked bob, and the group being assembled is alice + bob + carol
+      block(carol, bob);
+
+      // When
+      var found = userBlockRepository.findBlocksAmong(List.of(alice, bob, carol));
+
+      // Then: the pair comes back as stored, so the caller can tell a block involving the person
+      // building the group from one between two other members
+      assertThat(found).hasSize(1);
+      assertThat(found.get(0).getId()).isEqualTo(new UserBlockId(carol, bob));
+    }
+
+    @Test
+    @DisplayName("ignores a block with only one end inside the set")
+    void ignoresBlockReachingOutsideTheSet() {
+      // Given: alice blocked dave, who is not being invited
+      Integer dave =
+          userRepository.saveAndFlush(user("dave@example.com", "block-fixture-dave")).getId();
+      block(alice, dave);
+
+      // When / Then: a group of alice, bob and carol is unaffected by who else alice has blocked —
+      // the other IN clause is what excludes it, and dropping it would reject valid groups
+      assertThat(userBlockRepository.findBlocksAmong(List.of(alice, bob, carol))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("returns nothing when no two members have blocked each other")
+    void emptyForACleanSet() {
+      // When / Then
+      assertThat(userBlockRepository.findBlocksAmong(List.of(alice, bob, carol))).isEmpty();
     }
   }
 }

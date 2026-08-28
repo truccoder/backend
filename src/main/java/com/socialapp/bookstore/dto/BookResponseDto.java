@@ -3,6 +3,7 @@ package com.socialapp.bookstore.dto;
 import java.time.OffsetDateTime;
 
 import com.socialapp.bookstore.entity.enums.FileFormat;
+import com.socialapp.common.enums.LearningCategory;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -23,6 +24,7 @@ public class BookResponseDto {
   private String previewUrl;
   private String coverImageUrl;
   private FileFormat fileFormat;
+  private LearningCategory category;
   private Long fileSizeBytes;
   private Integer totalPages;
   private Integer previewPages;
