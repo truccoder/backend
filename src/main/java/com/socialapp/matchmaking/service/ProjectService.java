@@ -5,8 +5,10 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectApplicationEntity;
 import com.socialapp.matchmaking.entity.ProjectEntity;
@@ -44,6 +46,7 @@ public class ProjectService {
     project.setTitle(request.getTitle());
     project.setDescription(request.getDescription());
     project.setBannerUrl(request.getBannerUrl());
+    project.setTags(request.getTags());
 
     if (request.getPositions() != null) {
       project.setPositions(
@@ -77,7 +80,27 @@ public class ProjectService {
             .orElseThrow(() -> new NotFoundException("Position not found"));
 
     if (position.getStatus() != PositionStatus.OPEN) {
-      throw new IllegalStateException("Position is not open for applications");
+      throw new ConflictException("Position is not open for applications");
+    }
+
+    // Applying to your own project is refused, and this is a security check rather than a
+    // usability one. Accepting an application awards PROJECT_APPLICATION_ACCEPTED to the
+    // applicant, and the owner is the one who accepts — so without this an author could create a
+    // position, apply to it, accept themselves, and repeat for as many positions as they cared to
+    // create. The reputation ledger cannot catch it either: its idempotency key is the
+    // application id, and every loop mints a fresh one.
+    //
+    // Guarded here as well as at the award (see acceptApplication) because the two block different
+    // things: this one stops the row ever existing, that one stops the points even if some other
+    // path creates it.
+    if (applicantId.equals(position.getProject().getAuthor().getId())) {
+      throw new ValidationException("You cannot apply to your own project");
+    }
+
+    // One application per person per position. There was no check at all and no unique index
+    // behind it, so the same applicant could fill an owner's inbox with the same request.
+    if (applicationRepository.existsByPositionIdAndApplicantId(positionId, applicantId)) {
+      throw new ConflictException("You have already applied to this position");
     }
 
     ProjectApplicationEntity application = new ProjectApplicationEntity();
@@ -101,7 +124,7 @@ public class ProjectService {
             .findByIdForUpdate(application.getPosition().getId())
             .orElseThrow(() -> new NotFoundException("Position not found"));
     if (position.getStatus() != PositionStatus.OPEN) {
-      throw new IllegalStateException(
+      throw new ConflictException(
           "Cannot accept an application for a position that is already " + position.getStatus());
     }
 
@@ -118,10 +141,17 @@ public class ProjectService {
       positionRepository.save(position);
     }
 
-    reputationEventPublisher.award(
-        application.getApplicant().getId(),
-        RepSourceType.PROJECT_APPLICATION_ACCEPTED,
-        applicationId.toString());
+    // No self-crediting, the same rule PostService#acceptAnswer and MomoService#notifyBookAuthor
+    // already apply. applyToPosition refuses an owner's own application outright, so this branch
+    // should be unreachable for rows created through the API; it stays because the award is the
+    // thing actually worth protecting, and a row inserted by hand or by a future code path must
+    // not be able to mint points either.
+    if (!application.getApplicant().getId().equals(ownerId)) {
+      reputationEventPublisher.award(
+          application.getApplicant().getId(),
+          RepSourceType.PROJECT_APPLICATION_ACCEPTED,
+          applicationId.toString());
+    }
 
     return savedApp;
   }
@@ -151,7 +181,7 @@ public class ProjectService {
     }
 
     if (application.getStatus() != ApplicationStatus.PENDING) {
-      throw new IllegalStateException(
+      throw new ConflictException(
           "Cannot decide on an application that is already " + application.getStatus());
     }
 

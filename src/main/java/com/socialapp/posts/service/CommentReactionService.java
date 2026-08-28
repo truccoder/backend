@@ -1,0 +1,232 @@
+package com.socialapp.posts.service;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.exception.UserBannedException;
+import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.ReactorPageResponseDto;
+import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
+import com.socialapp.posts.entity.CommentEntity;
+import com.socialapp.posts.entity.CommentReactionEntity;
+import com.socialapp.posts.entity.CommentReactionId;
+import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.enums.ReactionType;
+import com.socialapp.posts.repository.CommentReactionRepository;
+import com.socialapp.posts.repository.CommentRepository;
+import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.security.dto.PublicUserResponse;
+import com.socialapp.security.entity.UserEntity;
+import com.socialapp.security.repository.UserRepository;
+
+import lombok.RequiredArgsConstructor;
+
+/**
+ * Reactions on comments — the mirror of {@link PostReactionService}, one level down.
+ *
+ * <p>Deliberately does NOT award reputation. A post reaction mints {@code REACTION_RECEIVED} for
+ * the author, and copying that here would quietly change what an Elite Score measures: comments
+ * are far cheaper to produce than posts, so the same award on both would make a thread of replies
+ * worth more than the article it hangs under. Making comments count towards reputation is a
+ * product decision with its own weighting, not a side effect of adding a button.
+ */
+@Service
+@RequiredArgsConstructor
+public class CommentReactionService {
+  private final CommentReactionRepository commentReactionRepository;
+  private final CommentRepository commentRepository;
+  private final PostRepository postRepository;
+  private final PostVisibilityService postVisibilityService;
+  private final UserBanService userBanService;
+  private final NotificationService notificationService;
+  private final UserRepository userRepository;
+
+  /**
+   * Who reacted to a comment, one page at a time, optionally narrowed to one reaction type.
+   *
+   * <p>The read half of the asymmetry {@code B14} left behind. A post has had three ways to be
+   * asked about its reactions — {@code /summary}, {@code /me} and this list — while a comment had
+   * none at all: it could be reacted to and never queried, so "who thought this was insightful?"
+   * was answerable one level up and not one level down, on the same screen.
+   *
+   * <p>Returns {@link PublicUserResponse}, never {@code UserResponse}, for the same reason the
+   * post path does: the other type carries an email address, and this list is readable by anyone
+   * who can read the post.
+   */
+  @Transactional(readOnly = true)
+  public ReactorPageResponseDto getReactors(
+      Integer viewerId,
+      Integer postId,
+      Integer commentId,
+      ReactionType type,
+      Integer cursor,
+      int limit) {
+    // The same gate the write paths use, and load-bearing here for a different reason: without it
+    // this endpoint would enumerate everyone who reacted to a comment on a FRIENDS-only post,
+    // which is that post's audience list in all but name.
+    requireVisibleComment(viewerId, postId, commentId);
+
+    // limit + 1 to detect a further page without a second count query over the same rows.
+    List<Integer> reactorIds =
+        commentReactionRepository.findReactorIds(
+            commentId, type, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = reactorIds.size() > limit;
+    List<Integer> pageIds = hasMore ? reactorIds.subList(0, limit) : reactorIds;
+    Integer nextCursor = hasMore ? pageIds.get(pageIds.size() - 1) : null;
+
+    Map<Integer, UserEntity> usersById =
+        userRepository.findAllById(pageIds).stream()
+            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+
+    // Ordered by the id list rather than by whatever order findAllById returned; a reactor whose
+    // user row is gone is skipped rather than rendered as a blank.
+    List<PublicUserResponse> reactors =
+        pageIds.stream()
+            .map(usersById::get)
+            .filter(Objects::nonNull)
+            .map(PublicUserResponse::from)
+            .toList();
+
+    long totalCount =
+        Objects.isNull(type)
+            ? commentReactionRepository.countByIdCommentId(commentId)
+            : commentReactionRepository.countByIdCommentIdAndReactionType(commentId, type);
+
+    return new ReactorPageResponseDto(reactors, nextCursor, hasMore, totalCount);
+  }
+
+  /**
+   * Sets the caller's reaction on a comment. {@code LIKE} is the only one a comment accepts.
+   *
+   * <p>Rejected before the ban check and before any lookup, because a request naming CLAP on a
+   * comment is malformed no matter who sends it or whether the comment exists — answering it with
+   * 404 or 403 first would report the wrong problem.
+   *
+   * <p>The rule is enforced here rather than on {@link UpsertPostReactionRequestDto}, which
+   * {@code PostReactionController} shares: a post still takes all seven. And it is a thrown {@link
+   * ValidationException} (400) rather than a bean-validation constraint, which this project maps
+   * to 422 — a value that is a real {@link ReactionType} but forbidden on this path belongs with
+   * the other 400s, next to an unparseable one.
+   */
+  @Transactional
+  public void upsertReaction(
+      Integer userId, Integer postId, Integer commentId, UpsertPostReactionRequestDto request) {
+    if (!ReactionType.LIKE.equals(request.getReactionType())) {
+      throw new ValidationException("Comments can only be liked");
+    }
+    checkBanStatus(userId);
+    CommentEntity comment = requireVisibleComment(userId, postId, commentId);
+
+    CommentReactionId reactionId = new CommentReactionId(userId, commentId);
+    boolean isNewReaction = !commentReactionRepository.existsById(reactionId);
+    CommentReactionEntity reaction =
+        commentReactionRepository
+            .findById(reactionId)
+            .orElseGet(() -> new CommentReactionEntity(reactionId, null, null));
+    reaction.setReactionType(request.getReactionType());
+    commentReactionRepository.save(reaction);
+
+    // Guarded by isNewReaction exactly as the post path is. It survives the LIKE-only rule for a
+    // narrower case than the one it was written for: a reader who removes their like and puts it
+    // back is still one reader, and notifying on the second one would let them ring somebody's
+    // bell as often as they liked.
+    if (isNewReaction) {
+      notifyCommentAuthor(comment, userId);
+    }
+  }
+
+  @Transactional
+  public void removeReaction(Integer userId, Integer postId, Integer commentId) {
+    requireVisibleComment(userId, postId, commentId);
+
+    CommentReactionId reactionId = new CommentReactionId(userId, commentId);
+    if (!commentReactionRepository.existsById(reactionId)) {
+      throw new NotFoundException("Reaction not found for this comment");
+    }
+    commentReactionRepository.deleteById(reactionId);
+  }
+
+  /**
+   * The comment, but only if {@code viewerId} may read the post it hangs under.
+   *
+   * <p>Both checks matter and for different reasons. The visibility rule is the same one {@code
+   * CommentService#requireVisiblePost} applies — without it, reacting to a comment on a PRIVATE
+   * post would confirm the post exists and fire a notification at somebody who never shared it.
+   * The belongs-to-post check stops {@code /posts/1/comments/999/reactions} from reaching a
+   * comment on a post the caller cannot see by borrowing the id of one they can.
+   *
+   * <p>404 in both cases, matching every other read path: a thing you may not see must not be
+   * distinguishable from one that does not exist.
+   */
+  private CommentEntity requireVisibleComment(Integer viewerId, Integer postId, Integer commentId) {
+    PostEntity post =
+        postRepository
+            .findById(postId)
+            .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
+    if (!postVisibilityService.isVisibleTo(post, viewerId)) {
+      throw new NotFoundException("Post not found with ID: " + postId);
+    }
+
+    CommentEntity comment =
+        commentRepository
+            .findById(commentId)
+            .orElseThrow(() -> new NotFoundException("Comment not found with ID: " + commentId));
+    if (!comment.getPostId().equals(postId)) {
+      throw new NotFoundException("Comment not found with ID: " + commentId);
+    }
+    return comment;
+  }
+
+  private void checkBanStatus(Integer userId) {
+    if (userBanService.isUserBanned(userId)) {
+      throw new UserBannedException(userBanService.getBanExpiry(userId));
+    }
+  }
+
+  /**
+   * Tells the comment's author, unless they reacted to their own comment.
+   *
+   * <p>{@code referenceId} is the comment id and {@code referenceType} is "COMMENT": the client
+   * has to open the thread at the reply that was reacted to, and a post id alone would only get it
+   * to the top of a page that may hold hundreds of comments. {@code postId} rides along as the
+   * other half of that address — the reference says which reply, this says which page — because no
+   * client route is keyed by a comment id.
+   */
+  private void notifyCommentAuthor(CommentEntity comment, Integer reactorId) {
+    if (comment.getAuthorId().equals(reactorId)) {
+      return;
+    }
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(comment.getAuthorId())
+            .actorId(reactorId)
+            .type(NotificationType.COMMENT_LIKED)
+            .title("New reaction on your comment")
+            .body(actorName(reactorId) + " reacted to your comment")
+            .referenceId(comment.getId())
+            .referenceType("COMMENT")
+            .postId(comment.getPostId())
+            .build());
+  }
+
+  private String actorName(Integer userId) {
+    return userRepository
+        .findById(userId)
+        .map(UserEntity::getFullName)
+        .filter(name -> name != null && !name.isBlank())
+        .orElse("Someone");
+  }
+}
