@@ -38,7 +38,9 @@ public class BookController {
   @GetMapping
   public BookPageResponseDto getLibrary(
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive @Max(50)
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int limit) {
     return bookService.getLibraryPage(cursor, limit, SecurityUtils.getCurrentUserId());
   }

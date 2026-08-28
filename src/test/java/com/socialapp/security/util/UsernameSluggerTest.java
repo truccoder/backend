@@ -76,22 +76,22 @@ class UsernameSluggerTest {
   }
 
   @Nested
-  @DisplayName("padToMinimumLength")
-  class PadToMinimumLength {
+  @DisplayName("isLongEnough")
+  class IsLongEnough {
 
     @Test
-    @DisplayName("pads a slug below the minimum with the discriminator")
-    void padsShortSlug() {
-      // Given: "Lê" slugs to "le", two characters — a real name the format would reject
-      assertThat(UsernameSlugger.padToMinimumLength("le", 42)).isEqualTo("le-42");
+    @DisplayName("rejects a slug below the minimum, so the caller suffixes the user id")
+    void rejectsShortSlug() {
+      // Given: "Le" slugs to "le", two characters — a real name the format would reject
+      assertThat(UsernameSlugger.isLongEnough("le")).isFalse();
     }
 
     @Test
-    @DisplayName("leaves a slug at or above the minimum untouched")
-    void leavesLongEnoughSlugAlone() {
+    @DisplayName("accepts a slug at or above the minimum")
+    void acceptsLongEnoughSlug() {
       // When / Then — boundary: exactly 3 characters is already valid
-      assertThat(UsernameSlugger.padToMinimumLength("ada", 42)).isEqualTo("ada");
-      assertThat(UsernameSlugger.padToMinimumLength("adam", 42)).isEqualTo("adam");
+      assertThat(UsernameSlugger.isLongEnough("ada")).isTrue();
+      assertThat(UsernameSlugger.isLongEnough("adam")).isTrue();
     }
   }
 }

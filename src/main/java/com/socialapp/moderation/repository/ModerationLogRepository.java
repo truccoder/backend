@@ -1,5 +1,6 @@
 package com.socialapp.moderation.repository;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.Page;
@@ -17,6 +18,14 @@ public interface ModerationLogRepository extends JpaRepository<ModerationLogEnti
   List<ModerationLogEntity> findByPostId(Integer postId);
 
   List<ModerationLogEntity> findByPostIdOrderByCreatedAtAsc(Integer postId);
+
+  /**
+   * Every log entry for a page of posts, oldest first, in one query.
+   *
+   * <p>The admin post list rendered each row's history with its own {@code findByPostId...} call,
+   * so a 20-row page cost 20 extra round trips. The caller groups by {@code postId}.
+   */
+  List<ModerationLogEntity> findByPostIdInOrderByCreatedAtAsc(Collection<Integer> postIds);
 
   List<ModerationLogEntity> findByStatus(ModerationStatus status);
 

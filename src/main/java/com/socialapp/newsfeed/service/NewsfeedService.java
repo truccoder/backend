@@ -5,8 +5,14 @@ import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_P
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.redis.connection.StringRedisConnection;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,7 +21,10 @@ import org.springframework.util.CollectionUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.newsfeed.dto.FeedRebuildResultDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -27,8 +36,8 @@ import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.PostRepository;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -41,7 +50,7 @@ import lombok.extern.slf4j.Slf4j;
 public class NewsfeedService {
   private final StringRedisTemplate redisTemplate;
   private final ObjectMapper objectMapper;
-  private final FriendshipQueryService friendshipQueryService;
+  private final FriendshipService friendshipService;
   private final UserInteractionRepository userInteractionRepository;
   private final PostRepository postRepository;
   private final UserRepository userRepository;
@@ -52,6 +61,32 @@ public class NewsfeedService {
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
+
+  /**
+   * How long a user's feed index survives without being written to.
+   *
+   * <p>It used to survive forever. The post payloads expire after seven days but the {@code
+   * feed:<userId>} sorted sets never did, so Redis grew with the number of accounts that had ever
+   * existed rather than with the number in use — every dormant account keeping up to
+   * {@link #MAX_FEED_SIZE} ids alive, on a box that also hosts Postgres pooling, Neo4j and MinIO.
+   * After the seventh day those ids point at payloads that are gone, so the rescoring job spent
+   * most of its work on feeds with nothing left in them.
+   *
+   * <p>Thirty days is comfortably longer than the payload TTL, so an active reader never notices.
+   * A returning user whose key has expired gets an empty feed until the next fan-out reaches them;
+   * {@code AdminNewsfeedController} can rebuild one on demand.
+   */
+  private static final Duration FEED_TTL = Duration.ofDays(30);
+
+  /**
+   * How often the trim actually runs, as a divisor of writes.
+   *
+   * <p>{@code ZREMRANGEBYRANK} on every single fan-out write doubled the command count for a cap
+   * that only matters once a feed passes {@link #MAX_FEED_SIZE}. Trimming on roughly one write in
+   * twenty keeps the ceiling honest — a feed can drift a little over it between trims, which costs
+   * a few kilobytes and nothing else.
+   */
+  private static final int TRIM_EVERY_N_WRITES = 20;
 
   /**
    * How much wider than {@code size} the feed window is read when the caller has blocks, so that
@@ -76,6 +111,70 @@ public class NewsfeedService {
    * happens to the feed itself at 1000.
    */
   private static final int SKILL_SCAN_LIMIT = 300;
+
+  /**
+   * How many posts one page of {@link #rebuildAll()} loads. Small enough that a database with far
+   * more posts than the seed still rebuilds inside a bounded amount of memory.
+   */
+  private static final int REBUILD_PAGE_SIZE = 200;
+
+  /**
+   * Fans out every approved post again, rebuilding the feed of every user from Postgres.
+   *
+   * <p>Exists because the feed has exactly one source of truth — Redis — and only one way in:
+   * {@code fanOutPost}, called when somebody publishes a post through the API. Two consequences
+   * followed from that, and this method is the answer to both. Seeded posts were written straight
+   * into Postgres and therefore never reached any feed, so a freshly seeded database showed every
+   * account an empty {@code /v1/api/feed} while the discovery feed was full. And in production,
+   * losing Redis meant losing every feed permanently, with no way back short of asking users to
+   * repost.
+   *
+   * <p>Calls the two-argument {@code fanOutPost} rather than the one-argument form on purpose: the
+   * latter also runs {@code notifyTaggedUsers}, and a rebuild must not tell somebody they were
+   * tagged in a post from three months ago. Reputation and interaction tracking are likewise not
+   * involved — this writes cache entries and nothing else.
+   *
+   * <p>Synchronous, and page by page. The caller is an administrator who needs to know when it has
+   * finished before demonstrating anything, and paging keeps a whole-table read off the heap. One
+   * post that fails is counted and stepped over rather than aborting the run, because a single
+   * post whose author row is gone should not cost the other few hundred their fan-out.
+   */
+  @Transactional
+  public FeedRebuildResultDto rebuildAll() {
+    log.info("rebuildAll: starting feed rebuild for all APPROVED posts");
+
+    int processed = 0;
+    int skipped = 0;
+    int pageNumber = 0;
+    Page<PostEntity> page;
+
+    do {
+      page =
+          postRepository.findByModerationStatus(
+              ModerationStatus.APPROVED,
+              PageRequest.of(pageNumber, REBUILD_PAGE_SIZE, Sort.by(Sort.Direction.ASC, "id")));
+
+      for (PostEntity post : page.getContent()) {
+        try {
+          UserEntity author =
+              userRepository
+                  .findById(post.getAuthorId())
+                  .orElseThrow(
+                      () -> new NotFoundException("Author not found: " + post.getAuthorId()));
+          FeedPostDataDto postData = feedPostDataMapper.toFeedPostData(post, author);
+          fanOutPost(postData, postData.getTaggedUserIds());
+          processed++;
+        } catch (RuntimeException e) {
+          skipped++;
+          log.warn("rebuildAll: skipped postId={} — {}", post.getId(), e.toString());
+        }
+      }
+      pageNumber++;
+    } while (page.hasNext());
+
+    log.info("rebuildAll: finished, processed={}, skipped={}", processed, skipped);
+    return new FeedRebuildResultDto(processed, skipped);
+  }
 
   // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
   // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
@@ -115,18 +214,16 @@ public class NewsfeedService {
     cachePostData(postId, postData);
     addToFeed(postData.getAuthorId(), postId, score);
 
+    // One pipelined batch for the whole audience rather than two commands per recipient.
+    Set<Integer> recipients = new LinkedHashSet<>();
     if (!PostVisibility.PRIVATE.equals(postData.getVisibility())) {
-      List<Integer> friendIds = friendshipQueryService.getFriendIds(postData.getAuthorId());
-      for (Integer friendId : friendIds) {
-        addToFeed(friendId, postId, score);
-      }
+      recipients.addAll(friendshipService.getFriendIds(postData.getAuthorId()));
     }
-
     if (Objects.nonNull(taggedUserIds)) {
-      for (Integer taggedUserId : taggedUserIds) {
-        addToFeed(taggedUserId, postId, score);
-      }
+      recipients.addAll(taggedUserIds);
     }
+    recipients.remove(postData.getAuthorId());
+    addToFeeds(recipients, postId, score);
 
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
   }
@@ -163,25 +260,37 @@ public class NewsfeedService {
   }
 
   /**
-   * Rewrites the cached like count for one post.
+   * Rewrites the cached reaction total <b>and</b> its per-type breakdown for one post.
    *
-   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database
-   * is a counter the user never sees. Callers pass a count they have just read from their own
+   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database is
+   * a counter the user never sees. Callers pass values they have just read from their own
    * repository rather than a delta: read-modify-write against Redis is not atomic, and under
-   * concurrent reactions a delta would drift permanently, whereas an absolute value taken from
-   * the authoritative table self-corrects on the very next interaction.
+   * concurrent reactions a delta would drift permanently, whereas absolute values taken from the
+   * authoritative table self-correct on the very next interaction.
+   *
+   * <p><b>One method for both, and not two.</b> The total and the breakdown are two views of the
+   * same rows, so writing them separately means two read-modify-write cycles over the same cache
+   * entry and a window in which the chips visibly disagree with the number beside them. Splitting
+   * them would also make it possible to add a caller that updates one and forgets the other —
+   * which is precisely how the breakdown would rot into something worse than not sending one.
    */
-  public void updateCachedLikeCount(Integer postId, int likeCount) {
-    mutateCachedPost(postId, post -> post.setLikeCount(likeCount));
+  public void updateCachedReactions(
+      Integer postId, int likeCount, Map<ReactionType, Long> reactionSummary) {
+    mutateCachedPost(
+        postId,
+        post -> {
+          post.setLikeCount(likeCount);
+          post.setReactionSummary(reactionSummary);
+        });
   }
 
-  /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
+  /** Rewrites the cached comment count for one post — see {@link #updateCachedReactions}. */
   public void updateCachedCommentCount(Integer postId, int commentCount) {
     mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
   }
 
   /**
-   * Rewrites the cached QNA block for one post — see {@link #updateCachedLikeCount}. Accepting an
+   * Rewrites the cached QNA block for one post — see {@link #updateCachedReactions}. Accepting an
    * answer changes {@code isResolved}/{@code acceptedAnswerId}, and the feed would otherwise keep
    * serving the pre-accept copy.
    */
@@ -214,7 +323,7 @@ public class NewsfeedService {
     redisTemplate.delete(POST_CACHE_KEY_PREFIX + postIdStr);
     removeFromFeed(authorId, postIdStr);
 
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(authorId);
+    List<Integer> friendIds = friendshipService.getFriendIds(authorId);
     for (Integer friendId : friendIds) {
       removeFromFeed(friendId, postIdStr);
     }
@@ -328,13 +437,18 @@ public class NewsfeedService {
             .filter(post -> touchesAnyTag(post, skillTags))
             .toList();
 
-    int start = (page - 1) * size;
+    // long, for the same reason getAllFeed casts: page and size are only @Positive, so
+    // (page - 1) * size overflows int for a large page and wraps negative — which sails past the
+    // >= check below and reaches subList(negative, ...) as an IndexOutOfBoundsException, i.e. a
+    // 500 from a query string. Compare against the list size in long space, then narrow.
+    long start = (long) (page - 1) * size;
     if (start >= matches.size()) {
       return emptyPage(page, size);
     }
 
-    int end = Math.min(start + size, matches.size());
-    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(start, end));
+    int from = (int) start;
+    int end = Math.min(from + size, matches.size());
+    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(from, end));
     signBookCovers(pageItems);
 
     return FeedResponseDto.builder()
@@ -423,9 +537,59 @@ public class NewsfeedService {
     }
   }
 
+  /**
+   * Adds one post to one user's feed.
+   *
+   * <p>Called once per recipient during fan-out, so what it costs per call is multiplied by the
+   * author's follower count — see {@link #addToFeeds} for the batched form the fan-out path uses.
+   */
   private void addToFeed(Integer userId, String postId, double score) {
     String feedKey = FEED_KEY_PREFIX + userId;
     redisTemplate.opsForZSet().add(feedKey, postId, score);
+    redisTemplate.expire(feedKey, FEED_TTL);
+    maybeTrim(feedKey);
+  }
+
+  /**
+   * Adds one post to many feeds in a single round trip.
+   *
+   * <p>Fan-out used to loop {@link #addToFeed}, which is two Redis commands each, issued serially:
+   * a post by someone with five hundred friends cost over a thousand round trips — and it ran
+   * inside {@code ModerationEventListener}'s transaction, holding a database connection open for
+   * all of them. Pipelining sends the batch and reads the replies once.
+   */
+  private void addToFeeds(Collection<Integer> userIds, String postId, double score) {
+    if (userIds.isEmpty()) {
+      return;
+    }
+
+    redisTemplate.executePipelined(
+        (RedisCallback<Object>)
+            connection -> {
+              StringRedisConnection stringConnection = (StringRedisConnection) connection;
+              for (Integer userId : userIds) {
+                String feedKey = FEED_KEY_PREFIX + userId;
+                stringConnection.zAdd(feedKey, score, postId);
+                stringConnection.expire(feedKey, FEED_TTL.toSeconds());
+              }
+              return null;
+            });
+
+    // Trimming is deliberately outside the pipeline and sampled: it is a cap, not an invariant.
+    userIds.forEach(userId -> maybeTrim(FEED_KEY_PREFIX + userId));
+  }
+
+  /**
+   * Trims a feed back to {@link #MAX_FEED_SIZE}, most of the time.
+   *
+   * <p>Sampled rather than unconditional — see {@link #TRIM_EVERY_N_WRITES}. Uses
+   * {@code ThreadLocalRandom} rather than a counter so it needs no shared state and stays correct
+   * across instances.
+   */
+  private void maybeTrim(String feedKey) {
+    if (ThreadLocalRandom.current().nextInt(TRIM_EVERY_N_WRITES) != 0) {
+      return;
+    }
     redisTemplate.opsForZSet().removeRange(feedKey, 0, -(MAX_FEED_SIZE + 1));
   }
 

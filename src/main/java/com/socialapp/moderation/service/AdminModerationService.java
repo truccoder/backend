@@ -3,8 +3,11 @@ package com.socialapp.moderation.service;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -12,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
@@ -44,9 +48,43 @@ public class AdminModerationService {
   private final NewsfeedService newsfeedService;
   private final UserBanService userBanService;
 
+  /**
+   * The admin post queue.
+   *
+   * <p>Three queries for a page regardless of its size — the posts, their authors, their histories
+   * — where {@code toDetailDto} previously issued a user lookup and a log lookup per row.
+   */
   public Page<PostModerationDetailDto> searchPosts(
       Integer postId, Integer authorId, ModerationStatus status, Pageable pageable) {
-    return postRepository.search(postId, authorId, status, pageable).map(this::toDetailDto);
+    Page<PostEntity> page = postRepository.search(postId, authorId, status, pageable);
+    if (page.isEmpty()) {
+      // Skips the two batch loads below, which would otherwise run against empty id lists. Spelled
+      // out rather than mapped, since a mapper over an empty page never runs. Not {@code
+      // Page.empty(pageable)}: a page requested past the end has empty content and a non-zero
+      // total, and the caller's pager needs that total.
+      return new PageImpl<>(List.of(), pageable, page.getTotalElements());
+    }
+
+    Map<Integer, UserEntity> authors =
+        userRepository
+            .findAllById(
+                page.getContent().stream().map(PostEntity::getAuthorId).distinct().toList())
+            .stream()
+            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+
+    Map<Integer, List<ModerationLogEntity>> historyByPost =
+        moderationLogRepository
+            .findByPostIdInOrderByCreatedAtAsc(
+                page.getContent().stream().map(PostEntity::getId).toList())
+            .stream()
+            .collect(Collectors.groupingBy(ModerationLogEntity::getPostId));
+
+    return page.map(
+        post ->
+            toDetailDto(
+                post,
+                authors.get(post.getAuthorId()),
+                historyByPost.getOrDefault(post.getId(), List.of())));
   }
 
   public Page<ModerationLogDto> searchLogs(
@@ -54,9 +92,25 @@ public class AdminModerationService {
     return moderationLogRepository.search(postId, authorId, status, pageable).map(this::toLogDto);
   }
 
+  /** The banned-user list. Three queries per page, not two per row. */
   public Page<BannedUserDto> getBannedUsers(Pageable pageable) {
     Page<Integer> userIds = userBanRepository.findBannedUserIds(pageable);
-    List<BannedUserDto> dtos = userIds.getContent().stream().map(this::toBannedUserDto).toList();
+    if (userIds.isEmpty()) {
+      return new PageImpl<>(List.of(), pageable, userIds.getTotalElements());
+    }
+
+    Map<Integer, UserEntity> users =
+        userRepository.findAllById(userIds.getContent()).stream()
+            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+
+    Map<Integer, List<UserBanEntity>> bansByUser =
+        userBanRepository.findByUserIdInOrderByCreatedAtDesc(userIds.getContent()).stream()
+            .collect(Collectors.groupingBy(UserBanEntity::getUserId));
+
+    List<BannedUserDto> dtos =
+        userIds.getContent().stream()
+            .map(id -> toBannedUserDto(users.get(id), bansByUser.getOrDefault(id, List.of())))
+            .toList();
     return new PageImpl<>(dtos, pageable, userIds.getTotalElements());
   }
 
@@ -83,7 +137,7 @@ public class AdminModerationService {
             .orElseThrow(() -> new NotFoundException("Post not found: " + postId));
 
     if (!ModerationStatus.PENDING_REVIEW.equals(post.getModerationStatus())) {
-      throw new IllegalStateException("Post is not in PENDING_REVIEW status");
+      throw new ConflictException("Post is not in PENDING_REVIEW status");
     }
 
     boolean isViolation = decision.isAtLeast(Likelihood.LIKELY);
@@ -136,14 +190,11 @@ public class AdminModerationService {
     moderationLogRepository.save(logEntity);
   }
 
-  private PostModerationDetailDto toDetailDto(PostEntity post) {
-    String authorName =
-        userRepository.findById(post.getAuthorId()).map(UserEntity::getFullName).orElse("Unknown");
+  private PostModerationDetailDto toDetailDto(
+      PostEntity post, UserEntity author, List<ModerationLogEntity> logs) {
+    String authorName = author != null ? author.getFullName() : "Unknown";
 
-    List<ModerationLogDto> history =
-        moderationLogRepository.findByPostIdOrderByCreatedAtAsc(post.getId()).stream()
-            .map(this::toLogDto)
-            .toList();
+    List<ModerationLogDto> history = logs.stream().map(this::toLogDto).toList();
 
     return PostModerationDetailDto.builder()
         .postId(post.getId())
@@ -172,13 +223,13 @@ public class AdminModerationService {
         .build();
   }
 
-  private BannedUserDto toBannedUserDto(Integer userId) {
-    UserEntity user =
-        userRepository
-            .findById(userId)
-            .orElseThrow(() -> new NotFoundException("User not found: " + userId));
+  private BannedUserDto toBannedUserDto(UserEntity user, List<UserBanEntity> bans) {
+    if (user == null) {
+      // findBannedUserIds just returned this id, so the row disappearing between the two queries
+      // means a concurrent delete rather than bad data.
+      throw new NotFoundException("User not found");
+    }
 
-    List<UserBanEntity> bans = userBanRepository.findByUserIdOrderByCreatedAtDesc(userId);
     List<Integer> triggeringPostIds =
         bans.stream().map(UserBanEntity::getPostId).filter(Objects::nonNull).distinct().toList();
 

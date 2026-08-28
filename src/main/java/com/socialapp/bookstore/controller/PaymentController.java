@@ -26,9 +26,10 @@ public class PaymentController {
     momoService.handleWebhook(payload);
   }
 
+  /** Re-checks one of the caller's own purchases against MoMo. 404 for anyone else's ref. */
   @PostMapping("/{transactionRef}/sync")
   public PaymentStatusResponse syncPaymentStatus(@PathVariable String transactionRef) {
-    boolean paid = momoService.syncPaymentStatus(transactionRef);
+    boolean paid = momoService.syncPaymentStatus(SecurityUtils.getCurrentUserId(), transactionRef);
     return new PaymentStatusResponse(transactionRef, paid);
   }
 
