@@ -1,7 +1,17 @@
-# minio.url is baked directly into t_users.profile_picture_url / t_books.cover_image_url at
-# upload time (ProfileService/BookStorageService) — must be the publicly reachable address
-# *before* any uploads happen in an environment, since existing DB rows won't be rewritten
-# retroactively if this changes later.
+# minio.url được NƯỚNG THẲNG vào cột nào, và không nướng vào cột nào — hai nhóm này hành xử khác
+# hẳn nhau khi địa chỉ MinIO đổi:
+#
+#   Nướng sẵn URL tuyệt đối, KHÔNG viết lại được về sau:
+#     t_users.profile_picture_url, t_users.cover_image_url, t_posts.images
+#     (ProfileService, MediaService). Trình duyệt tải thẳng, không qua backend.
+#
+#   Chỉ lưu KEY, backend ký URL tạm thời mỗi lần phục vụ:
+#     t_books.file_key / cover_image_key / preview_file_key (BookStorageService).
+#     Nhóm này tự đúng theo minio.url hiện tại, đổi địa chỉ không ảnh hưởng.
+#     (Cột sách từng tên là cover_image_url và từng nướng URL; V44 đổi sang key.)
+#
+# Vì nhóm thứ nhất không viết lại được, giá trị này phải là địa chỉ công khai truy cập được
+# *trước khi* có bất kỳ lần tải lên nào trong một môi trường.
 minio:
   url: ${MINIO_URL:http://localhost:9000}
   access-key: ${MINIO_ACCESS_KEY:minio_admin}
@@ -78,17 +88,24 @@ spring:
     # Ba nhóm location, ba mức độ an toàn khác nhau:
     #
     #   db/migration  — schema. Chạy ở mọi nơi.
-    #   db/seed       — nội dung demo + 60 tài khoản. Chạy ở dev VÀ production (quyết định
-    #                   2026-08-21). An toàn ở production nhờ mật khẩu lấy từ placeholder bên dưới
-    #                   thay vì ghi cứng trong repo.
-    #   db/seed-dev   — personal access token, tức là CREDENTIAL DÙNG ĐƯỢC NGAY. Chỉ dev.
+    #   db/seed       — nội dung demo + 500 tài khoản. Chạy ở dev VÀ production (quyết định
+    #                   2026-08-21). Mật khẩu seed là hash bcrypt GHI CỨNG trong file seed, KHÔNG
+    #                   phải placeholder — đánh đổi có ý thức, vì mật khẩu demo phải in được vào
+    #                   tài liệu bảo vệ đồ án. Runbook production nhắc đổi mật khẩu hai tài khoản
+    #                   admin qua API ngay sau khi seed xong.
+    #
+    # Từ 2026-08-28 chỉ còn HAI nhóm. Thư mục db/seed-dev đã bị xoá: nó ra đời để giữ ba personal
+    # access token — credential dùng được ngay — nhưng người dùng tự tạo token qua
+    # POST /v1/api/tokens trong vài giây, nên ba token seed sẵn chỉ đổi lấy ba credential nằm công
+    # khai trong repo. Bỏ token đi thì lý do tách thư mục biến mất theo, và hai môi trường từ nay
+    # khai giống hệt nhau.
     #
     # Mặc định ở đây là migration-only, và đó vẫn là lựa chọn đúng: chạy app không cấu hình gì thì
-    # không nên tự đổ 60 tài khoản vào database. Mỗi môi trường tự khai mình muốn gì.
+    # không nên tự đổ 500 tài khoản vào database. Mỗi môi trường tự khai mình muốn gì.
     #
     #   dev đầy đủ:
-    #     FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
-    #   production: xem application-prod.yml (migration + seed, KHÔNG có seed-dev)
+    #     FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed
+    #   production: xem application-prod.yml — GIỐNG HỆT dòng trên
     locations: ${FLYWAY_LOCATIONS:classpath:db/migration}
 
     # Any database seeded before this split still has V20/V21/V25/V29/V30 recorded in
@@ -96,6 +113,20 @@ spring:
     # validation reports as "applied migration not resolved locally". Ignoring *:missing keeps
     # those databases migratable — and is what makes it safe to turn validate-on-migrate on.
     ignore-migration-patterns: "*:missing"
+
+    # Giá trị đổ vào ${minioUrl} trong db/seed. Ảnh của bộ seed phải mang URL TUYỆT ĐỐI (trình
+    # duyệt tải thẳng, không qua backend), mà địa chỉ MinIO thì khác nhau giữa máy dev và
+    # production — nên URL không ghi cứng được trong SQL, và cũng không để NULL được nữa kể từ khi
+    # seed có ảnh thật.
+    #
+    # Flyway thay placeholder ở TẦNG ĐỌC FILE, trước khi parse SQL: một chuỗi ${...} lọt vào file
+    # seed mà không được khai ở đây sẽ giết migration với "No value provided for placeholder",
+    # KỂ CẢ khi nó nằm trong một dòng comment. Đã xảy ra đúng một lần ở V51.
+    #
+    # Sai giá trị này thì không có gì báo lỗi: URL vẫn hợp lệ, chỉ là trỏ vào nơi không có object,
+    # và toàn bộ ảnh của bộ seed hỏng im lặng.
+    placeholders:
+      minioUrl: ${MINIO_URL:http://localhost:9000}
 
   jpa:
     hibernate:

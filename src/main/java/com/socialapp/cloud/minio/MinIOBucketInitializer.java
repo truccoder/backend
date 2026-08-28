@@ -36,12 +36,32 @@ public class MinIOBucketInitializer {
 
   /**
    * Buckets served straight to browsers with no credentials: profile pictures and the images
-   * attached to posts.
-   *
-   * <p>The book buckets are deliberately absent — book files and covers are private and reached
-   * through presigned URLs, see {@code BookStorageService}.
+   * attached to posts. These get a public-read policy on top of merely existing.
    */
   private static final List<String> PUBLIC_READ_BUCKETS = List.of("profile-pictures", "post-media");
+
+  /**
+   * Buckets that must EXIST but must stay private: book files and covers are reached through
+   * presigned URLs, see {@code BookStorageService}.
+   *
+   * <p><b>Vì sao chúng phải nằm ở đây, dù không cần policy nào.</b> Trước đây lớp này chỉ chuẩn bị
+   * hai bucket công khai, với lý lẽ rằng file sách là riêng tư. Lý lẽ ấy nói về CHÍNH SÁCH của
+   * bucket và không nói gì về việc nó CÓ TỒN TẠI hay không — hai bucket sách được để cho
+   * {@code MinIOService.uploadFile} tạo lười ở lần tải lên đầu tiên.
+   *
+   * <p>Hệ quả trên một môi trường chưa ai tải sách lên: {@code GET /v1/api/books} trả <b>503 ngay
+   * ở hàng đầu tiên</b>. Ký một URL cần bucket tồn tại dù không cần object —
+   * {@code BookStorageService.getPresignedUrl} hỏi region của bucket trước khi ký, lượt hỏi đó trả
+   * về "The specified bucket does not exist", và {@code StorageException} làm hỏng cả trang thay vì
+   * một quyển. ({@code getCoverUrl} bắt đúng ngoại lệ này và trả null; {@code getPreviewUrl} và
+   * {@code getDownloadUrl} thì không.)
+   *
+   * <p>Ở máy dev, service {@code minio-init} trong docker-compose.yml đã tạo sẵn cả bốn bucket nên
+   * lỗi này không bao giờ hiện ra. Production không có service đó — nó chạy compose của repo
+   * DATN-infra, nơi không có bước tạo bucket nào — nên gian sách hỏng ở đúng nơi không ai thấy.
+   * Tạo bucket ở đây là chỗ duy nhất đúng cho cả hai môi trường.
+   */
+  private static final List<String> PRIVATE_BUCKETS = List.of("books", "book-covers");
 
   private final MinIOService minIOService;
 
@@ -56,6 +76,19 @@ public class MinIOBucketInitializer {
         log.error(
             "Could not prepare MinIO bucket '{}'. Uploads will still create it, but objects may"
                 + " come back 403 until the public-read policy is applied.",
+            bucket,
+            e);
+      }
+    }
+
+    for (String bucket : PRIVATE_BUCKETS) {
+      try {
+        minIOService.ensureBucketExists(bucket);
+        log.info("MinIO bucket '{}' is ready (private, served through presigned URLs)", bucket);
+      } catch (Exception e) {
+        log.error(
+            "Could not prepare MinIO bucket '{}'. GET /v1/api/books will return 503 until it"
+                + " exists, because signing a URL needs the bucket even when the object is absent.",
             bucket,
             e);
       }

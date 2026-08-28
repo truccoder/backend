@@ -29,6 +29,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
@@ -150,6 +151,37 @@ public class GlobalExceptionHandler {
         .code(NOT_FOUND.value())
         .error(NOT_FOUND.getReasonPhrase())
         .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  /**
+   * A URL that maps to no controller at all — a typo in a frontend route, a client still calling an
+   * endpoint that moved, a scanner walking the host.
+   *
+   * <p>Same defect the {@link HttpRequestMethodNotSupportedException} handler below was written to
+   * fix, one step earlier in the dispatch: with no handler for it, this fell through to the
+   * catch-all {@code Exception} handler and came back <b>500</b>. That is wrong twice over — it
+   * tells the caller the server broke when the caller asked for something that does not exist, and
+   * it hides real 500s among the noise. Spring Boot 3.2+ raises {@code NoResourceFoundException}
+   * from the static-resource handler once a request has exhausted every controller mapping, so this
+   * is the point where "no such endpoint" becomes knowable.
+   *
+   * <p><b>Logged at WARN without the stack trace</b>, unlike every other handler here. A stack trace
+   * describes where the server went wrong, and nothing went wrong: the frames would be the same
+   * dispatch plumbing every time, carrying no information the path itself does not already give.
+   * Left at {@code writeLog}, any host on the public internet turns a scanner sweep into a wall of
+   * ERROR stack traces — the exact condition that trains people to ignore the error log.
+   */
+  @ResponseStatus(NOT_FOUND)
+  @ExceptionHandler(NoResourceFoundException.class)
+  public ErrorResponseDto handle(NoResourceFoundException ex, HttpServletRequest request) {
+    log.warn("No endpoint [{} {}]", request.getMethod(), request.getRequestURI());
+
+    return ErrorResponseDto.builder()
+        .code(NOT_FOUND.value())
+        .error(NOT_FOUND.getReasonPhrase())
+        .message("No endpoint " + request.getMethod() + " " + request.getRequestURI())
         .path(request.getRequestURI())
         .build();
   }

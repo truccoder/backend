@@ -90,14 +90,15 @@ class DevPaymentControllerDisabledTest {
                     .header("Authorization", "Bearer " + VALID_TOKEN))
             .andReturn();
 
-    // Then: no handler is mapped to the path at all — which is the claim, and is asserted on the
-    // resolved exception rather than on the status code on purpose. The status here is 500, not
-    // 404, because GlobalExceptionHandler has no @ExceptionHandler for NoResourceFoundException
-    // and its catch-all Exception mapping swallows it; that is a pre-existing defect affecting
-    // EVERY unknown URL in the application, not something about this endpoint, and pinning 404
-    // here would make this test fail the day it is fixed.
+    // Then: no handler is mapped to the path at all — which is the claim. This used to assert only
+    // the resolved exception and `!= 200`, because the status was 500: GlobalExceptionHandler had
+    // no @ExceptionHandler for NoResourceFoundException and its catch-all swallowed it, a defect
+    // affecting EVERY unknown URL in the application rather than anything about this endpoint.
+    // That handler exists as of 2026-08-28, so the status is now pinned to the 404 it should
+    // always have been. The exception assertion stays: it is what distinguishes "the endpoint is
+    // not mapped because the dev profile is off" from a 404 thrown by a handler that did run.
     assertThat(result.getResolvedException()).isInstanceOf(NoResourceFoundException.class);
-    assertThat(result.getResponse().getStatus()).isNotEqualTo(200);
+    assertThat(result.getResponse().getStatus()).isEqualTo(404);
     verifyNoInteractions(momoService);
   }
 }

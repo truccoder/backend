@@ -133,3 +133,12 @@ target/
 # Documents
 # =========================
 docs/
+
+# =========================
+# Seed: ảnh tải về từ dịch vụ ngoài
+# =========================
+# Cache của docker/minio/generate-seed-objects.py. Ảnh thật (DiceBear, Pravatar, Picsum, bìa sách
+# Open Library) tải một lần rồi dùng lại, nên lần `docker compose up` thứ hai chạy được offline.
+# Không commit: đây là bản sao của dữ liệu bên thứ ba, dựng lại được, và nặng.
+docker/minio/.cache/
+__pycache__/
