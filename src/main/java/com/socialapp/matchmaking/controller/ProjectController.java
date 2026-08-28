@@ -14,6 +14,7 @@ import com.socialapp.matchmaking.dto.ProjectPositionResponseDto;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectResponseDto;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
+import com.socialapp.matchmaking.dto.SuggestedProjectDto;
 import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectQueryService;
@@ -61,7 +62,9 @@ public class ProjectController {
   @GetMapping
   public ProjectPageResponseDto getProjects(
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE) @Positive @Max(50)
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int limit) {
     return projectQueryService.getProjects(cursor, limit);
   }
@@ -111,8 +114,35 @@ public class ProjectController {
     projectService.rejectApplication(ownerId, applicationId);
   }
 
+  /**
+   * Projects ranked against the caller's own professional profile.
+   *
+   * <p>The literal path sits beside {@code @GetMapping("/{projectId:\d+}")} above and routes
+   * correctly only because of that digits-only constraint — without it "suggested" would bind as a
+   * project id and answer 400. Do not loosen the regex.
+   *
+   * <p>A plain list rather than a cursor page: the order is by score, and the cursor convention
+   * used everywhere else in this API is a descending id, which cannot express "resume from the
+   * next-best match".
+   */
+  @GetMapping("/suggested")
+  public List<SuggestedProjectDto> getSuggestedProjects(
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
+    return matchmakingService.suggestProjects(SecurityUtils.getCurrentUserId(), limit);
+  }
+
+  /** Candidate suggestions for one of the caller's own roles, best match first. 403 for anyone else. */
   @GetMapping("/positions/{positionId}/suggested-candidates")
-  public List<SuggestedCandidateDto> getSuggestedCandidates(@PathVariable Integer positionId) {
-    return matchmakingService.suggestCandidates(positionId);
+  public List<SuggestedCandidateDto> getSuggestedCandidates(
+      @PathVariable Integer positionId,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
+    return matchmakingService.suggestCandidates(
+        positionId, SecurityUtils.getCurrentUserId(), limit);
   }
 }

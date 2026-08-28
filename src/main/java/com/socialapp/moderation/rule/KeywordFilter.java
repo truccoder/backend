@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -41,7 +42,7 @@ public class KeywordFilter {
       return false;
     }
 
-    String normalized = normalizeVietnamese(content.toLowerCase());
+    String normalized = normalizeVietnamese(content.toLowerCase(Locale.ROOT));
     String withoutSpaces = normalized.replaceAll("\\s+", "");
 
     for (String keyword : blacklist) {
@@ -75,7 +76,7 @@ public class KeywordFilter {
               new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
         String line;
         while ((line = reader.readLine()) != null) {
-          String trimmed = line.trim().toLowerCase();
+          String trimmed = line.trim().toLowerCase(Locale.ROOT);
           if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
             blacklist.add(normalizeVietnamese(trimmed));
           }

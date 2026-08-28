@@ -136,7 +136,39 @@ class NotificationControllerTest {
           .perform(authed(get(NOTIFICATIONS_URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.content[0].id").value(1))
-          .andExpect(jsonPath("$.content[0].title").value("Someone liked your post"));
+          .andExpect(jsonPath("$.content[0].title").value("Someone liked your post"))
+          // A post like has no comment behind it, so the key is absent rather than null. This
+          // project sets no global NON_NULL, so without the annotation on the field every friend
+          // request and book purchase would carry a "postId": null that means nothing.
+          .andExpect(jsonPath("$.content[0].postId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("shouldExposePostId_whenNotificationIsAboutAComment")
+    void shouldExposePostId_whenNotificationIsAboutAComment() throws Exception {
+      // Given — the pair a client needs to navigate: referenceId says which reply, postId says
+      // which page to open it on. Without the second one USER_MENTIONED and COMMENT_LIKED were
+      // readable and un-tappable.
+      NotificationResponseDto notification =
+          NotificationResponseDto.builder()
+              .id(2)
+              .type(NotificationType.USER_MENTIONED)
+              .title("You were mentioned in a comment")
+              .referenceId(88)
+              .referenceType("COMMENT")
+              .postId(500)
+              .isRead(false)
+              .build();
+      when(notificationService.getNotifications(currentUser.getId(), 1, 10))
+          .thenReturn(new PageImpl<>(List.of(notification)));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(NOTIFICATIONS_URL)))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.content[0].referenceId").value(88))
+          .andExpect(jsonPath("$.content[0].referenceType").value("COMMENT"))
+          .andExpect(jsonPath("$.content[0].postId").value(500));
     }
 
     @Test
