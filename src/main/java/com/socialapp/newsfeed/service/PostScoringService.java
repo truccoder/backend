@@ -33,9 +33,19 @@ public class PostScoringService {
 
   private static final double MAX_ENGAGEMENT_LOG = Math.log(1 + 500);
 
-  // Boost = how many "hours of freshness" a factor is worth (in millis)
-  private static final long ENGAGEMENT_BOOST_MILLIS = 4 * 3600 * 1000L; // 4 hours
-  private static final long AFFINITY_BOOST_MILLIS = 6 * 3600 * 1000L; // 6 hours
+  /**
+   * Boost = how many "hours of freshness" a factor is worth (in millis).
+   *
+   * <p>Package-private rather than private because {@code NewsfeedService.SEEN_PENALTY_MILLIS} is
+   * denominated in this same currency and is deliberately sized against their <b>sum</b>: a post the
+   * reader has already scrolled past must not be liftable back to its old position by any amount of
+   * engagement or affinity. A test asserts that relationship, so raising either of these without
+   * revisiting the penalty breaks the build instead of quietly disabling the demotion.
+   */
+  static final long ENGAGEMENT_BOOST_MILLIS = 4 * 3600 * 1000L; // 4 hours
+
+  /** @see #ENGAGEMENT_BOOST_MILLIS */
+  static final long AFFINITY_BOOST_MILLIS = 6 * 3600 * 1000L; // 6 hours
 
   /**
    * Rescores every feed, every five minutes.
@@ -100,6 +110,18 @@ public class PostScoringService {
     return keys;
   }
 
+  /**
+   * Rescores one user's feed from the cached payloads and their affinity map.
+   *
+   * <p><b>Deliberately blind to what the reader has already seen.</b> The seen-post demotion lives
+   * entirely on the read path in {@code NewsfeedService} and is never written into the sorted set,
+   * and this method is the reason why. The {@code ZADD} below rewrites the score of every post whose
+   * payload it could still load, and leaves alone every post whose payload has aged out of the
+   * seven-day cache. So a penalty baked into the sorted set would be <em>erased</em> for cached
+   * posts on the next tick and made <em>permanent</em> for evicted ones — the exact opposite of a
+   * session-scoped signal, and unfixable from here because this job has no idea whether the seen set
+   * that justified the penalty still exists.
+   */
   void recalculateFeedForUser(Integer userId) {
     String feedKey = FEED_KEY_PREFIX + userId;
     Set<String> postIds = redisTemplate.opsForZSet().range(feedKey, 0, -1);

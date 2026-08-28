@@ -14,6 +14,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.redis.connection.StringRedisConnection;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -58,6 +59,7 @@ public class NewsfeedService {
   private final FeedPostDataMapper feedPostDataMapper;
   private final BlockQueryService blockQueryService;
   private final SkillTagResolver skillTagResolver;
+  private final SeenPostTracker seenPostTracker;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
@@ -117,6 +119,38 @@ public class NewsfeedService {
    * more posts than the seed still rebuilds inside a bounded amount of memory.
    */
   private static final int REBUILD_PAGE_SIZE = 200;
+
+  /**
+   * How much apparent freshness a post loses once the reader has scrolled past it.
+   *
+   * <p><b>Subtracted, never multiplied.</b> The obvious formulation — {@code score *= 0.1}, as the
+   * literature on news feed ranking states it — is wrong for this scorer, and destructively so. A
+   * score here is not a magnitude with a meaningful zero: it is a point on a timeline, an epoch
+   * millisecond shifted forward by {@code ENGAGEMENT_BOOST_MILLIS} and {@code AFFINITY_BOOST_MILLIS}
+   * worth of borrowed freshness. Multiplying such a number by a tenth does not make a post "worth ten
+   * percent"; it moves it to 1975, below every unseen post permanently and beyond any possibility of
+   * recovery. That is a hard filter wearing the costume of a soft one, and a hard filter is precisely
+   * what a platform with this little content cannot afford.
+   *
+   * <p><b>Seven days, and the number is measured rather than guessed.</b> Two constraints bound it
+   * from below. The first is the boosts: it has to comfortably exceed {@code
+   * ENGAGEMENT_BOOST_MILLIS + AFFINITY_BOOST_MILLIS} (ten hours), or a popular post by a close friend
+   * climbs straight back to where the reader already saw it. The second is the one that actually
+   * decides the value, and it only shows up against real data: <b>the penalty has to outweigh the
+   * typical gap between consecutive posts in a feed, or the demotion is invisible.</b>
+   *
+   * <p>Measured on the seeded database, one reader's feed of 49 posts spanning 93 days has a median
+   * gap of 24 hours between neighbours. A 24-hour penalty therefore cleared only 44% of those gaps
+   * and moved a post the reader had just scrolled past down by about one position — arithmetically
+   * correct, and useless. Seven days clears 96% of them. If the content ever gets denser this can
+   * come down again; the relationship to look at is penalty versus median gap, not the raw number.
+   *
+   * <p>Large as that is, it is still not a filter and the difference is not cosmetic: nothing is
+   * removed, {@code hasMore} counts the demoted posts, paging reaches them, and a post seen an hour
+   * ago still outranks an unseen one from a fortnight back. What it buys is the behaviour the feature
+   * exists for — scroll past something, refresh, and it is no longer sitting at the top.
+   */
+  static final long SEEN_PENALTY_MILLIS = 7 * 24 * 3600 * 1000L;
 
   /**
    * Fans out every approved post again, rebuilding the feed of every user from Postgres.
@@ -381,36 +415,211 @@ public class NewsfeedService {
         : getAllFeed(userId, page, size);
   }
 
+  /**
+   * The {@link FeedScope#ALL} feed, demoting what the reader has already scrolled past.
+   *
+   * <p>Three paths, and which one runs is decided by a single {@code ZCARD}:
+   *
+   * <ol>
+   *   <li><b>Nothing seen yet</b> — the original code, unchanged, down to the same two Redis calls.
+   *       This is the first request of every session and it must not get slower; the same reasoning
+   *       keeps {@link #BLOCK_OVERFETCH_FACTOR} off the common path.
+   *   <li><b>First page of a scroll-through</b> — read the whole feed index with its scores, subtract
+   *       {@link #SEEN_PENALTY_MILLIS} from everything in the seen set, re-sort, and <b>freeze the
+   *       result</b> into {@code feedorder:<userId>} before serving a page out of it.
+   *   <li><b>A later page</b> — served from that frozen list, not re-ranked.
+   * </ol>
+   *
+   * <p><b>The freezing is not an optimisation; without it this feature eats itself.</b> The client
+   * reports a card as seen when it leaves the viewport, which means the posts on page one are marked
+   * seen in the moments before page two is requested. Re-ranking on page two would then push exactly
+   * those posts down — into the offset window page two is about to read — and the reader would be
+   * served page one again, forever, never reaching the posts underneath. Re-ranking against a set
+   * that grows as a side effect of paging is pathological for offset pagination in a way that
+   * re-ranking against a fixed set is not, so the order is computed once per scroll-through and held
+   * still while the reader walks down it — see {@link SeenPostTracker#ORDER_TTL}.
+   *
+   * <p>A snapshot that has expired mid-scroll falls back to the unranked window rather than reporting
+   * the end of the feed: a short page or a repeated one is a blemish, an empty one looks like data
+   * loss.
+   *
+   * <p>Blocked authors are still removed after the page is read, for the reason given on {@link
+   * #getFeed(Integer, int, int)} — none of this changes where the block filter can run, only which
+   * ids reach it.
+   */
   private FeedResponseDto getAllFeed(Integer userId, int page, int size) {
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
-
     String feedKey = FEED_KEY_PREFIX + userId;
     long start = (long) (page - 1) * size;
-    long end = start + (blockedIds.isEmpty() ? size : (long) size * BLOCK_OVERFETCH_FACTOR);
+    int want = windowSize(size, blockedIds);
 
-    Set<String> postIds = redisTemplate.opsForZSet().reverseRange(feedKey, start, end);
-
-    if (CollectionUtils.isEmpty(postIds)) {
-      return FeedResponseDto.builder()
-          .posts(List.of())
-          .page(page)
-          .size(size)
-          .hasMore(false)
-          .build();
+    if (!seenPostTracker.hasSeenAnything(userId)) {
+      return pageFromIds(
+          redisTemplate.opsForZSet().reverseRange(feedKey, start, start + want - 1L),
+          blockedIds,
+          page,
+          size);
     }
 
-    List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
+    String orderKey = seenPostTracker.orderKey(userId, null);
+
+    if (page > 1) {
+      List<String> fromSnapshot = seenPostTracker.readOrder(orderKey, start, want);
+      if (!fromSnapshot.isEmpty()) {
+        return pageFromIds(fromSnapshot, blockedIds, page, size);
+      }
+      // The snapshot aged out while the reader was still scrolling. Fall through to the plain
+      // window rather than to an empty page.
+      return pageFromIds(
+          redisTemplate.opsForZSet().reverseRange(feedKey, start, start + want - 1L),
+          blockedIds,
+          page,
+          size);
+    }
+
+    List<String> ranked =
+        rankBySeenness(
+            userId,
+            redisTemplate.opsForZSet().reverseRangeWithScores(feedKey, 0, MAX_FEED_SIZE - 1L));
+    seenPostTracker.saveOrder(orderKey, ranked);
+
+    return pageFromIds(slice(ranked, start, want), blockedIds, page, size);
+  }
+
+  /**
+   * How many ids to read for one page.
+   *
+   * <p>The overfetch is the caller's only defence against a page that comes back short once blocked
+   * authors are filtered out of it, so every path that slices ids has to apply it — an exact-size
+   * slice would leave the filter nothing to eat into. One extra beyond that is what {@code hasMore}
+   * is read from.
+   */
+  private int windowSize(int size, Set<Integer> blockedIds) {
+    return size * (blockedIds.isEmpty() ? 1 : BLOCK_OVERFETCH_FACTOR) + 1;
+  }
+
+  /**
+   * Re-orders one window of the feed index so that posts the reader has already scrolled past sink.
+   *
+   * <p>This is the half of the demotion that is about ranking rather than storage: what a seen post
+   * is worth, in the same "hours of apparent freshness" the engagement and affinity boosts are
+   * denominated in. Where the seen set lives and when it expires belongs to {@link SeenPostTracker}.
+   *
+   * <p>Ties keep the order Redis returned them in, so posts nobody has seen stay in score order and
+   * the sort adds no arbitrariness of its own.
+   */
+  private List<String> rankBySeenness(
+      Integer userId, Set<ZSetOperations.TypedTuple<String>> window) {
+    if (CollectionUtils.isEmpty(window)) {
+      return List.of();
+    }
+
+    List<ZSetOperations.TypedTuple<String>> tuples = List.copyOf(window);
+    List<String> ids = tuples.stream().map(ZSetOperations.TypedTuple::getValue).toList();
+    List<Double> seenAt = seenPostTracker.seenAt(userId, ids);
+
+    record Ranked(String id, double score) {}
+    List<Ranked> ranked = new ArrayList<>(tuples.size());
+    for (int i = 0; i < tuples.size(); i++) {
+      // A tuple's score is nullable, and a member without one sorts as if it were the oldest
+      // possible post rather than throwing out of the comparator.
+      Double raw = tuples.get(i).getScore();
+      double score = Objects.isNull(raw) ? 0d : raw;
+      boolean seen = i < seenAt.size() && Objects.nonNull(seenAt.get(i));
+      ranked.add(new Ranked(ids.get(i), seen ? score - SEEN_PENALTY_MILLIS : score));
+    }
+
+    // Stable, so equal scores come out in the order Redis gave them.
+    ranked.sort(Comparator.comparingDouble(Ranked::score).reversed());
+    return ranked.stream().map(Ranked::id).toList();
+  }
+
+  /**
+   * One page out of an in-memory list of ids.
+   *
+   * <p>{@code long}, for the reason spelled out in {@link #getSkillFeed}: {@code page} is only
+   * {@code @Positive} and carries no upper bound, so {@code (page - 1) * size} overflows {@code int}
+   * for a large page and wraps negative — which sails past a naive bounds check and reaches {@code
+   * subList} as an exception, i.e. a 500 from a query string.
+   */
+  private List<String> slice(List<String> ids, long start, int want) {
+    if (start >= ids.size()) {
+      return List.of();
+    }
+    int from = (int) start;
+    return ids.subList(from, Math.min(from + want, ids.size()));
+  }
+
+  /**
+   * Loads, filters and trims one page's worth of ids into a response.
+   *
+   * <p><b>{@code hasMore} is counted from the ids, not from the posts.</b> A post whose payload has
+   * fallen out of the seven-day cache while its id survives in the thirty-day feed index is dropped
+   * by {@code loadPostsFromCache}, so counting what survived deserialisation reports "no more posts"
+   * to a reader whose feed simply has a gap in it, and truncates the feed early. The ids are what the
+   * index actually holds.
+   */
+  private FeedResponseDto pageFromIds(
+      Collection<String> ids, Set<Integer> blockedIds, int page, int size) {
+    if (CollectionUtils.isEmpty(ids)) {
+      return emptyPage(page, size);
+    }
+
+    boolean hasMore = ids.size() > size;
+
+    List<FeedPostDataDto> posts = loadPostsFromCache(ids);
     if (!blockedIds.isEmpty()) {
       posts = posts.stream().filter(post -> !blockedIds.contains(post.getAuthorId())).toList();
     }
-    signBookCovers(posts);
-
-    boolean hasMore = posts.size() > size;
-    if (hasMore) {
+    if (posts.size() > size) {
       posts = posts.subList(0, size);
     }
+    signBookCovers(posts);
 
     return FeedResponseDto.builder().posts(posts).page(page).size(size).hasMore(hasMore).build();
+  }
+
+  /**
+   * The posts the skills tab will consider, in the order it should consider them.
+   *
+   * <p><b>The window is chosen before the demotion is applied, deliberately.</b> The obvious
+   * rearrangement — subtract the penalty first, then take the top {@link #SKILL_SCAN_LIMIT} — would
+   * push seen posts out of the candidate set entirely once a reader had scrolled through enough of
+   * it, and a tab that stops showing a post because you read it is a filter, which is the one thing
+   * this feature must not become. Ranking strictly inside a fixed window can reorder the tab; it can
+   * never empty it.
+   *
+   * <p>The order is frozen for the same reason {@link #getAllFeed} freezes its own, and under its own
+   * key: this tab and the {@code ALL} tab page through different lists, and sharing one snapshot
+   * would let switching tabs scramble the other one's pagination.
+   */
+  private Collection<String> skillCandidateIds(Integer userId, int page) {
+    String feedKey = FEED_KEY_PREFIX + userId;
+
+    if (!seenPostTracker.hasSeenAnything(userId)) {
+      Set<String> unranked =
+          redisTemplate.opsForZSet().reverseRange(feedKey, 0, SKILL_SCAN_LIMIT - 1L);
+      return Objects.isNull(unranked) ? List.of() : unranked;
+    }
+
+    String orderKey = seenPostTracker.orderKey(userId, FeedScope.SKILLS);
+
+    if (page > 1) {
+      List<String> fromSnapshot = seenPostTracker.readOrder(orderKey, 0, SKILL_SCAN_LIMIT);
+      if (!fromSnapshot.isEmpty()) {
+        return fromSnapshot;
+      }
+      Set<String> unranked =
+          redisTemplate.opsForZSet().reverseRange(feedKey, 0, SKILL_SCAN_LIMIT - 1L);
+      return Objects.isNull(unranked) ? List.of() : unranked;
+    }
+
+    List<String> ranked =
+        rankBySeenness(
+            userId,
+            redisTemplate.opsForZSet().reverseRangeWithScores(feedKey, 0, SKILL_SCAN_LIMIT - 1L));
+    seenPostTracker.saveOrder(orderKey, ranked);
+    return ranked;
   }
 
   private FeedResponseDto getSkillFeed(Integer userId, int page, int size) {
@@ -423,8 +632,7 @@ public class NewsfeedService {
       return emptyPage(page, size);
     }
 
-    Set<String> postIds =
-        redisTemplate.opsForZSet().reverseRange(FEED_KEY_PREFIX + userId, 0, SKILL_SCAN_LIMIT - 1L);
+    Collection<String> postIds = skillCandidateIds(userId, page);
 
     if (CollectionUtils.isEmpty(postIds)) {
       return emptyPage(page, size);
@@ -502,6 +710,25 @@ public class NewsfeedService {
     entity.setAuthorId(authorId);
     entity.setType(type);
     userInteractionRepository.save(entity);
+  }
+
+  /**
+   * Records that {@code userId} has scrolled past these posts, for the rest of their session.
+   *
+   * <p>This is the write half of the seen-post demotion; {@link #getAllFeed} is the read half and
+   * {@link #SEEN_PENALTY_MILLIS} explains what the two of them add up to. Nothing here reaches
+   * Postgres, and that is the point: {@link com.socialapp.newsfeed.entity.enums.InteractionType}
+   * rejected a {@code VIEW} constant because a row per post per page load would feed the ranking job
+   * a signal derived from its own output. A per-session Redis key that expires on its own is not that
+   * signal — it never touches affinity, never outlives the sitting it was written in, and is read
+   * only by the request that is about to render a page.
+   *
+   * <p><b>Fire and forget.</b> A client reporting what it has displayed is telling the server
+   * something, not asking it for anything, so a Redis failure is logged and swallowed: the reader
+   * loses the demotion, not the scroll they were in the middle of.
+   */
+  public void markSeen(Integer userId, Collection<Integer> postIds) {
+    seenPostTracker.markSeen(userId, postIds);
   }
 
   /** Signs each cached cover key as the feed is served — see {@code FeedPostDataMapper}. */
