@@ -16,6 +16,13 @@ import lombok.NoArgsConstructor;
 public class CrawledItem {
   private String title;
   private String url;
+
+  /**
+   * The source's own image for this item, or {@code null} when it has none — Hacker News, and any
+   * dev.to article published without a cover.
+   */
+  private String imageUrl;
+
   private String summary;
   private String author;
   private Integer score;

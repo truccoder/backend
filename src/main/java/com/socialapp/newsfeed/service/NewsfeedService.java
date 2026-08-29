@@ -5,9 +5,16 @@ import static com.socialapp.newsfeed.service.PostScoringService.POST_CACHE_KEY_P
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.redis.connection.StringRedisConnection;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -15,7 +22,10 @@ import org.springframework.util.CollectionUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.newsfeed.dto.FeedRebuildResultDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -27,8 +37,8 @@ import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.PostRepository;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -41,7 +51,7 @@ import lombok.extern.slf4j.Slf4j;
 public class NewsfeedService {
   private final StringRedisTemplate redisTemplate;
   private final ObjectMapper objectMapper;
-  private final FriendshipQueryService friendshipQueryService;
+  private final FriendshipService friendshipService;
   private final UserInteractionRepository userInteractionRepository;
   private final PostRepository postRepository;
   private final UserRepository userRepository;
@@ -49,9 +59,36 @@ public class NewsfeedService {
   private final FeedPostDataMapper feedPostDataMapper;
   private final BlockQueryService blockQueryService;
   private final SkillTagResolver skillTagResolver;
+  private final SeenPostTracker seenPostTracker;
 
   private static final int MAX_FEED_SIZE = 1000;
   private static final Duration POST_CACHE_TTL = Duration.ofDays(7);
+
+  /**
+   * How long a user's feed index survives without being written to.
+   *
+   * <p>It used to survive forever. The post payloads expire after seven days but the {@code
+   * feed:<userId>} sorted sets never did, so Redis grew with the number of accounts that had ever
+   * existed rather than with the number in use — every dormant account keeping up to
+   * {@link #MAX_FEED_SIZE} ids alive, on a box that also hosts Postgres pooling, Neo4j and MinIO.
+   * After the seventh day those ids point at payloads that are gone, so the rescoring job spent
+   * most of its work on feeds with nothing left in them.
+   *
+   * <p>Thirty days is comfortably longer than the payload TTL, so an active reader never notices.
+   * A returning user whose key has expired gets an empty feed until the next fan-out reaches them;
+   * {@code AdminNewsfeedController} can rebuild one on demand.
+   */
+  private static final Duration FEED_TTL = Duration.ofDays(30);
+
+  /**
+   * How often the trim actually runs, as a divisor of writes.
+   *
+   * <p>{@code ZREMRANGEBYRANK} on every single fan-out write doubled the command count for a cap
+   * that only matters once a feed passes {@link #MAX_FEED_SIZE}. Trimming on roughly one write in
+   * twenty keeps the ceiling honest — a feed can drift a little over it between trims, which costs
+   * a few kilobytes and nothing else.
+   */
+  private static final int TRIM_EVERY_N_WRITES = 20;
 
   /**
    * How much wider than {@code size} the feed window is read when the caller has blocks, so that
@@ -76,6 +113,102 @@ public class NewsfeedService {
    * happens to the feed itself at 1000.
    */
   private static final int SKILL_SCAN_LIMIT = 300;
+
+  /**
+   * How many posts one page of {@link #rebuildAll()} loads. Small enough that a database with far
+   * more posts than the seed still rebuilds inside a bounded amount of memory.
+   */
+  private static final int REBUILD_PAGE_SIZE = 200;
+
+  /**
+   * How much apparent freshness a post loses once the reader has scrolled past it.
+   *
+   * <p><b>Subtracted, never multiplied.</b> The obvious formulation — {@code score *= 0.1}, as the
+   * literature on news feed ranking states it — is wrong for this scorer, and destructively so. A
+   * score here is not a magnitude with a meaningful zero: it is a point on a timeline, an epoch
+   * millisecond shifted forward by {@code ENGAGEMENT_BOOST_MILLIS} and {@code AFFINITY_BOOST_MILLIS}
+   * worth of borrowed freshness. Multiplying such a number by a tenth does not make a post "worth ten
+   * percent"; it moves it to 1975, below every unseen post permanently and beyond any possibility of
+   * recovery. That is a hard filter wearing the costume of a soft one, and a hard filter is precisely
+   * what a platform with this little content cannot afford.
+   *
+   * <p><b>Seven days, and the number is measured rather than guessed.</b> Two constraints bound it
+   * from below. The first is the boosts: it has to comfortably exceed {@code
+   * ENGAGEMENT_BOOST_MILLIS + AFFINITY_BOOST_MILLIS} (ten hours), or a popular post by a close friend
+   * climbs straight back to where the reader already saw it. The second is the one that actually
+   * decides the value, and it only shows up against real data: <b>the penalty has to outweigh the
+   * typical gap between consecutive posts in a feed, or the demotion is invisible.</b>
+   *
+   * <p>Measured on the seeded database, one reader's feed of 49 posts spanning 93 days has a median
+   * gap of 24 hours between neighbours. A 24-hour penalty therefore cleared only 44% of those gaps
+   * and moved a post the reader had just scrolled past down by about one position — arithmetically
+   * correct, and useless. Seven days clears 96% of them. If the content ever gets denser this can
+   * come down again; the relationship to look at is penalty versus median gap, not the raw number.
+   *
+   * <p>Large as that is, it is still not a filter and the difference is not cosmetic: nothing is
+   * removed, {@code hasMore} counts the demoted posts, paging reaches them, and a post seen an hour
+   * ago still outranks an unseen one from a fortnight back. What it buys is the behaviour the feature
+   * exists for — scroll past something, refresh, and it is no longer sitting at the top.
+   */
+  static final long SEEN_PENALTY_MILLIS = 7 * 24 * 3600 * 1000L;
+
+  /**
+   * Fans out every approved post again, rebuilding the feed of every user from Postgres.
+   *
+   * <p>Exists because the feed has exactly one source of truth — Redis — and only one way in:
+   * {@code fanOutPost}, called when somebody publishes a post through the API. Two consequences
+   * followed from that, and this method is the answer to both. Seeded posts were written straight
+   * into Postgres and therefore never reached any feed, so a freshly seeded database showed every
+   * account an empty {@code /v1/api/feed} while the discovery feed was full. And in production,
+   * losing Redis meant losing every feed permanently, with no way back short of asking users to
+   * repost.
+   *
+   * <p>Calls the two-argument {@code fanOutPost} rather than the one-argument form on purpose: the
+   * latter also runs {@code notifyTaggedUsers}, and a rebuild must not tell somebody they were
+   * tagged in a post from three months ago. Reputation and interaction tracking are likewise not
+   * involved — this writes cache entries and nothing else.
+   *
+   * <p>Synchronous, and page by page. The caller is an administrator who needs to know when it has
+   * finished before demonstrating anything, and paging keeps a whole-table read off the heap. One
+   * post that fails is counted and stepped over rather than aborting the run, because a single
+   * post whose author row is gone should not cost the other few hundred their fan-out.
+   */
+  @Transactional
+  public FeedRebuildResultDto rebuildAll() {
+    log.info("rebuildAll: starting feed rebuild for all APPROVED posts");
+
+    int processed = 0;
+    int skipped = 0;
+    int pageNumber = 0;
+    Page<PostEntity> page;
+
+    do {
+      page =
+          postRepository.findByModerationStatus(
+              ModerationStatus.APPROVED,
+              PageRequest.of(pageNumber, REBUILD_PAGE_SIZE, Sort.by(Sort.Direction.ASC, "id")));
+
+      for (PostEntity post : page.getContent()) {
+        try {
+          UserEntity author =
+              userRepository
+                  .findById(post.getAuthorId())
+                  .orElseThrow(
+                      () -> new NotFoundException("Author not found: " + post.getAuthorId()));
+          FeedPostDataDto postData = feedPostDataMapper.toFeedPostData(post, author);
+          fanOutPost(postData, postData.getTaggedUserIds());
+          processed++;
+        } catch (RuntimeException e) {
+          skipped++;
+          log.warn("rebuildAll: skipped postId={} — {}", post.getId(), e.toString());
+        }
+      }
+      pageNumber++;
+    } while (page.hasNext());
+
+    log.info("rebuildAll: finished, processed={}, skipped={}", processed, skipped);
+    return new FeedRebuildResultDto(processed, skipped);
+  }
 
   // Joins the caller's transaction, or opens one when there isn't any. Both post.getTags() and
   // post.getHashtags(), read inside FeedPostDataMapper, are LAZY collections, and with
@@ -115,18 +248,16 @@ public class NewsfeedService {
     cachePostData(postId, postData);
     addToFeed(postData.getAuthorId(), postId, score);
 
+    // One pipelined batch for the whole audience rather than two commands per recipient.
+    Set<Integer> recipients = new LinkedHashSet<>();
     if (!PostVisibility.PRIVATE.equals(postData.getVisibility())) {
-      List<Integer> friendIds = friendshipQueryService.getFriendIds(postData.getAuthorId());
-      for (Integer friendId : friendIds) {
-        addToFeed(friendId, postId, score);
-      }
+      recipients.addAll(friendshipService.getFriendIds(postData.getAuthorId()));
     }
-
     if (Objects.nonNull(taggedUserIds)) {
-      for (Integer taggedUserId : taggedUserIds) {
-        addToFeed(taggedUserId, postId, score);
-      }
+      recipients.addAll(taggedUserIds);
     }
+    recipients.remove(postData.getAuthorId());
+    addToFeeds(recipients, postId, score);
 
     log.debug("Fan-out post {} (visibility={})", postData.getPostId(), postData.getVisibility());
   }
@@ -163,25 +294,37 @@ public class NewsfeedService {
   }
 
   /**
-   * Rewrites the cached like count for one post.
+   * Rewrites the cached reaction total <b>and</b> its per-type breakdown for one post.
    *
-   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database
-   * is a counter the user never sees. Callers pass a count they have just read from their own
+   * <p>The feed never falls back to Postgres, so a counter that is only correct in the database is
+   * a counter the user never sees. Callers pass values they have just read from their own
    * repository rather than a delta: read-modify-write against Redis is not atomic, and under
-   * concurrent reactions a delta would drift permanently, whereas an absolute value taken from
-   * the authoritative table self-corrects on the very next interaction.
+   * concurrent reactions a delta would drift permanently, whereas absolute values taken from the
+   * authoritative table self-correct on the very next interaction.
+   *
+   * <p><b>One method for both, and not two.</b> The total and the breakdown are two views of the
+   * same rows, so writing them separately means two read-modify-write cycles over the same cache
+   * entry and a window in which the chips visibly disagree with the number beside them. Splitting
+   * them would also make it possible to add a caller that updates one and forgets the other —
+   * which is precisely how the breakdown would rot into something worse than not sending one.
    */
-  public void updateCachedLikeCount(Integer postId, int likeCount) {
-    mutateCachedPost(postId, post -> post.setLikeCount(likeCount));
+  public void updateCachedReactions(
+      Integer postId, int likeCount, Map<ReactionType, Long> reactionSummary) {
+    mutateCachedPost(
+        postId,
+        post -> {
+          post.setLikeCount(likeCount);
+          post.setReactionSummary(reactionSummary);
+        });
   }
 
-  /** Rewrites the cached comment count for one post — see {@link #updateCachedLikeCount}. */
+  /** Rewrites the cached comment count for one post — see {@link #updateCachedReactions}. */
   public void updateCachedCommentCount(Integer postId, int commentCount) {
     mutateCachedPost(postId, post -> post.setCommentCount(commentCount));
   }
 
   /**
-   * Rewrites the cached QNA block for one post — see {@link #updateCachedLikeCount}. Accepting an
+   * Rewrites the cached QNA block for one post — see {@link #updateCachedReactions}. Accepting an
    * answer changes {@code isResolved}/{@code acceptedAnswerId}, and the feed would otherwise keep
    * serving the pre-accept copy.
    */
@@ -214,7 +357,7 @@ public class NewsfeedService {
     redisTemplate.delete(POST_CACHE_KEY_PREFIX + postIdStr);
     removeFromFeed(authorId, postIdStr);
 
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(authorId);
+    List<Integer> friendIds = friendshipService.getFriendIds(authorId);
     for (Integer friendId : friendIds) {
       removeFromFeed(friendId, postIdStr);
     }
@@ -272,36 +415,211 @@ public class NewsfeedService {
         : getAllFeed(userId, page, size);
   }
 
+  /**
+   * The {@link FeedScope#ALL} feed, demoting what the reader has already scrolled past.
+   *
+   * <p>Three paths, and which one runs is decided by a single {@code ZCARD}:
+   *
+   * <ol>
+   *   <li><b>Nothing seen yet</b> — the original code, unchanged, down to the same two Redis calls.
+   *       This is the first request of every session and it must not get slower; the same reasoning
+   *       keeps {@link #BLOCK_OVERFETCH_FACTOR} off the common path.
+   *   <li><b>First page of a scroll-through</b> — read the whole feed index with its scores, subtract
+   *       {@link #SEEN_PENALTY_MILLIS} from everything in the seen set, re-sort, and <b>freeze the
+   *       result</b> into {@code feedorder:<userId>} before serving a page out of it.
+   *   <li><b>A later page</b> — served from that frozen list, not re-ranked.
+   * </ol>
+   *
+   * <p><b>The freezing is not an optimisation; without it this feature eats itself.</b> The client
+   * reports a card as seen when it leaves the viewport, which means the posts on page one are marked
+   * seen in the moments before page two is requested. Re-ranking on page two would then push exactly
+   * those posts down — into the offset window page two is about to read — and the reader would be
+   * served page one again, forever, never reaching the posts underneath. Re-ranking against a set
+   * that grows as a side effect of paging is pathological for offset pagination in a way that
+   * re-ranking against a fixed set is not, so the order is computed once per scroll-through and held
+   * still while the reader walks down it — see {@link SeenPostTracker#ORDER_TTL}.
+   *
+   * <p>A snapshot that has expired mid-scroll falls back to the unranked window rather than reporting
+   * the end of the feed: a short page or a repeated one is a blemish, an empty one looks like data
+   * loss.
+   *
+   * <p>Blocked authors are still removed after the page is read, for the reason given on {@link
+   * #getFeed(Integer, int, int)} — none of this changes where the block filter can run, only which
+   * ids reach it.
+   */
   private FeedResponseDto getAllFeed(Integer userId, int page, int size) {
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
-
     String feedKey = FEED_KEY_PREFIX + userId;
     long start = (long) (page - 1) * size;
-    long end = start + (blockedIds.isEmpty() ? size : (long) size * BLOCK_OVERFETCH_FACTOR);
+    int want = windowSize(size, blockedIds);
 
-    Set<String> postIds = redisTemplate.opsForZSet().reverseRange(feedKey, start, end);
-
-    if (CollectionUtils.isEmpty(postIds)) {
-      return FeedResponseDto.builder()
-          .posts(List.of())
-          .page(page)
-          .size(size)
-          .hasMore(false)
-          .build();
+    if (!seenPostTracker.hasSeenAnything(userId)) {
+      return pageFromIds(
+          redisTemplate.opsForZSet().reverseRange(feedKey, start, start + want - 1L),
+          blockedIds,
+          page,
+          size);
     }
 
-    List<FeedPostDataDto> posts = loadPostsFromCache(postIds);
+    String orderKey = seenPostTracker.orderKey(userId, null);
+
+    if (page > 1) {
+      List<String> fromSnapshot = seenPostTracker.readOrder(orderKey, start, want);
+      if (!fromSnapshot.isEmpty()) {
+        return pageFromIds(fromSnapshot, blockedIds, page, size);
+      }
+      // The snapshot aged out while the reader was still scrolling. Fall through to the plain
+      // window rather than to an empty page.
+      return pageFromIds(
+          redisTemplate.opsForZSet().reverseRange(feedKey, start, start + want - 1L),
+          blockedIds,
+          page,
+          size);
+    }
+
+    List<String> ranked =
+        rankBySeenness(
+            userId,
+            redisTemplate.opsForZSet().reverseRangeWithScores(feedKey, 0, MAX_FEED_SIZE - 1L));
+    seenPostTracker.saveOrder(orderKey, ranked);
+
+    return pageFromIds(slice(ranked, start, want), blockedIds, page, size);
+  }
+
+  /**
+   * How many ids to read for one page.
+   *
+   * <p>The overfetch is the caller's only defence against a page that comes back short once blocked
+   * authors are filtered out of it, so every path that slices ids has to apply it — an exact-size
+   * slice would leave the filter nothing to eat into. One extra beyond that is what {@code hasMore}
+   * is read from.
+   */
+  private int windowSize(int size, Set<Integer> blockedIds) {
+    return size * (blockedIds.isEmpty() ? 1 : BLOCK_OVERFETCH_FACTOR) + 1;
+  }
+
+  /**
+   * Re-orders one window of the feed index so that posts the reader has already scrolled past sink.
+   *
+   * <p>This is the half of the demotion that is about ranking rather than storage: what a seen post
+   * is worth, in the same "hours of apparent freshness" the engagement and affinity boosts are
+   * denominated in. Where the seen set lives and when it expires belongs to {@link SeenPostTracker}.
+   *
+   * <p>Ties keep the order Redis returned them in, so posts nobody has seen stay in score order and
+   * the sort adds no arbitrariness of its own.
+   */
+  private List<String> rankBySeenness(
+      Integer userId, Set<ZSetOperations.TypedTuple<String>> window) {
+    if (CollectionUtils.isEmpty(window)) {
+      return List.of();
+    }
+
+    List<ZSetOperations.TypedTuple<String>> tuples = List.copyOf(window);
+    List<String> ids = tuples.stream().map(ZSetOperations.TypedTuple::getValue).toList();
+    List<Double> seenAt = seenPostTracker.seenAt(userId, ids);
+
+    record Ranked(String id, double score) {}
+    List<Ranked> ranked = new ArrayList<>(tuples.size());
+    for (int i = 0; i < tuples.size(); i++) {
+      // A tuple's score is nullable, and a member without one sorts as if it were the oldest
+      // possible post rather than throwing out of the comparator.
+      Double raw = tuples.get(i).getScore();
+      double score = Objects.isNull(raw) ? 0d : raw;
+      boolean seen = i < seenAt.size() && Objects.nonNull(seenAt.get(i));
+      ranked.add(new Ranked(ids.get(i), seen ? score - SEEN_PENALTY_MILLIS : score));
+    }
+
+    // Stable, so equal scores come out in the order Redis gave them.
+    ranked.sort(Comparator.comparingDouble(Ranked::score).reversed());
+    return ranked.stream().map(Ranked::id).toList();
+  }
+
+  /**
+   * One page out of an in-memory list of ids.
+   *
+   * <p>{@code long}, for the reason spelled out in {@link #getSkillFeed}: {@code page} is only
+   * {@code @Positive} and carries no upper bound, so {@code (page - 1) * size} overflows {@code int}
+   * for a large page and wraps negative — which sails past a naive bounds check and reaches {@code
+   * subList} as an exception, i.e. a 500 from a query string.
+   */
+  private List<String> slice(List<String> ids, long start, int want) {
+    if (start >= ids.size()) {
+      return List.of();
+    }
+    int from = (int) start;
+    return ids.subList(from, Math.min(from + want, ids.size()));
+  }
+
+  /**
+   * Loads, filters and trims one page's worth of ids into a response.
+   *
+   * <p><b>{@code hasMore} is counted from the ids, not from the posts.</b> A post whose payload has
+   * fallen out of the seven-day cache while its id survives in the thirty-day feed index is dropped
+   * by {@code loadPostsFromCache}, so counting what survived deserialisation reports "no more posts"
+   * to a reader whose feed simply has a gap in it, and truncates the feed early. The ids are what the
+   * index actually holds.
+   */
+  private FeedResponseDto pageFromIds(
+      Collection<String> ids, Set<Integer> blockedIds, int page, int size) {
+    if (CollectionUtils.isEmpty(ids)) {
+      return emptyPage(page, size);
+    }
+
+    boolean hasMore = ids.size() > size;
+
+    List<FeedPostDataDto> posts = loadPostsFromCache(ids);
     if (!blockedIds.isEmpty()) {
       posts = posts.stream().filter(post -> !blockedIds.contains(post.getAuthorId())).toList();
     }
-    signBookCovers(posts);
-
-    boolean hasMore = posts.size() > size;
-    if (hasMore) {
+    if (posts.size() > size) {
       posts = posts.subList(0, size);
     }
+    signBookCovers(posts);
 
     return FeedResponseDto.builder().posts(posts).page(page).size(size).hasMore(hasMore).build();
+  }
+
+  /**
+   * The posts the skills tab will consider, in the order it should consider them.
+   *
+   * <p><b>The window is chosen before the demotion is applied, deliberately.</b> The obvious
+   * rearrangement — subtract the penalty first, then take the top {@link #SKILL_SCAN_LIMIT} — would
+   * push seen posts out of the candidate set entirely once a reader had scrolled through enough of
+   * it, and a tab that stops showing a post because you read it is a filter, which is the one thing
+   * this feature must not become. Ranking strictly inside a fixed window can reorder the tab; it can
+   * never empty it.
+   *
+   * <p>The order is frozen for the same reason {@link #getAllFeed} freezes its own, and under its own
+   * key: this tab and the {@code ALL} tab page through different lists, and sharing one snapshot
+   * would let switching tabs scramble the other one's pagination.
+   */
+  private Collection<String> skillCandidateIds(Integer userId, int page) {
+    String feedKey = FEED_KEY_PREFIX + userId;
+
+    if (!seenPostTracker.hasSeenAnything(userId)) {
+      Set<String> unranked =
+          redisTemplate.opsForZSet().reverseRange(feedKey, 0, SKILL_SCAN_LIMIT - 1L);
+      return Objects.isNull(unranked) ? List.of() : unranked;
+    }
+
+    String orderKey = seenPostTracker.orderKey(userId, FeedScope.SKILLS);
+
+    if (page > 1) {
+      List<String> fromSnapshot = seenPostTracker.readOrder(orderKey, 0, SKILL_SCAN_LIMIT);
+      if (!fromSnapshot.isEmpty()) {
+        return fromSnapshot;
+      }
+      Set<String> unranked =
+          redisTemplate.opsForZSet().reverseRange(feedKey, 0, SKILL_SCAN_LIMIT - 1L);
+      return Objects.isNull(unranked) ? List.of() : unranked;
+    }
+
+    List<String> ranked =
+        rankBySeenness(
+            userId,
+            redisTemplate.opsForZSet().reverseRangeWithScores(feedKey, 0, SKILL_SCAN_LIMIT - 1L));
+    seenPostTracker.saveOrder(orderKey, ranked);
+    return ranked;
   }
 
   private FeedResponseDto getSkillFeed(Integer userId, int page, int size) {
@@ -314,8 +632,7 @@ public class NewsfeedService {
       return emptyPage(page, size);
     }
 
-    Set<String> postIds =
-        redisTemplate.opsForZSet().reverseRange(FEED_KEY_PREFIX + userId, 0, SKILL_SCAN_LIMIT - 1L);
+    Collection<String> postIds = skillCandidateIds(userId, page);
 
     if (CollectionUtils.isEmpty(postIds)) {
       return emptyPage(page, size);
@@ -328,13 +645,18 @@ public class NewsfeedService {
             .filter(post -> touchesAnyTag(post, skillTags))
             .toList();
 
-    int start = (page - 1) * size;
+    // long, for the same reason getAllFeed casts: page and size are only @Positive, so
+    // (page - 1) * size overflows int for a large page and wraps negative — which sails past the
+    // >= check below and reaches subList(negative, ...) as an IndexOutOfBoundsException, i.e. a
+    // 500 from a query string. Compare against the list size in long space, then narrow.
+    long start = (long) (page - 1) * size;
     if (start >= matches.size()) {
       return emptyPage(page, size);
     }
 
-    int end = Math.min(start + size, matches.size());
-    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(start, end));
+    int from = (int) start;
+    int end = Math.min(from + size, matches.size());
+    List<FeedPostDataDto> pageItems = new ArrayList<>(matches.subList(from, end));
     signBookCovers(pageItems);
 
     return FeedResponseDto.builder()
@@ -390,6 +712,25 @@ public class NewsfeedService {
     userInteractionRepository.save(entity);
   }
 
+  /**
+   * Records that {@code userId} has scrolled past these posts, for the rest of their session.
+   *
+   * <p>This is the write half of the seen-post demotion; {@link #getAllFeed} is the read half and
+   * {@link #SEEN_PENALTY_MILLIS} explains what the two of them add up to. Nothing here reaches
+   * Postgres, and that is the point: {@link com.socialapp.newsfeed.entity.enums.InteractionType}
+   * rejected a {@code VIEW} constant because a row per post per page load would feed the ranking job
+   * a signal derived from its own output. A per-session Redis key that expires on its own is not that
+   * signal — it never touches affinity, never outlives the sitting it was written in, and is read
+   * only by the request that is about to render a page.
+   *
+   * <p><b>Fire and forget.</b> A client reporting what it has displayed is telling the server
+   * something, not asking it for anything, so a Redis failure is logged and swallowed: the reader
+   * loses the demotion, not the scroll they were in the middle of.
+   */
+  public void markSeen(Integer userId, Collection<Integer> postIds) {
+    seenPostTracker.markSeen(userId, postIds);
+  }
+
   /** Signs each cached cover key as the feed is served — see {@code FeedPostDataMapper}. */
   private void signBookCovers(List<FeedPostDataDto> posts) {
     posts.forEach(feedPostDataMapper::signBookCover);
@@ -423,9 +764,59 @@ public class NewsfeedService {
     }
   }
 
+  /**
+   * Adds one post to one user's feed.
+   *
+   * <p>Called once per recipient during fan-out, so what it costs per call is multiplied by the
+   * author's follower count — see {@link #addToFeeds} for the batched form the fan-out path uses.
+   */
   private void addToFeed(Integer userId, String postId, double score) {
     String feedKey = FEED_KEY_PREFIX + userId;
     redisTemplate.opsForZSet().add(feedKey, postId, score);
+    redisTemplate.expire(feedKey, FEED_TTL);
+    maybeTrim(feedKey);
+  }
+
+  /**
+   * Adds one post to many feeds in a single round trip.
+   *
+   * <p>Fan-out used to loop {@link #addToFeed}, which is two Redis commands each, issued serially:
+   * a post by someone with five hundred friends cost over a thousand round trips — and it ran
+   * inside {@code ModerationEventListener}'s transaction, holding a database connection open for
+   * all of them. Pipelining sends the batch and reads the replies once.
+   */
+  private void addToFeeds(Collection<Integer> userIds, String postId, double score) {
+    if (userIds.isEmpty()) {
+      return;
+    }
+
+    redisTemplate.executePipelined(
+        (RedisCallback<Object>)
+            connection -> {
+              StringRedisConnection stringConnection = (StringRedisConnection) connection;
+              for (Integer userId : userIds) {
+                String feedKey = FEED_KEY_PREFIX + userId;
+                stringConnection.zAdd(feedKey, score, postId);
+                stringConnection.expire(feedKey, FEED_TTL.toSeconds());
+              }
+              return null;
+            });
+
+    // Trimming is deliberately outside the pipeline and sampled: it is a cap, not an invariant.
+    userIds.forEach(userId -> maybeTrim(FEED_KEY_PREFIX + userId));
+  }
+
+  /**
+   * Trims a feed back to {@link #MAX_FEED_SIZE}, most of the time.
+   *
+   * <p>Sampled rather than unconditional — see {@link #TRIM_EVERY_N_WRITES}. Uses
+   * {@code ThreadLocalRandom} rather than a counter so it needs no shared state and stays correct
+   * across instances.
+   */
+  private void maybeTrim(String feedKey) {
+    if (ThreadLocalRandom.current().nextInt(TRIM_EVERY_N_WRITES) != 0) {
+      return;
+    }
     redisTemplate.opsForZSet().removeRange(feedKey, 0, -(MAX_FEED_SIZE + 1));
   }
 

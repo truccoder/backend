@@ -14,6 +14,7 @@ import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -65,9 +66,16 @@ public class BookService {
    *
    * <p>Fetches one row beyond {@code limit} so {@code hasMore} is answered by the page itself
    * rather than by a {@code COUNT(*)} over the whole table on every scroll.
+   *
+   * @param category null để lấy toàn bộ Thư viện; có giá trị thì lọc ngay trong truy vấn cắt
+   *     trang, không lọc sau. Cùng con trỏ {@code cursor} vẫn dùng được khi đổi tab vì thứ tự
+   *     vẫn là id giảm dần — nhưng FE nên bỏ con trỏ cũ khi người dùng đổi tab, vì con trỏ đó
+   *     là vị trí trong một danh sách khác.
    */
-  public BookPageResponseDto getLibraryPage(Integer cursor, int limit, Integer requesterId) {
-    List<BookEntity> page = bookRepository.findLibraryPage(cursor, PageRequest.of(0, limit + 1));
+  public BookPageResponseDto getLibraryPage(
+      Integer cursor, int limit, LearningCategory category, Integer requesterId) {
+    List<BookEntity> page =
+        bookRepository.findLibraryPage(cursor, category, PageRequest.of(0, limit + 1));
 
     boolean hasMore = page.size() > limit;
     List<BookEntity> visible = hasMore ? page.subList(0, limit) : page;

@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.service.StreamTokenSigner;
@@ -21,14 +22,21 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Thin wrapper over the Stream Chat REST API.
  *
- * <p>Only one call is needed today — pushing the user's display profile — so this uses the WebClient
- * already configured for every other outbound integration in the app rather than pulling in the
- * {@code io.getstream:stream-chat-java} SDK, which authenticates through a static singleton
- * configured from environment variables and would sit awkwardly beside Spring's config binding.
+ * <p>The handful of calls needed — pushing display profiles, mirroring a block, creating a group
+ * channel — go through the WebClient already configured for every other outbound integration in the
+ * app rather than pulling in the {@code io.getstream:stream-chat-java} SDK, which authenticates
+ * through a static singleton configured from environment variables and would sit awkwardly beside
+ * Spring's config binding.
  */
 @Component
 @Slf4j
 public class StreamChatClient {
+
+  /**
+   * The Stream channel type group conversations are created under. Public because the response the
+   * frontend receives has to name it — hard-coding "messaging" on both sides is how the two drift.
+   */
+  public static final String GROUP_CHANNEL_TYPE = "messaging";
 
   /** Stream rejects a {@code POST /users} payload carrying more than this many users. */
   private static final int MAX_USERS_PER_UPSERT = 100;
@@ -151,5 +159,86 @@ public class StreamChatClient {
       return user.getUsername();
     }
     return "User " + user.getId();
+  }
+
+  /**
+   * Creates the group channel server-side, so this backend — not the browser — decides who is in it
+   * and who owns it.
+   *
+   * <p>A direct message needs no call here: the frontend holds a Stream user token and creates that
+   * channel itself once {@link #upsertUsers} has introduced the pair. A group is different in two
+   * ways that make the client the wrong place for it. The membership has to be checked against this
+   * app's blocks before it exists, and {@code created_by_id} — the field that makes someone the
+   * channel owner, the only member who may rename or delete it — can only be set on a server-side
+   * call. Left to the browser, both become whatever the client claims.
+   *
+   * <p>Stream's create-a-channel verb is {@code POST /channels/{type}/{id}/query}, the same
+   * endpoint as reading one; the channel comes into being if it did not exist. {@code state:false}
+   * asks it not to send back the message history and read state, which the frontend is about to
+   * fetch for itself through {@code channel.watch()}.
+   *
+   * <p><b>No member roles are set.</b> Stream's {@code channel_role} values come from the app's
+   * permission configuration, which this code cannot see; naming a role that has not been defined
+   * fails the whole create. The creator still becomes the owner through {@code created_by_id},
+   * which is the only privilege the product needs today.
+   *
+   * <p><b>Not verifiable on a dev machine</b> — same as {@link #blockUser}. Without {@code
+   * stream.chat.api-key/api-secret} the service never reaches this method, so local tests exercise
+   * the guard and not the request. The payload has been checked against Stream's published API
+   * shape, not against a live application.
+   *
+   * @param channelId the id to create the channel under; must already be URL-safe
+   */
+  public void createGroupChannel(
+      String channelId,
+      String name,
+      String imageUrl,
+      Integer createdById,
+      Collection<Integer> memberIds) {
+    List<Map<String, Object>> members =
+        memberIds.stream()
+            .map(id -> Map.<String, Object>of("user_id", String.valueOf(id)))
+            .toList();
+
+    Map<String, Object> data = new HashMap<>();
+    data.put("created_by_id", String.valueOf(createdById));
+    data.put("name", name);
+    data.put("members", members);
+    if (StringUtils.hasText(imageUrl)) {
+      data.put("image", imageUrl);
+    }
+
+    Map<String, Object> body = Map.of("data", data, "state", false);
+
+    try {
+      streamChatWebClient
+          .post()
+          .uri(
+              uriBuilder ->
+                  uriBuilder
+                      .pathSegment("channels", GROUP_CHANNEL_TYPE, channelId, "query")
+                      .queryParam("api_key", properties.getApiKey())
+                      .build())
+          .header("Authorization", tokenSigner.serverToken())
+          .header("Stream-Auth-Type", "jwt")
+          .bodyValue(body)
+          .retrieve()
+          .bodyToMono(String.class)
+          .block();
+    } catch (WebClientResponseException e) {
+      // Stream says why it refused in the response body, and an operator needs that — a rejected
+      // member id or a channel-type setting reads nothing like a network failure. It is logged
+      // rather than thrown because the message travels to the caller inside the 503, and Stream's
+      // errors quote back the ids and app settings involved.
+      log.error(
+          "Stream Chat refused to create group channel {} ({}): {}",
+          channelId,
+          e.getStatusCode(),
+          e.getResponseBodyAsString(),
+          e);
+      throw new ExternalApiException("Failed to create the group channel on Stream Chat", e);
+    } catch (Exception e) {
+      throw new ExternalApiException("Failed to create the group channel on Stream Chat", e);
+    }
   }
 }

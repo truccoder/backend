@@ -114,4 +114,123 @@ public class PostEntity {
   @CreationTimestamp private OffsetDateTime createdAt;
 
   @UpdateTimestamp private OffsetDateTime updatedAt;
+
+  /**
+   * Every piece of free text on this post that content moderation must read.
+   *
+   * <p><b>Why this lives on the entity.</b> Both moderation paths — the synchronous rule engine in
+   * {@code PostService} and the asynchronous Gemini pass in {@code ModerationEventListener} — used
+   * to be handed {@code getContent()} and nothing else. Seven detail blocks went straight to
+   * readers unread: an ARTICLE post keeps its body in {@code articleDetails}, so the longest-form
+   * content type in the product was the one nothing looked at, and {@code eventDetails.eventTitle}
+   * is not only displayed but searchable. Leaving {@code content} blank and putting everything in a
+   * detail block was a clean way past the filter.
+   *
+   * <p>Collecting it here rather than in either service is what makes the next detail block safe:
+   * a new field is added to this method once, and both paths pick it up. Two copies of the list
+   * would drift, and a moderation filter that drifts does not fail loudly — it lets things through.
+   *
+   * @return the text to scan, joined by newlines; never null, possibly empty
+   */
+  public String moderatableText() {
+    List<String> parts = new ArrayList<>();
+
+    addIfPresent(parts, content);
+    addArticleText(parts);
+    addEventText(parts);
+    addPollText(parts);
+    addLinkText(parts);
+    addQuizText(parts);
+
+    if (codeSnippetDetails != null) {
+      addIfPresent(parts, codeSnippetDetails.getCode());
+    }
+    if (locationDetails != null) {
+      addIfPresent(parts, locationDetails.getDisplayName());
+    }
+
+    return String.join(System.lineSeparator(), parts);
+  }
+
+  private void addArticleText(List<String> parts) {
+    if (articleDetails == null) {
+      return;
+    }
+    addIfPresent(parts, articleDetails.getTitle());
+    addIfPresent(parts, articleDetails.getSummary());
+  }
+
+  private void addEventText(List<String> parts) {
+    if (eventDetails == null) {
+      return;
+    }
+    addIfPresent(parts, eventDetails.getEventTitle());
+    addIfPresent(parts, eventDetails.getEventDescription());
+    addIfPresent(parts, eventDetails.getLocation());
+  }
+
+  private void addPollText(List<String> parts) {
+    if (pollDetails == null) {
+      return;
+    }
+    addIfPresent(parts, pollDetails.getQuestion());
+    if (pollDetails.getOptions() != null) {
+      pollDetails.getOptions().forEach(option -> addIfPresent(parts, option.getText()));
+    }
+  }
+
+  private void addLinkText(List<String> parts) {
+    if (linkDetails == null) {
+      return;
+    }
+    addIfPresent(parts, linkDetails.getTitle());
+    addIfPresent(parts, linkDetails.getDescription());
+  }
+
+  private void addQuizText(List<String> parts) {
+    if (quizDetails == null) {
+      return;
+    }
+    addIfPresent(parts, quizDetails.getTitle());
+    if (quizDetails.getQuestions() == null) {
+      return;
+    }
+    quizDetails.getQuestions().forEach(question -> addQuestionText(parts, question));
+  }
+
+  private void addQuestionText(List<String> parts, QuizQuestion question) {
+    addIfPresent(parts, question.getQuestion());
+    addIfPresent(parts, question.getExplanation());
+    if (question.getOptions() != null) {
+      question.getOptions().forEach(option -> addIfPresent(parts, option));
+    }
+  }
+
+  /**
+   * Every image URL on this post that image moderation must read.
+   *
+   * <p>{@code images} was the only list handed to Cloud Vision, so an ARTICLE cover and a link
+   * preview thumbnail — both real, both rendered — were never looked at.
+   */
+  public List<String> moderatableImageUrls() {
+    List<String> urls = new ArrayList<>();
+
+    if (images != null) {
+      images.forEach(url -> addIfPresent(urls, url));
+    }
+    if (articleDetails != null) {
+      addIfPresent(urls, articleDetails.getCoverImage());
+    }
+    if (linkDetails != null) {
+      addIfPresent(urls, linkDetails.getThumbnailUrl());
+    }
+
+    return urls;
+  }
+
+  private static void addIfPresent(List<String> target, String value) {
+    if (value != null && !value.isBlank()) {
+      target.add(value);
+    }
+  }
 }
