@@ -18,7 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Nạp đồ thị bạn bè của bộ seed vào Neo4j lúc khởi động, khi đồ thị còn rỗng.
+ * Nạp đồ thị bạn bè của bộ seed vào Neo4j lúc khởi động, mỗi khi cờ được bật.
  *
  * <p><b>Vấn đề nó giải quyết, và vì sao nó nghiêm trọng hơn vẻ ngoài.</b> Quan hệ bạn bè sống ở hai
  * nơi: Neo4j giữ cạnh {@code FRIENDS_WITH} và là thứ {@code /friendships} cùng {@code /suggestions}
@@ -36,8 +36,24 @@ import lombok.extern.slf4j.Slf4j;
  * mà nó phải khớp, và được đóng vào jar nên không cần mount gì.
  *
  * <p><b>Mặc định TẮT</b>, cùng lý do với {@code NewsfeedSeedInitializer}: chỉ bật ở môi trường
- * thực sự muốn nạp seed. Bật rồi thì vẫn an toàn cho mọi lần khởi động sau, vì nó bỏ qua khi đồ thị
- * đã có node.
+ * thực sự muốn nạp seed. Cờ đó là điều kiện DUY NHẤT.
+ *
+ * <p><b>Vì sao KHÔNG còn điều kiện "chỉ nạp khi đồ thị còn rỗng".</b> Điều kiện ấy nuốt mất bước
+ * dọn của chính file cypher. {@code friend-graph.cypher} mở đầu bằng {@code MATCH (u:User) WHERE
+ * u.userId >= 9001 AND u.userId <= 9599 DETACH DELETE u}, viết ra đúng để nạp đè một thế hệ seed
+ * cũ — nhưng câu đó nằm TRONG file, còn điều kiện thì chặn TRƯỚC KHI file được đọc. Trên một máy
+ * dev đã từng nạp seed, bộ seed mới vì thế nạp xong mà đồ thị vẫn là của thế hệ trước, và hỏng
+ * đúng cái kiểu mà lớp này sinh ra để chặn: Postgres nói "đã là bạn", {@code /friendships} trả
+ * danh sách cũ, không có gì báo lỗi.
+ *
+ * <p>Đó không phải trường hợp hiếm mà là mặc định: cả bốn kho dữ liệu trong {@code
+ * docker-compose.yml} đều là bind mount dưới {@code ./.docker-data/}, nên {@code docker compose
+ * down -v} — vốn chỉ dọn named volume — không xoá Neo4j. Postgres thoát được là nhờ có
+ * {@code V80__seed_reset.sql} tự dọn, chứ không phải nhờ {@code down -v}.
+ *
+ * <p><b>Bỏ điều kiện đi vẫn an toàn cho mọi lần khởi động sau</b>, vì file chạy lại được: sau câu
+ * DETACH DELETE có giới hạn dải, toàn bộ phần còn lại là {@code MERGE}. Cái giá là ~500 node và
+ * vài nghìn cạnh mỗi lần khởi động CÓ BẬT CỜ — không phải mỗi lần khởi động.
  *
  * <p><b>Không bao giờ làm hỏng lần khởi động.</b> Mọi lỗi được ghi log rồi bỏ qua.
  *
@@ -71,20 +87,14 @@ public class Neo4jSeedInitializer {
   // giải thứ tự từ chính phương thức nghe sự kiện, nên @Order ở cấp lớp có thể bị bỏ qua.
   @Order(10)
   @EventListener(ApplicationReadyEvent.class)
-  public void seedIfEmpty() {
+  public void seedFriendGraph() {
     if (!seedOnStart) {
       return;
     }
 
     try (Session session = driver.session()) {
-      if (session.run("MATCH (u:User) RETURN count(u) AS total").single().get("total").asLong()
-          > 0) {
-        log.info("neo4j.seed-on-start: đồ thị đã có node User, bỏ qua");
-        return;
-      }
-
       List<String> statements = readStatements();
-      log.info("neo4j.seed-on-start: đồ thị rỗng, đang nạp {} câu lệnh cypher", statements.size());
+      log.info("neo4j.seed-on-start: đang nạp {} câu lệnh cypher", statements.size());
       for (String statement : statements) {
         session.run(statement);
       }

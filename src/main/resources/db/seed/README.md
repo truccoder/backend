@@ -12,19 +12,22 @@ FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed
 Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. **Production
 khai đúng dòng này**, không hơn không kém.
 
-## Ba phần dữ liệu nằm ngoài Flyway
+## Bốn phần dữ liệu nằm ngoài Flyway
 
-Không còn bước gõ tay nào, và **hai trong ba phần do chính ứng dụng lo** nên chúng đi theo ứng dụng
+Không còn bước gõ tay nào, và **hai trong bốn phần do chính ứng dụng lo** nên chúng đi theo ứng dụng
 tới mọi môi trường — kể cả production, nơi không có `docker-compose.yml` của repo này chạy.
 
 | Ai làm | Việc |
 |---|---|
-| `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` khi `NEO4J_SEED_ON_START=true` và đồ thị còn rỗng |
+| `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` mỗi khi `NEO4J_SEED_ON_START=true` — file tự dọn dải 9001–9599 rồi `MERGE` lại |
+| `NewsfeedSeedInitializer` (ứng dụng) | xoá sạch khoá `feed:*` rồi fan-out lại, mỗi khi `NEWSFEED_REBUILD_ON_START=true` |
 | `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh |
 | `minio-seed-objects` + `minio-init` (compose, chỉ dev) | tải ảnh thật theo `docker/minio/seed-manifest.tsv` rồi đẩy lên MinIO |
 
-Cả ba đều chạy lại được: bucket dùng `--ignore-existing`, cypher toàn `MERGE`, và hai bộ khởi tạo
-của ứng dụng đều bỏ qua khi thấy dữ liệu đã có.
+Tất cả đều chạy lại được, nhưng **theo kiểu nạp đè chứ không phải bỏ qua**: bucket dùng
+`--ignore-existing`, còn hai bộ khởi tạo của ứng dụng thì dọn phần dữ liệu của mình trước khi
+dựng lại. Trước đây cả hai đều bỏ qua khi thấy dữ liệu đã có, và đó chính là lý do một bộ seed
+mới nạp xong mà danh sách bạn bè lẫn bảng tin vẫn là của thế hệ trước.
 
 > **Lần `docker compose up` ĐẦU TIÊN mất khoảng 5–6 phút ở bước ảnh, và đó không phải treo.**
 > Đo thực tế: 1.139 object, 979 cái cần tải từ mạng, **971 thành công (99,2%)** trong 340 giây.
@@ -51,14 +54,22 @@ trống trong khi `/posts/public` đầy — rất dễ nhầm thành lỗi fron
 Ở máy dev, để ứng dụng tự làm:
 
 ```bash
-NEWSFEED_REBUILD_ON_START=true FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
+NEO4J_SEED_ON_START=true NEWSFEED_REBUILD_ON_START=true \
+  FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
   ./gradlew bootRun
 ```
 
-Cờ này **chỉ dựng lại khi Redis chưa có bảng tin nào**, nên bật thường trực ở máy dev là an toàn:
-lần đầu nó fan-out, những lần sau thấy đã có feed và bỏ qua trong một lượt `SCAN`. Mặc định **tắt**,
-và production nên giữ nguyên — fan-out toàn bộ ở mỗi lần khởi động là cái giá lớn cho một thứ
-production không cần, và nếu Redis ở đó rỗng thật thì đó là sự cố cần người nhìn vào.
+**Bật kèm `NEO4J_SEED_ON_START` chứ đừng bật một mình.** Fan-out đọc đồ thị bạn bè trong Neo4j; đồ
+thị rỗng — hoặc còn là của thế hệ seed cũ — thì bài chỉ tới được người được gắn thẻ và bảng tin gần
+như trống, trong khi log vẫn báo `processed=2586` y như một lần chạy thành công. Con số cần nhìn là
+*số bảng tin*: khoảng 500 là đúng, vài chục nghĩa là đồ thị chưa sẵn sàng.
+
+Cờ này **xoá sạch khoá `feed:*` rồi mới fan-out lại**, nên bật thường trực ở máy dev là an toàn và
+chạy lại nhiều lần vẫn ra một kết quả. Nó *không* còn bỏ qua khi Redis đã có bảng tin: `rebuildAll`
+chỉ `ZADD` thêm, nên không dọn trước thì id của những bài mà `V80` vừa xoá nằm lại trong sorted set
+vĩnh viễn, chiếm chỗ của bài thật. Mặc định **tắt**, và production nên giữ nguyên — fan-out toàn bộ
+ở mỗi lần khởi động là cái giá lớn cho một thứ production không cần, và nếu Redis ở đó rỗng thật
+thì đó là sự cố cần người nhìn vào.
 
 Cách thủ công vẫn còn, và là cách duy nhất trên production:
 
@@ -132,7 +143,7 @@ trước khi ghi và **dừng lại** nếu số nó định dùng đã có ở 
 python scripts/seed/generate_seed.py
 ```
 
-Script này sinh `V81`–`V91`, `docker/neo4j/seed/friend-graph.cypher`,
+Script này sinh `V81`–`V91`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
 `docker/minio/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
 tay.
 
@@ -276,20 +287,50 @@ bảng tham chiếu `t_users` **không** có `ON DELETE CASCADE`: `t_comments.au
 Muốn làm lại từ đầu hoàn toàn:
 
 ```bash
-docker compose down -v      # -v là bắt buộc: object cũ nằm trong named volume minio-seed-objects
+docker compose down -v      # -v cho named volume minio-seed-objects
+rm -rf .docker-data         # và cái này cho BỐN kho dữ liệu — xem ghi chú ngay dưới
 python scripts/seed/generate_seed.py
 docker compose up -d
-NEWSFEED_REBUILD_ON_START=true FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
+NEO4J_SEED_ON_START=true NEWSFEED_REBUILD_ON_START=true \
+  FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
   ./gradlew bootRun
 ```
 
-Tuỳ chọn, khi có key Stream — dữ liệu chat **không** nằm trong `docker compose up` vì mỗi lần chạy
-tiêu quota SaaS thật:
+**`docker compose down -v` một mình không xoá dữ liệu nào cả.** Postgres, Neo4j, Redis và MinIO
+đều là *bind mount* dưới `./.docker-data/`; named volume duy nhất trong cả `docker-compose.yml` là
+`minio-seed-objects`, và `-v` chỉ dọn đúng cái đó. Không có `rm -rf .docker-data` thì cả bốn kho
+giữ nguyên dữ liệu của thế hệ seed trước. Postgres không lộ ra vì `V80` tự dọn; ba kho kia thì
+không có ai dọn hộ.
+
+**Hai biến môi trường, không phải một.** `NEO4J_SEED_ON_START` nạp đồ thị bạn bè — Flyway không
+quản Neo4j. Thiếu nó thì `/friendships` rỗng trong khi hồ sơ vẫn hiện "đã là bạn", và vì fan-out
+bảng tin đọc chính đồ thị đó nên `/feed` cũng gần như trống theo. Cả hai cờ đều nạp đè: chúng dọn
+dữ liệu cũ của mình trước khi dựng lại, nên chạy lại nhiều lần vẫn ra một kết quả.
+
+### Chat (Stream)
+
+Dữ liệu chat **không** nằm trong `docker compose up` vì mỗi lần chạy tiêu quota SaaS thật:
 
 ```bash
-STREAM_API_KEY=... STREAM_API_SECRET=... node scripts/seed/seed-stream-chat.mjs
+STREAM_API_KEY=... STREAM_API_SECRET=... MINIO_URL=http://localhost:9000 \
+  node scripts/seed/seed-stream-chat.mjs --reset
 ```
 
-Script đó đọc `scripts/seed/chat-plan.json` (sinh cùng lượt với `V82`), nên phòng 1-1 chỉ tồn tại
+**`--reset` là bắt buộc mỗi khi nạp lại seed, không phải tuỳ chọn.** Id người dùng phía Stream
+chính là id số bên Postgres, và các thế hệ seed đều nằm trong dải 9001+ nên trùm lên nhau: bỏ
+`--reset` thì người mới id 9005 thừa kế nguyên phòng và tin nhắn của người cũ id 9005 — đúng
+triệu chứng "đổi tài khoản mà chat vẫn y như cũ". `V80` không với tới Stream được, và cũng không
+có bước nào khác trong repo chạm tới nó.
+
+`--reset` **xoá cứng** người dùng 9001–9599 cùng phòng của họ trên Stream. App Stream phải bật
+*permanent user deletion* (xoá mềm không giải phóng id, nên script sẽ dừng và báo thay vì âm thầm
+lùi về xoá mềm). **Đừng chạy vào một app Stream có người dùng thật.**
+
+`MINIO_URL` đổ vào `${minioUrl}` trong `chat-plan.json`, đúng vai trò mà
+`spring.flyway.placeholders.minioUrl` làm cho các file `.sql`. Mặc định đã là
+`http://localhost:9000` nên máy dev có thể bỏ qua; sai giá trị thì avatar trong chat vỡ mà không
+có gì báo.
+
+Script đọc `scripts/seed/chat-plan.json` (sinh cùng lượt với `V82`), nên phòng 1-1 chỉ tồn tại
 giữa những người **đã là bạn** — một sai lệch mà Stream không bao giờ báo, vì với Stream đó là một
-phòng hợp lệ. Chạy thử không cần key: `node scripts/seed/seed-stream-chat.mjs --dry-run`.
+phòng hợp lệ. Chạy thử không cần key: `node scripts/seed/seed-stream-chat.mjs --reset --dry-run`.

@@ -7,8 +7,10 @@
 // ACCEPTED trong V82__seed_social_graph.sql; hai file luôn được sinh cùng một lượt, vì lệch
 // nhau là một lỗi không có gì báo: hồ sơ hiện 'đã là bạn' còn danh sách bạn bè thì không.
 //
-// Neo4jSeedInitializer nạp file này khi khởi động, nếu NEO4J_SEED_ON_START=true và đồ
-// thị còn rỗng. File nằm trong jar nên chạy được ở mọi môi trường. Nạp tay:
+// Neo4jSeedInitializer nạp file này mỗi lần khởi động có NEO4J_SEED_ON_START=true — KHÔNG
+// còn điều kiện 'đồ thị còn rỗng', vì điều kiện đó chặn TRƯỚC khi file được đọc và do đó
+// nuốt luôn câu DETACH DELETE ngay dưới đây. File nằm trong jar nên chạy được ở mọi môi
+// trường. Nạp tay:
 //   docker exec -i neo4j cypher-shell -u neo4j -p <mật-khẩu> \
 //     < src/main/resources/db/seed/friend-graph.cypher
 //
