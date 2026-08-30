@@ -1030,6 +1030,55 @@ TOPICS = [
     ("dẫn dắt một đội bốn người", "career"), ("viết tài liệu mà người ta chịu đọc", "career"),
     ("ước lượng công việc sát hơn", "career"),
 ]
+
+# Các mẫu câu để nội dung KHÔNG cần đánh số ("số 3", "phần 7", "Câu hỏi 12") mà vẫn không trùng
+# nhau. Mỗi mẫu quay vòng với chu kỳ nguyên tố cùng nhau với len(TOPICS)=35, nên tổ hợp
+# (mẫu, chủ đề) trải đủ dài để không cặp bài nào giống hệt cặp khác trong cùng loại.
+EVENT_INTROS = [
+    "Buổi chia sẻ về {t}",
+    "Ngồi lại nói chuyện {t}",
+    "Chia sẻ nội bộ về {t}",
+    "Một buổi tối bàn về {t}",
+    "Meetup nhỏ về {t}",
+    "Cà phê kỹ thuật: chuyện {t}",
+    "Kể chuyện nghề: {t}",
+    "Nhóm mình mở buổi nói về {t}",
+    "Chiều thứ sáu bàn về {t}",
+]
+ARTICLE_TITLES = [
+    "Ghi chép về {t}",
+    "Nhìn lại hành trình {t}",
+    "Chuyện {t}, từ đầu tới lúc ổn",
+    "Những gì mình học được khi {t}",
+    "Nhật ký {t}",
+    "Kể lại lần {t}",
+    "Tổng kết đợt {t}",
+    "Bài học sau khi {t}",
+]
+QNA_OPENERS = [
+    "Có ai từng làm {t} chưa?",
+    "Nhờ mọi người tư vấn chuyện {t}.",
+    "Đang bí phần {t}, ai gặp rồi cho xin hướng.",
+    "Hỏi nhỏ: {t} nên bắt đầu từ đâu?",
+    "Team mình đang vướng {t}.",
+    "Cần lời khuyên về {t}.",
+    "Mình loay hoay mãi với {t}.",
+    "Ai rành {t} không ạ?",
+]
+QNA_TAILS = [
+    "Mình mắc ở bước thứ hai và chưa tìm ra hướng nào chạy được.",
+    "Thử vài cách trên mạng nhưng đều không hợp với hệ đang chạy.",
+    "Chưa rõ nên sửa ở tầng ứng dụng hay tầng hạ tầng.",
+    "Chạy ổn trên máy mình nhưng lên staging thì hỏng.",
+    "Sếp hỏi ước lượng mà mình chưa dám chốt.",
+]
+POLL_INTROS = [
+    "Khảo sát nhanh, mong mọi người bấm giúp.",
+    "Tiện thể hỏi cả nhà một câu.",
+    "Bình chọn nhẹ cho vui, ai rảnh bấm giúp.",
+    "Đang tò mò mọi người làm thế nào.",
+    "Một câu thăm dò, không mất quá mười giây.",
+]
 ANGLES = [
     "Ghi lại sau một tuần vật lộn",
     "Bài học rút ra sau khi làm hỏng một lần",
@@ -1467,7 +1516,8 @@ def build_posts(rng, people, edges):
             "onlineUrl": f"https://meet.google.com/seed-event-{pid}" if online else None,
             "maxAttendees": 20 + (i % 8) * 10,
         }
-        add("EVENT", pid, f"Buổi chia sẻ số {i + 1} về {topic} — {tail}",
+        intro = EVENT_INTROS[i % len(EVENT_INTROS)].format(t=topic)
+        add("EVENT", pid, f"{intro} — {tail}",
             author, detail=detail, age=announced_days_ago)
 
     # ── CODE_SNIPPET ───────────────────────────────────────────────────────────────────────────
@@ -1497,15 +1547,16 @@ def build_posts(rng, people, edges):
             key = f"posts/{pid}/cover.png"
             cover = want_image(key, "article-cover",
                                f"https://picsum.photos/seed/art{pid}/640/360")
+        title = ARTICLE_TITLES[i % len(ARTICLE_TITLES)].format(t=topic)
         detail = {
-            "title": f"Ghi chép phần {i + 1} về {topic}",
+            "title": title,
             "coverImage": cover,
             "summary": "Toàn bộ quá trình từ lúc phát hiện vấn đề tới lúc số liệu ổn định trở "
                        "lại, kèm những ngã rẽ đã thử và bỏ.",
         }
         add("ARTICLE", pid,
-            f"Ghi chép phần {i + 1}: mình viết lại toàn bộ hành trình {topic}, "
-            f"gồm cả những chỗ đi sai.",
+            f"{title}. Mình ghi lại toàn bộ quá trình {topic}, "
+            f"gồm cả những chỗ đi sai và vì sao bỏ.",
             pick_author(), detail=detail)
 
     # ── QNA ────────────────────────────────────────────────────────────────────────────────────
@@ -1515,9 +1566,10 @@ def build_posts(rng, people, edges):
         topic, _ = TOPICS[i % len(TOPICS)]
         # acceptedAnswerId để None ở đây: nó phải trỏ tới một BÌNH LUẬN CÓ THẬT của chính bài
         # này, mà bình luận thì tới V84 mới tồn tại. V84 cập nhật lại — xem chú thích ở file đó.
+        opener = QNA_OPENERS[i % len(QNA_OPENERS)].format(t=topic)
+        tail = QNA_TAILS[i % len(QNA_TAILS)]
         add("QNA", pid,
-            f"Câu hỏi {i + 1}: có ai từng gặp chuyện {topic} chưa? "
-            f"Mình mắc ở bước thứ hai và chưa tìm ra hướng nào chạy được.",
+            f"{opener} {tail}",
             pick_author(),
             detail={"isResolved": i % 3 == 0, "bountyPoints": (i % 5) * 25,
                     "acceptedAnswerId": None})
@@ -1535,6 +1587,28 @@ def build_posts(rng, people, edges):
          ["p50", "p95", "p99", "Trung bình"]),
         ("Thư mục seed nên chạy ở đâu?",
          ["Chỉ dev", "Dev và staging", "Cả production", "Không dùng seed"]),
+        ("Bạn deploy lên production bằng cách nào?",
+         ["Tự động khi merge", "Bấm tay qua CI", "Chạy script trên máy", "Có người trực deploy"]),
+        ("Đội bạn viết tài liệu ở đâu?",
+         ["Wiki nội bộ", "File markdown trong repo", "Google Docs", "Gần như không viết"]),
+        ("Bạn giữ secret lúc dev thế nào?",
+         ["Vault hoặc secret manager", "File .env không commit", "Biến môi trường máy", "Ghi thẳng trong config"]),
+        ("Nhánh chính của repo bạn tên gì?",
+         ["main", "master", "develop", "Tuỳ repo"]),
+        ("Bạn chạy CI trên đâu?",
+         ["GitHub Actions", "GitLab CI", "Jenkins", "Tự dựng"]),
+        ("Bao lâu bạn nâng phiên bản thư viện một lần?",
+         ["Hằng tuần", "Hằng tháng", "Khi có lỗ hổng", "Khi buộc phải"]),
+        ("Bạn theo dõi lỗi production bằng gì?",
+         ["Sentry", "Log tập trung", "Dashboard tự dựng", "Đợi người dùng báo"]),
+        ("Độ phủ test của dự án bạn khoảng bao nhiêu?",
+         ["Trên 80%", "50-80%", "Dưới 50%", "Không đo"]),
+        ("Bạn gọi thử API lúc dev bằng gì?",
+         ["Postman", "curl", "HTTP client trong IDE", "Viết test luôn"]),
+        ("Standup của đội bạn kéo dài bao lâu?",
+         ["Dưới 10 phút", "10-20 phút", "Trên 20 phút", "Không có standup"]),
+        ("Bạn viết commit message theo quy ước nào?",
+         ["Conventional Commits", "Có tiền tố tự quy ước", "Câu mô tả tự do", "Không quan tâm"]),
     ]
     # ~75% khảo sát CÒN mở (endDate ở tương lai), ~25% ĐÃ đóng — nhánh "poll kết thúc, chỉ xem
     # kết quả" cần dữ liệu. Poll đã đóng thì created_at phải nằm TRƯỚC endDate, nên đặt age tường minh.
@@ -1557,7 +1631,7 @@ def build_posts(rng, people, edges):
             "allowMultipleVotes": i % 4 == 0,
             "endDate": f"{end.isoformat()}T23:59:59+07:00",
         }
-        add("POLL", pid, f"Khảo sát nhanh số {i + 1}, mong mọi người bấm giúp.", pick_author(),
+        add("POLL", pid, f"{POLL_INTROS[i % len(POLL_INTROS)]} {question}", pick_author(),
             detail=detail, age=age)
 
     # ── LINK ───────────────────────────────────────────────────────────────────────────────────
@@ -2755,6 +2829,41 @@ PROJECT_IDEAS = [
     ("Trình phân tích log tập trung", "Gom log từ nhiều dịch vụ, tìm theo mã theo dõi xuyên suốt một request."),
     ("Ứng dụng học từ vựng kỹ thuật", "Học thuật ngữ chuyên ngành bằng cách lặp lại ngắt quãng."),
     ("Bộ chuyển đổi dữ liệu giữa các hệ", "Đọc từ một nguồn, ghi ra nhiều định dạng, có kiểm tra tính toàn vẹn."),
+    ("Trình quản lý bí mật cho môi trường dev", "Giữ khoá API và chuỗi kết nối ngoài mã nguồn, cấp theo từng máy."),
+    ("Bảng xếp hàng review pull request", "Cho thấy PR nào đang chờ lâu nhất và ai đang là nút cổ chai."),
+    ("Công cụ dựng dữ liệu mẫu cho test", "Sinh dữ liệu giả nhất quán để test tích hợp chạy lại cho kết quả như nhau."),
+    ("Hệ thống nhắc gia hạn tên miền và chứng chỉ", "Theo dõi hạn của domain và SSL, báo trước vài tuần thay vì để hết hạn."),
+    ("Trình so sánh chi phí giữa các vùng cloud", "Ước lượng hoá đơn khi đặt dịch vụ ở vùng khác nhau trước khi triển khai."),
+    ("Ứng dụng chấm công cho nhóm làm từ xa", "Ghi giờ làm theo tự khai, tổng hợp theo tuần, không chụp màn hình."),
+    ("Bộ lọc thư ứng tuyển theo tiêu chí", "Đọc thư ứng tuyển, gắn nhãn theo kỹ năng và mức phù hợp."),
+    ("Trình theo dõi lỗ hổng trong phụ thuộc", "Quét file khoá gói và đối chiếu với cơ sở dữ liệu lỗ hổng công khai."),
+    ("Cổng tra cứu tài liệu kỹ thuật nội bộ", "Gom wiki, slide và ghi chú họp về một chỗ, tìm được bằng một ô tìm kiếm."),
+    ("Ứng dụng lên lịch đăng bài kỹ thuật", "Xếp hàng bài viết và đăng theo giờ đặt trước trên nhiều kênh."),
+    ("Bộ đo thời gian phản hồi API định kỳ", "Gọi thử các endpoint quan trọng mỗi phút và vẽ biểu đồ độ trễ."),
+    ("Trình chuyển đổi định dạng ảnh hàng loạt", "Đổi kích thước và định dạng cả thư mục ảnh, giữ nguyên cấu trúc."),
+    ("Hệ thống bình chọn chủ đề buổi chia sẻ", "Cho cả nhóm đề xuất và bình chọn nội dung meetup tháng tới."),
+    ("Ứng dụng ghi lại quyết định kiến trúc", "Mỗi quyết định một trang ngắn: bối cảnh, lựa chọn, hệ quả."),
+    ("Trình dò link hỏng trong tài liệu", "Quét toàn bộ trang tài liệu và liệt kê link trả về lỗi."),
+    ("Bộ công cụ ẩn danh dữ liệu trước khi chia sẻ", "Thay tên, email và số điện thoại bằng giá trị giả nhưng vẫn hợp lệ."),
+    ("Ứng dụng theo dõi thói quen đọc sách kỹ thuật", "Ghi số trang đọc mỗi ngày, nhắc nhẹ khi bỏ quá lâu."),
+    ("Trình gom thông báo từ nhiều dịch vụ", "Kéo cảnh báo từ CI, giám sát và issue tracker về một luồng."),
+    ("Hệ thống đặt phòng họp theo lịch chung", "Xem phòng nào trống theo khung giờ, đặt nhanh không cần email qua lại."),
+    ("Bộ sinh changelog từ lịch sử commit", "Nhóm commit theo nhãn và dựng ghi chú phát hành cho mỗi phiên bản."),
+    ("Ứng dụng khảo sát ẩn danh cho đội", "Hỏi nhanh vài câu mỗi tuần, chỉ hiện kết quả tổng hợp."),
+    ("Trình theo dõi ngân sách dự án cá nhân", "Ghi thu chi cho từng dự án phụ, cảnh báo khi vượt hạn mức tháng."),
+    ("Bộ kiểm tra cấu hình trước khi triển khai", "Chạy một loạt kiểm tra nhanh và chặn triển khai nếu thiếu biến môi trường."),
+    ("Kho lưu và chia sẻ truy vấn SQL hay dùng", "Đặt tên, gắn thẻ và chia sẻ câu truy vấn cho cả đội tra cứu lại."),
+    ("Ứng dụng nhắc uống nước và nghỉ mắt", "Nhắc theo khoảng thời gian tự đặt, tạm dừng khi đang họp."),
+    ("Trình phân tích thời gian chạy test theo file", "Chỉ ra file test nào chậm nhất để tách hoặc chạy song song."),
+    ("Bộ công cụ đồng bộ dấu trang giữa trình duyệt", "Giữ danh sách link kỹ thuật giống nhau trên nhiều máy."),
+    ("Hệ thống ghi nhận đóng góp mã nguồn mở nội bộ", "Đếm PR, review và issue để ghi nhận trong đánh giá cuối kỳ."),
+    ("Ứng dụng lập kế hoạch học theo lộ trình", "Chia mục tiêu lớn thành các bước tuần, đánh dấu khi hoàn thành."),
+    ("Trình theo dõi phiên bản thư viện đang dùng", "Liệt kê gói nào đã cũ mấy phiên bản và mức độ rủi ro khi nâng."),
+    ("Bộ dựng trang trạng thái công khai", "Hiện tình trạng từng dịch vụ và lịch sử sự cố cho người dùng ngoài."),
+    ("Hệ thống chấm điểm chất lượng dữ liệu", "Chạy các quy tắc kiểm tra trên bảng và cho điểm theo tỉ lệ hợp lệ."),
+    ("Ứng dụng ghi chú cuộc họp có gắn việc", "Tách phần việc ra khỏi biên bản và giao cho người phụ trách."),
+    ("Trình mô phỏng tải cho API nội bộ", "Bắn lượng yêu cầu tăng dần và ghi lại điểm bắt đầu chậm."),
+    ("Bộ công cụ dọn nhánh Git đã gộp", "Tìm nhánh đã merge từ lâu và xoá sau khi xác nhận."),
 ]
 
 POSITION_TITLES = {
@@ -2800,7 +2909,7 @@ def build_projects(rng, people):
 
         projects.append({
             "id": pid, "author_id": owner["id"],
-            "title": f"{title_base} (nhóm {i + 1})", "description": desc,
+            "title": title_base, "description": desc,
             "tags": tags, "status": status,
             "age": rng.randint(10, 450),
         })
