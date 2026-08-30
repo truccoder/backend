@@ -3,6 +3,7 @@ package com.socialapp.friendships.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -14,6 +15,43 @@ import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 public interface FriendRequestRepository extends JpaRepository<FriendRequestEntity, Integer> {
   List<FriendRequestEntity> findByAddresseeIdAndStatusOrderByCreatedAtDesc(
       Integer addresseeId, FriendRequestStatus status);
+
+  /**
+   * One page of requests addressed to a user, newest first.
+   *
+   * <p>Cursored on the request id rather than {@code createdAt}: ids come from a sequence, so
+   * descending id is descending insertion order with a unique tie-break, and a timestamp cursor
+   * would repeat or skip rows when two requests share a millisecond. Same reasoning as
+   * {@code PostRepository.findByAuthorForViewer}.
+   */
+  @Query(
+      """
+      SELECT r FROM FriendRequestEntity r
+      WHERE r.addresseeId = :userId
+        AND r.status = :status
+        AND (:cursor IS NULL OR r.id < :cursor)
+      ORDER BY r.id DESC
+      """)
+  List<FriendRequestEntity> findIncomingForPage(
+      @Param("userId") Integer userId,
+      @Param("status") FriendRequestStatus status,
+      @Param("cursor") Integer cursor,
+      Pageable pageable);
+
+  /** The mirror of {@link #findIncomingForPage} for requests the user sent. */
+  @Query(
+      """
+      SELECT r FROM FriendRequestEntity r
+      WHERE r.requesterId = :userId
+        AND r.status = :status
+        AND (:cursor IS NULL OR r.id < :cursor)
+      ORDER BY r.id DESC
+      """)
+  List<FriendRequestEntity> findOutgoingForPage(
+      @Param("userId") Integer userId,
+      @Param("status") FriendRequestStatus status,
+      @Param("cursor") Integer cursor,
+      Pageable pageable);
 
   List<FriendRequestEntity> findByRequesterIdAndStatusOrderByCreatedAtDesc(
       Integer requesterId, FriendRequestStatus status);

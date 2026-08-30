@@ -1,7 +1,5 @@
 package com.socialapp.newsfeed.service;
 
-import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +23,7 @@ import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.reputation.RepLevel;
@@ -79,11 +78,16 @@ public class FeedPostDataMapper {
         post,
         author,
         (int) postReactionRepository.countByIdPostId(post.getId()),
-        (int) commentRepository.countByPostId(post.getId()));
+        (int) commentRepository.countByPostId(post.getId()),
+        postReactionRepository.countByType(post.getId()));
   }
 
   private FeedPostDataDto build(
-      PostEntity post, UserEntity author, int likeCount, int commentCount) {
+      PostEntity post,
+      UserEntity author,
+      int likeCount,
+      int commentCount,
+      Map<ReactionType, Long> reactionSummary) {
     List<Integer> taggedUserIds =
         Objects.isNull(post.getTags())
             ? List.of()
@@ -92,6 +96,7 @@ public class FeedPostDataMapper {
     return FeedPostDataDto.builder()
         .postId(post.getId())
         .authorId(post.getAuthorId())
+        .authorUsername(author.getUsername())
         .authorFullName(author.getFullName())
         .authorProfilePictureUrl(author.getProfilePictureUrl())
         .authorEliteScore(author.getEliteScore())
@@ -130,47 +135,26 @@ public class FeedPostDataMapper {
                 : null)
         .likeCount(likeCount)
         .commentCount(commentCount)
+        // An empty map, never null: a post nobody has reacted to has a known breakdown. Null is
+        // reserved for cache entries written before this field existed, where the client genuinely
+        // does not know — see FeedPostDataDto#reactionSummary.
+        .reactionSummary(reactionSummary)
         .createdAt(post.getCreatedAt())
-        .updatedAt(editedAt(post))
+        // post.getUpdatedAt() (Hibernate's @UpdateTimestamp) is NOT what belongs here — it bumps
+        // on any write to the row, including ModerationEventListener's async status update 1-2s
+        // after creation, which is not an edit. editedAt is only ever set by
+        // PostService#updatePost — see PostEntity#editedAt and B28 in docs/backend-plan.md.
+        .updatedAt(post.getEditedAt())
         .build();
   }
 
   /**
-   * How long after creation a write has to land before it counts as an edit.
-   *
-   * <p>{@code @CreationTimestamp} and {@code @UpdateTimestamp} are two separate generators and
-   * both fire on the same INSERT, so a post nobody has ever touched still stores an {@code
-   * updated_at} — a few microseconds after {@code created_at}, never exactly equal to it. A plain
-   * {@code isAfter} comparison would therefore mark every post in the feed as edited. A second is
-   * far longer than the gap between two generator calls in one insert and far shorter than any
-   * real edit, which always needs a second request.
-   */
-  private static final Duration EDIT_THRESHOLD = Duration.ofSeconds(1);
-
-  /**
-   * {@code updatedAt} for a post that has actually been edited, null for one that has not — see
-   * {@link #EDIT_THRESHOLD} for why this is not a straight null-check on the column.
-   *
-   * <p>Null rather than the creation time, because the client reads the presence of this field as
-   * "this post was edited". Rows written before {@code updated_at} existed carry NULL and land on
-   * the same answer.
-   */
-  private OffsetDateTime editedAt(PostEntity post) {
-    if (Objects.isNull(post.getUpdatedAt()) || Objects.isNull(post.getCreatedAt())) {
-      return null;
-    }
-    return Duration.between(post.getCreatedAt(), post.getUpdatedAt()).compareTo(EDIT_THRESHOLD) > 0
-        ? post.getUpdatedAt()
-        : null;
-  }
-
-  /**
-   * Maps a whole page of posts, with the author lookups and the two counters done in one query
+   * Maps a whole page of posts, with the author lookups and the three counters done in one query
    * each instead of one per row.
    *
-   * <p>The single-post overloads re-read {@code likeCount}/{@code commentCount} per call, which is
-   * right for fan-out (one post at a time) and wrong for a page: at twenty posts that is forty
-   * extra round trips for two numbers. Book summaries are still loaded per book post — only that
+   * <p>The single-post overloads re-read {@code likeCount}/{@code commentCount}/{@code
+   * reactionSummary} per call, which is right for fan-out (one post at a time) and wrong for a
+   * page: at twenty posts that is sixty extra round trips for three aggregates. Book summaries are still loaded per book post — only that
    * post type pays for it, and the rating breakdown behind it is its own aggregate.
    *
    * <p>Covers are signed here, because every caller of this method is serving a response.
@@ -182,6 +166,8 @@ public class FeedPostDataMapper {
 
     List<Integer> postIds = posts.stream().map(PostEntity::getId).toList();
     Map<Integer, Long> likeCounts = postReactionRepository.countByPostIds(postIds);
+    Map<Integer, Map<ReactionType, Long>> reactionSummaries =
+        postReactionRepository.countByTypeForPostIds(postIds);
     Map<Integer, Long> commentCounts = commentRepository.countByPostIds(postIds);
     Map<Integer, UserEntity> authorsById =
         userRepository
@@ -203,7 +189,8 @@ public class FeedPostDataMapper {
               post,
               author,
               likeCounts.getOrDefault(post.getId(), 0L).intValue(),
-              commentCounts.getOrDefault(post.getId(), 0L).intValue());
+              commentCounts.getOrDefault(post.getId(), 0L).intValue(),
+              reactionSummaries.getOrDefault(post.getId(), Map.of()));
       signBookCover(data);
       page.add(data);
     }

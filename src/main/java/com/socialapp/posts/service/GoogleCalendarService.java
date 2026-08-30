@@ -16,6 +16,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.posts.config.GoogleCalendarProperties;
 import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.GoogleCalendarTokenEntity;
@@ -44,6 +45,16 @@ public class GoogleCalendarService {
   private static final int OAUTH_STATE_BYTES = 32;
 
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+  /**
+   * Lifetime assumed when Google's token response omits {@code expires_in}.
+   *
+   * <p>The field is documented as always present and in practice always is, so the old code read
+   * it straight into {@code expiresIn.longValue()} — an NPE, and a 500, the one time it is not.
+   * Google's own default for an access token is an hour; assuming that just means the next
+   * refresh happens on schedule instead of the connection breaking outright.
+   */
+  private static final long DEFAULT_TOKEN_LIFETIME_SECONDS = 3600L;
 
   public String getAuthorizationUrl(Integer userId) {
     return UriComponentsBuilder.fromHttpUrl(properties.getAuthUrl())
@@ -136,7 +147,7 @@ public class GoogleCalendarService {
     if (Objects.nonNull(refreshToken)) {
       entity.setRefreshToken(refreshToken);
     }
-    entity.setExpiresAt(OffsetDateTime.now().plusSeconds(expiresIn.longValue()));
+    entity.setExpiresAt(OffsetDateTime.now().plusSeconds(secondsUntilExpiry(expiresIn)));
     tokenRepository.save(entity);
 
     log.info("Google Calendar connected for user {}", userId);
@@ -152,6 +163,16 @@ public class GoogleCalendarService {
                         "Google Calendar not connected. Please authorize first."));
 
     String accessToken = getValidAccessToken(token);
+
+    // Map.of rejects a null value, so an event row missing a title or either timestamp — one
+    // written before validateEventDetails existed — crashed here rather than being reported.
+    if (Objects.isNull(event.getEventTitle())
+        || Objects.isNull(event.getStartTime())
+        || Objects.isNull(event.getEndTime())) {
+      throw new ValidationException(
+          "This event is missing a title or its start/end time, so it cannot be added to a"
+              + " calendar.");
+    }
 
     String timezone =
         Objects.nonNull(event.getTimezone()) ? event.getTimezone() : "Asia/Ho_Chi_Minh";
@@ -194,8 +215,21 @@ public class GoogleCalendarService {
 
   @SuppressWarnings("unchecked")
   private String getValidAccessToken(GoogleCalendarTokenEntity token) {
-    if (OffsetDateTime.now().isBefore(token.getExpiresAt().minusMinutes(5))) {
+    // A null expiry means we cannot tell whether the token is still good; refreshing is the
+    // safe reading, and cheap. Reading it straight was an NPE on any row written before the
+    // column was populated.
+    if (Objects.nonNull(token.getExpiresAt())
+        && OffsetDateTime.now().isBefore(token.getExpiresAt().minusMinutes(5))) {
       return token.getAccessToken();
+    }
+
+    // Google only returns a refresh_token on the first consent, and the exchange above declines
+    // to overwrite a stored one with null — so a row can legitimately reach here without one.
+    // Map.of throws NullPointerException on a null value, which turned "you need to reconnect"
+    // into a 500 with no hint of what to do about it.
+    if (Objects.isNull(token.getRefreshToken())) {
+      throw new NotFoundException(
+          "Google Calendar authorization has expired. Please reconnect your account.");
     }
 
     WebClient webClient = webClientBuilder.build();
@@ -221,9 +255,14 @@ public class GoogleCalendarService {
     Number expiresIn = (Number) response.get("expires_in");
 
     token.setAccessToken(newAccessToken);
-    token.setExpiresAt(OffsetDateTime.now().plusSeconds(expiresIn.longValue()));
+    token.setExpiresAt(OffsetDateTime.now().plusSeconds(secondsUntilExpiry(expiresIn)));
     tokenRepository.save(token);
 
     return newAccessToken;
+  }
+
+  /** {@code expires_in} from a Google token response, or the assumed default when it is absent. */
+  private static long secondsUntilExpiry(Number expiresIn) {
+    return Objects.isNull(expiresIn) ? DEFAULT_TOKEN_LIFETIME_SECONDS : expiresIn.longValue();
   }
 }
