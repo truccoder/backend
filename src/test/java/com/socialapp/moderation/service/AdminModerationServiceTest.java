@@ -24,6 +24,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.dto.BannedUserDto;
@@ -97,8 +98,11 @@ class AdminModerationServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, ModerationStatus.APPROVED);
       when(postRepository.search(any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(post)));
-      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, null)));
-      when(moderationLogRepository.findByPostIdOrderByCreatedAtAsc(POST_ID)).thenReturn(List.of());
+      // Batched: one findAllById for the page's authors, one log query for the page's posts.
+      when(userRepository.findAllById(List.of(AUTHOR_ID)))
+          .thenReturn(List.of(user(AUTHOR_ID, null)));
+      when(moderationLogRepository.findByPostIdInOrderByCreatedAtAsc(List.of(POST_ID)))
+          .thenReturn(List.of());
 
       // When
       Page<PostModerationDetailDto> result =
@@ -116,8 +120,9 @@ class AdminModerationServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, ModerationStatus.APPROVED);
       when(postRepository.search(any(), any(), any(), any()))
           .thenReturn(new PageImpl<>(List.of(post)));
-      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.empty());
-      when(moderationLogRepository.findByPostIdOrderByCreatedAtAsc(POST_ID)).thenReturn(List.of());
+      when(userRepository.findAllById(List.of(AUTHOR_ID))).thenReturn(List.of());
+      when(moderationLogRepository.findByPostIdInOrderByCreatedAtAsc(List.of(POST_ID)))
+          .thenReturn(List.of());
 
       // When
       Page<PostModerationDetailDto> result =
@@ -125,6 +130,25 @@ class AdminModerationServiceTest {
 
       // Then
       assertThat(result.getContent().get(0).getAuthorName()).isEqualTo("Unknown");
+    }
+
+    @Test
+    @DisplayName("should keep the total but skip the batch loads when the page has no rows")
+    void shouldSkipBatchLoads_whenPageIsEmpty() {
+      // GIVEN a page past the end of a non-empty result set: no rows, but a total to page by
+      when(postRepository.search(any(), any(), any(), any()))
+          .thenReturn(new PageImpl<>(List.of(), PageRequest.of(9, 10), 12));
+
+      // WHEN the queue is asked for that page
+      Page<PostModerationDetailDto> result =
+          adminModerationService.searchPosts(null, null, null, PageRequest.of(9, 10));
+
+      // THEN the caller's pager still sees the total, and neither batch query ran against an
+      // empty id list
+      assertThat(result.getContent()).isEmpty();
+      assertThat(result.getTotalElements()).isEqualTo(12);
+      verify(userRepository, never()).findAllById(any());
+      verify(moderationLogRepository, never()).findByPostIdInOrderByCreatedAtAsc(any());
     }
   }
 
@@ -174,9 +198,9 @@ class AdminModerationServiceTest {
       // Given
       when(userBanRepository.findBannedUserIds(any()))
           .thenReturn(new PageImpl<>(List.of(AUTHOR_ID)));
-      when(userRepository.findById(AUTHOR_ID))
-          .thenReturn(Optional.of(user(AUTHOR_ID, OffsetDateTime.now().plusHours(1))));
-      when(userBanRepository.findByUserIdOrderByCreatedAtDesc(AUTHOR_ID))
+      when(userRepository.findAllById(List.of(AUTHOR_ID)))
+          .thenReturn(List.of(user(AUTHOR_ID, OffsetDateTime.now().plusHours(1))));
+      when(userBanRepository.findByUserIdInOrderByCreatedAtDesc(List.of(AUTHOR_ID)))
           .thenReturn(List.of(UserBanEntity.builder().userId(AUTHOR_ID).postId(POST_ID).build()));
 
       // When
@@ -195,8 +219,10 @@ class AdminModerationServiceTest {
       // Given
       when(userBanRepository.findBannedUserIds(any()))
           .thenReturn(new PageImpl<>(List.of(AUTHOR_ID)));
-      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, null)));
-      when(userBanRepository.findByUserIdOrderByCreatedAtDesc(AUTHOR_ID)).thenReturn(List.of());
+      when(userRepository.findAllById(List.of(AUTHOR_ID)))
+          .thenReturn(List.of(user(AUTHOR_ID, null)));
+      when(userBanRepository.findByUserIdInOrderByCreatedAtDesc(List.of(AUTHOR_ID)))
+          .thenReturn(List.of());
 
       // When
       Page<BannedUserDto> result = adminModerationService.getBannedUsers(PageRequest.of(0, 10));
@@ -211,9 +237,13 @@ class AdminModerationServiceTest {
     @DisplayName("should reject when a banned user's account no longer exists")
     void shouldThrowNotFoundException_whenUserDeleted() {
       // Given
+      // findBannedUserIds just returned this id, so an empty findAllById means the row was
+      // deleted between the two queries.
       when(userBanRepository.findBannedUserIds(any()))
           .thenReturn(new PageImpl<>(List.of(AUTHOR_ID)));
-      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.empty());
+      when(userRepository.findAllById(List.of(AUTHOR_ID))).thenReturn(List.of());
+      when(userBanRepository.findByUserIdInOrderByCreatedAtDesc(List.of(AUTHOR_ID)))
+          .thenReturn(List.of());
 
       // When / Then
       assertThatThrownBy(() -> adminModerationService.getBannedUsers(PageRequest.of(0, 10)))
@@ -255,7 +285,7 @@ class AdminModerationServiceTest {
               () ->
                   adminModerationService.reviewPost(
                       POST_ID, Likelihood.LIKELY, ViolationType.SPAM, null))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
     }
 
     @Test

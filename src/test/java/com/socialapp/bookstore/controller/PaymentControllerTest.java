@@ -194,7 +194,7 @@ class PaymentControllerTest {
     @DisplayName("shouldReturn200AndPaidTrue_whenPaymentIsConfirmed_happyPath")
     void shouldReturn200AndPaidTrue_whenPaymentIsConfirmed_happyPath() throws Exception {
       // Given
-      when(momoService.syncPaymentStatus("txn-abc")).thenReturn(true);
+      when(momoService.syncPaymentStatus(1, "txn-abc")).thenReturn(true);
 
       // When / Then
       mockMvc
@@ -208,7 +208,7 @@ class PaymentControllerTest {
     @DisplayName("shouldReturn200AndPaidFalse_whenPaymentIsNotYetConfirmed")
     void shouldReturn200AndPaidFalse_whenPaymentIsNotYetConfirmed() throws Exception {
       // Given
-      when(momoService.syncPaymentStatus("txn-pending")).thenReturn(false);
+      when(momoService.syncPaymentStatus(1, "txn-pending")).thenReturn(false);
 
       // When / Then
       mockMvc

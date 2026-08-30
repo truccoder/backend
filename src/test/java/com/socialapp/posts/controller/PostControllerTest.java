@@ -666,4 +666,39 @@ class PostControllerTest {
       verify(postQueryService).getPublicFeed(null, null, 20);
     }
   }
+
+  // =====================================================================
+  // Đường dẫn không tồn tại
+  // =====================================================================
+
+  @Nested
+  @DisplayName("URL không khớp controller nào")
+  class UnknownPathTests {
+
+    @Test
+    @DisplayName("shouldReturn404_whenPathMatchesNoController")
+    void shouldReturn404_whenPathMatchesNoController() throws Exception {
+      // Given — cùng một khiếm khuyết với ca 405 ở trên, sớm hơn một bước trong dispatch: không có
+      // handler cho NoResourceFoundException thì nó rơi xuống handler Exception bắt-tất và quay ra
+      // 500. Sai hai lần: nói với người gọi rằng máy chủ hỏng trong khi họ hỏi một thứ không tồn
+      // tại, và chôn những cái 500 thật giữa đống nhiễu. Một route frontend gõ sai trong buổi demo
+      // trông y hệt một sự cố máy chủ.
+
+      // When / Then
+      mockMvc
+          .perform(authed(get("/v1/api/duong-dan-khong-ton-tai")))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.code").value(404));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPathIsAlmostRight")
+    void shouldReturn404_whenPathIsAlmostRight() throws Exception {
+      // Given — ca hay gặp thật: sai số nhiều/ít của một danh từ trong đường dẫn. Ở dự án này
+      // /v1/api/friendships từng bị gọi nhầm thành /v1/api/friends, và triệu chứng là 500.
+
+      // When / Then
+      mockMvc.perform(authed(get(POSTS_URL + "s/public"))).andExpect(status().isNotFound());
+    }
+  }
 }

@@ -1,5 +1,22 @@
 name: Deploy Backend
 
+# Ba job nối tiếp, cố ý tách rời: test -> build & push -> deploy.
+#
+# Trước 2026-08-25 file này chỉ có đúng một job build & push, còn bước deploy thì nằm dạng comment
+# từ thời `54d9f93 Deploy to VPS`. Nghĩa là mỗi lần bấm "Deploy Backend" đều xanh, chạy khoảng hai
+# phút, và KHÔNG đụng gì tới máy chủ — production vẫn chạy image cũ. Kiểu hỏng này không để lại
+# dấu vết ở đâu cả: workflow xanh, image mới nằm trên GHCR, chỉ có điều không ai kéo nó về.
+#
+# Ba thứ được sửa cùng lúc, vì bỏ sót bất kỳ cái nào thì hai cái còn lại cũng mất tác dụng:
+#
+#   1. Có bước deploy thật (job `deploy` bên dưới).
+#   2. Tag `:latest` CHỈ được gắn khi chạy từ `main`. Trước đây tag cứng, nên một lần chạy tay từ
+#      nhánh là ghi đè con trỏ mà production dùng — và lần deploy infra kế tiếp sẽ kéo nguyên code
+#      nhánh đó vào production mà không ai chủ ý.
+#   3. Test chạy TRƯỚC khi build image. Dockerfile build bằng `bootJar -x test`, nên nếu ở đây
+#      không chạy thì không có chỗ nào chạy: đường từ "một commit bất kỳ" tới "image mà production
+#      pull về" không đi qua cổng kiểm tra nào.
+
 on:
   push:
     branches: [main]
@@ -10,7 +27,44 @@ env:
   IMAGE_NAME: truccoder/backend
 
 jobs:
-  build-and-deploy:
+  # ─── 1. Cổng kiểm tra ────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      # `build` chứ không phải `test`: task `check` kéo theo jacocoTestCoverageVerification
+      # (mốc 80%, xem build.gradle), nên tụt độ phủ cũng chặn deploy chứ không chỉ có test đỏ.
+      # Cùng một lệnh với Branch CI, để một commit không thể xanh ở đó mà đỏ ở đây.
+      - name: Build và chạy test
+        run: chmod +x gradlew && ./gradlew build
+
+      # Job này chạy trên máy ảo bị xoá ngay sau đó. Không giữ lại báo cáo thì khi deploy hỏng vì
+      # một test đỏ, thứ duy nhất còn lại là dòng tóm tắt của Gradle.
+      - name: Giữ lại báo cáo khi hỏng
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            build/reports/tests/test
+            build/reports/jacoco
+          retention-days: 7
+
+  # ─── 2. Đóng gói ─────────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build và push image
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,33 +84,140 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `:latest` là con trỏ dùng chung của production — repo infra pull theo nó khi .env chưa ghim
+      # tag nào. Gắn nó từ một nhánh chưa merge nghĩa là đặt mìn: không có gì hỏng ngay lúc đó, và
+      # người kích nổ là người deploy infra vài ngày sau, vì một lý do hoàn toàn không liên quan.
+      #
+      # Tag theo SHA thì luôn gắn, kể cả từ nhánh: đó là thứ job deploy ghim vào .env, nên deploy
+      # thử một nhánh vẫn làm được, vẫn quay lui được, mà không đụng vào `:latest`.
+      - name: Tính danh sách tag
+        id: tags
+        run: |
+          TAGS="${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            TAGS="${TAGS},${REGISTRY}/${IMAGE_NAME}:latest"
+            echo "::notice::Chạy từ main — image được gắn thêm tag :latest."
+          else
+            echo "::notice::Chạy từ ${GITHUB_REF} (không phải main) — chỉ tag theo SHA, :latest giữ nguyên."
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-#      - name: Deploy to server
-#        uses: appleboy/ssh-action@v1
-#        with:
-#          host: ${{ secrets.SERVER_IP }}
-#          username: ${{ secrets.SERVER_USER }}
-#          password: ${{ secrets.SERVER_PASSWORD }}
-#          script: |
-#            cd /opt/socialapp
-#            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u truccoder --password-stdin
-#
-#            # --- TẠO FILE .ENV TỪ SECRETS ---
-#            echo "SPRING_PROFILES_ACTIVE=${{ secrets.SPRING_PROFILES_ACTIVE }}" > .env
-#            echo "AXIOM_TOKEN=${{ secrets.AXIOM_TOKEN }}" >> .env
-#
-#            # --- CHẠY DOCKER VỚI ĐÚNG TÊN FILE ---
-#            docker compose -f docker-compose.yml pull backend
-#            docker compose -f docker-compose.yml up -d
-#            docker image prune -f
+  # ─── 3. Đưa lên máy chủ ──────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy lên VPS
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Để GITHUB_TOKEN của chính lần chạy này pull được image từ GHCR trên máy chủ, khỏi cần PAT.
+      packages: read
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          # SSH thử khoá trước, không có khoá thì dùng mật khẩu. SERVER_SSH_KEY chưa tồn tại thì
+          # `key` nở ra chuỗi rỗng và bị bỏ qua — nên thêm secret đó là chuyển sang khoá xong,
+          # không phải sửa lại file này (quyết định 2026-08-21: tạm dùng mật khẩu).
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          script: |
+            set -e
+            cd /opt/socialapp
+
+            NEW_TAG="${{ github.sha }}"
+
+            # GHCR_TOKEN được ưu tiên nếu có (phòng khi package trên GHCR không liên kết với repo);
+            # không có thì dùng GITHUB_TOKEN của lần chạy này, nhờ `packages: read` ở trên.
+            GHCR_USER="truccoder"
+            GHCR_PASS="${{ secrets.GHCR_TOKEN }}"
+            if [ -z "$GHCR_PASS" ]; then
+              GHCR_USER="${{ github.actor }}"
+              GHCR_PASS="${{ secrets.GITHUB_TOKEN }}"
+            fi
+            echo "$GHCR_PASS" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            # ─── Ghim tag vào .env ────────────────────────────────────────────────────────────
+            #
+            # ⚠️ ĐỌC-SỬA-GHI, KHÔNG PHẢI GHI ĐÈ. Bản comment cũ của bước này mở đầu bằng
+            #     echo "SPRING_PROFILES_ACTIVE=..." > .env
+            # tức là truncate .env của production xuống còn hai biến — mất JWT_SECRET, DB_PASSWORD,
+            # MINIO_ROOT_*, NEO4J_PASSWORD, COLUMN_ENCRYPTION_KEY. Bỏ comment nó ra là làm hỏng
+            # production, chứ không phải là khôi phục deploy.
+            #
+            # Việc dựng .env từ secrets là của repo infra và chỉ nên có đúng một nơi làm. Ở đây chỉ
+            # đụng vào MỘT dòng.
+            touch .env
+            PREV_TAG="$(grep -m1 '^BACKEND_IMAGE_TAG=' .env | cut -d= -f2- || true)"
+            if [ -z "$PREV_TAG" ]; then
+              PREV_TAG="latest"
+            fi
+            grep -v '^BACKEND_IMAGE_TAG=' .env > .env.next || true
+            echo "BACKEND_IMAGE_TAG=${NEW_TAG}" >> .env.next
+            mv .env.next .env
+            echo "Tag trước: ${PREV_TAG}  ->  tag mới: ${NEW_TAG}"
+
+            # Chỉ dựng lại backend. `up -d` trần sẽ đụng cả sáu service, trong đó có Neo4j — thứ mà
+            # một lần dựng lại kèm mật khẩu lệch là mất kết nối cho tới khi có người sửa bằng tay.
+            docker compose -f docker-compose.prod.yml pull backend
+            docker compose -f docker-compose.prod.yml up -d backend
+
+            # ─── Đợi container tự khai là phục vụ được ────────────────────────────────────────
+            #
+            # `up -d` trả về 0 chỉ nghĩa là Compose đã làm xong việc của nó. Backend cần khoảng một
+            # phút cho Flyway, và một container khởi động rồi chết ngay vẫn để `up -d` thành công.
+            #
+            # Hỏi HEALTHCHECK của image (nhóm readiness = readinessState + db, xem Dockerfile) chứ
+            # không tự curl từ máy chủ: backend không publish cổng nào, và Caddy chỉ định tuyến
+            # /v1/* nên /actuator/health gọi từ ngoài sẽ rơi vào web-ui và trả 200 của một dịch vụ
+            # khác — đúng loại kiểm tra luôn xanh.
+            CID="$(docker compose -f docker-compose.prod.yml ps -q backend)"
+            HEALTHY=""
+            for i in $(seq 1 60); do
+              STATE="$(docker inspect -f '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo missing)"
+              if [ "$STATE" = "healthy" ]; then
+                HEALTHY="yes"
+                echo "::notice::Backend healthy sau khoảng $((i * 5))s."
+                break
+              fi
+              if [ "$STATE" = "missing" ]; then
+                echo "Container backend không còn tồn tại — thoát vòng đợi sớm."
+                break
+              fi
+              sleep 5
+            done
+
+            if [ -n "$HEALTHY" ]; then
+              # `|| true`: dọn image cũ chỉ là dọn rác, không phải điều kiện thành công của deploy.
+              # Daemon từ chối chạy hai prune cùng lúc ("a prune operation is already running") —
+              # gặp lúc cron dọn dẹp trên máy chủ hoặc một lần deploy khác chồng lấn — không nên vì
+              # thế mà báo đỏ cả job trong khi backend đã healthy.
+              docker image prune -f || echo "::warning::docker image prune thất bại (bỏ qua) — không ảnh hưởng deploy vì backend đã healthy."
+              exit 0
+            fi
+
+            # ─── Quay lui ─────────────────────────────────────────────────────────────────────
+            #
+            # PREV_TAG là tag đã ghim ở lần deploy thành công gần nhất. Lần chạy ĐẦU TIÊN của
+            # workflow này chưa có gì ghim nên nó rơi về "latest" — và "latest" chỉ có nghĩa nếu
+            # lần build gần nhất từ main tạo ra nó. Từ lần thứ hai trở đi thì đây là mốc thật.
+            echo "::error::Backend không healthy sau 300s — quay lui về ${PREV_TAG}."
+            docker compose -f docker-compose.prod.yml logs --tail 60 backend
+            grep -v '^BACKEND_IMAGE_TAG=' .env > .env.next || true
+            echo "BACKEND_IMAGE_TAG=${PREV_TAG}" >> .env.next
+            mv .env.next .env
+            docker compose -f docker-compose.prod.yml pull backend
+            docker compose -f docker-compose.prod.yml up -d backend
+            exit 1

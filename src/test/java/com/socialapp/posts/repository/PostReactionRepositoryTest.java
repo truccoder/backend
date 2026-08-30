@@ -1,6 +1,7 @@
 package com.socialapp.posts.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 import java.util.Map;
 
@@ -232,6 +233,55 @@ class PostReactionRepositoryTest extends AbstractIntegrationTest {
     void emptyInputShortCircuits() {
       // When / Then
       assertThat(postReactionRepository.countByPostIds(java.util.List.of())).isEmpty();
+    }
+  }
+
+  @Nested
+  @DisplayName("countByTypeForPostIds")
+  class CountByTypeForPostIds {
+
+    @Test
+    @DisplayName("breaks a whole page of posts down by type in one query")
+    void groupsByPostAndType() {
+      // Given - the batch sibling of countByType. That one answers for a single open post, which
+      // is the wrong shape for a feed: ten cards meant ten extra requests to draw three icons.
+      Integer a = userRepository.saveAndFlush(user("t1@example.com", "t1")).getId();
+      Integer b = userRepository.saveAndFlush(user("t2@example.com", "t2")).getId();
+      Integer secondPostId = postRepository.saveAndFlush(post(a)).getId();
+      postReactionRepository.saveAndFlush(reaction(a, postId, ReactionType.LIKE));
+      postReactionRepository.saveAndFlush(reaction(b, postId, ReactionType.LIKE));
+      postReactionRepository.saveAndFlush(reaction(a, secondPostId, ReactionType.INSIGHT));
+
+      // When
+      Map<Integer, Map<ReactionType, Long>> summaries =
+          postReactionRepository.countByTypeForPostIds(java.util.List.of(postId, secondPostId));
+
+      // Then - the same rows countByPostIds totals as "2 and 1", split by type
+      assertThat(summaries.get(postId)).containsExactly(entry(ReactionType.LIKE, 2L));
+      assertThat(summaries.get(secondPostId)).containsExactly(entry(ReactionType.INSIGHT, 1L));
+    }
+
+    @Test
+    @DisplayName("omits a post with no reactions rather than mapping it to an empty map")
+    void omitsUnreactedPosts() {
+      // Given
+      Integer a = userRepository.saveAndFlush(user("t3@example.com", "t3")).getId();
+      Integer emptyPostId = postRepository.saveAndFlush(post(a)).getId();
+      postReactionRepository.saveAndFlush(reaction(a, postId, ReactionType.CLAP));
+
+      // When
+      Map<Integer, Map<ReactionType, Long>> summaries =
+          postReactionRepository.countByTypeForPostIds(java.util.List.of(postId, emptyPostId));
+
+      // Then - the caller substitutes an empty map, so the absent key is the contract
+      assertThat(summaries).containsOnlyKeys(postId);
+    }
+
+    @Test
+    @DisplayName("returns an empty map without querying for an empty id list")
+    void emptyInputShortCircuits() {
+      // When / Then - "IN ()" is a syntax error in Postgres, and an empty page is ordinary
+      assertThat(postReactionRepository.countByTypeForPostIds(java.util.List.of())).isEmpty();
     }
   }
 }

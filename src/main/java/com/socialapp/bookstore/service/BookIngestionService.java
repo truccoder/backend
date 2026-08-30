@@ -11,6 +11,7 @@ import com.socialapp.bookstore.dto.CreateBookRequestDto;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.FileFormat;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.common.utils.FileExtensions;
 
@@ -134,6 +135,10 @@ public class BookIngestionService {
             .fileKey(files.fileKey())
             .previewFileKey(files.previewFileKey())
             .coverImageKey(files.coverKey())
+            // Ternary chứ không dựa vào @Builder.Default: default chỉ áp dụng khi KHÔNG gọi
+            // .category(...), còn gọi với null thì ghi đè default thành null — và cột là NOT NULL.
+            .category(
+                request.getCategory() == null ? LearningCategory.OTHER : request.getCategory())
             .fileFormat(facts.format())
             .fileSizeBytes(facts.fileSizeBytes())
             .totalPages(facts.totalPages())

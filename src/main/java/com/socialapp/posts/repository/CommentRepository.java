@@ -16,6 +16,35 @@ import com.socialapp.posts.entity.CommentEntity;
 public interface CommentRepository extends JpaRepository<CommentEntity, Integer> {
   List<CommentEntity> findByPostIdOrderByCreatedAtAsc(Integer postId);
 
+  /**
+   * One page of a post's top-level comments, oldest first.
+   *
+   * <p>Paged by comment id, not by {@code createdAt}: two comments can share a timestamp and there
+   * is no second column to break the tie, so a timestamp cursor either repeats or skips a row at
+   * a page boundary. Ids come from a sequence, so ascending id is ascending insertion order with a
+   * unique key — the same reasoning as {@code PostRepository.findByAuthorForViewer}, mirrored
+   * because a comment thread reads oldest-first.
+   *
+   * <p>Only roots are paged. Replies are fetched for the roots on the page (see
+   * {@code findByParentIdInOrderByCreatedAtAsc}), so a reply never arrives without its parent —
+   * paging the flat list would have done exactly that.
+   */
+  @Query(
+      """
+      SELECT c FROM CommentEntity c
+      WHERE c.postId = :postId
+        AND c.parentId IS NULL
+        AND (:cursor IS NULL OR c.id > :cursor)
+      ORDER BY c.id ASC
+      """)
+  List<CommentEntity> findRootCommentsForPage(
+      @Param("postId") Integer postId,
+      @Param("cursor") Integer cursor,
+      org.springframework.data.domain.Pageable pageable);
+
+  /** Every reply belonging to the given root comments, in one query rather than one per root. */
+  List<CommentEntity> findByParentIdInOrderByCreatedAtAsc(Collection<Integer> parentIds);
+
   List<CommentEntity> findByPostIdAndParentIdIsNullOrderByCreatedAtAsc(Integer postId);
 
   List<CommentEntity> findByParentIdOrderByCreatedAtAsc(Integer parentId);

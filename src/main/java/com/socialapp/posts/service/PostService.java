@@ -4,11 +4,11 @@ import java.beans.FeatureDescriptor;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.springframework.beans.BeanUtils;
@@ -148,7 +148,11 @@ public class PostService {
     log.info("[authorId={}] createPost: ban check and tag validation passed", authorId);
 
     if (moderationProperties.isEnabled()) {
-      ModerationResult ruleResult = moderationRuleEngine.evaluate(authorId, request.getContent());
+      // The whole post, not just request.getContent(). See PostEntity#moderatableText: seven detail
+      // blocks carry free text that nothing used to read, so an ARTICLE with an empty body and the
+      // real content in articleDetails walked straight past the filter.
+      ModerationResult ruleResult =
+          moderationRuleEngine.evaluate(authorId, moderatableTextOf(request));
       log.info(
           "[authorId={}] createPost: rule engine result status={}, violations={}",
           authorId,
@@ -266,14 +270,22 @@ public class PostService {
       validateQuizDetails(request.getQuizDetails());
     }
 
+    // Merge first, then moderate the result. An edit that leaves a field out means "keep it", so
+    // moderating the request alone re-checked only what the caller happened to resend — and when
+    // `content` was omitted that was nothing at all. The merge is the same one the tag rules above
+    // compute by hand; running it here means the engine judges the post as it will actually be
+    // stored, across every detail block (see PostEntity#moderatableText).
+    //
+    // Safe to do before the check because a rejection throws, and the surrounding @Transactional
+    // rolls the entity back with it.
+    BeanUtils.copyProperties(request, post, nullPropertyNames(request));
+
     if (moderationProperties.isEnabled()) {
-      ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, request.getContent());
+      ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, post.moderatableText());
       if (ruleResult.isRejected()) {
         throw new ContentViolationException(ruleResult.getViolations());
       }
     }
-
-    BeanUtils.copyProperties(request, post, nullPropertyNames(request));
 
     // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
     // clearing it made "edit the caption" silently un-tag everybody.
@@ -423,6 +435,20 @@ public class PostService {
         .toArray(String[]::new);
   }
 
+  /**
+   * The text a not-yet-saved post would present to moderation.
+   *
+   * <p>{@code PostEntity#moderatableText} is the single definition of "everything a reader will
+   * see", and the create path has no entity yet when the rule engine runs — it deliberately runs
+   * before anything is written. Rather than keep a second list of fields in sync with the entity's,
+   * this projects the request onto a throwaway entity and asks it. One list, two callers.
+   */
+  private String moderatableTextOf(CreatePostRequestDto request) {
+    PostEntity projection = new PostEntity();
+    BeanUtils.copyProperties(request, projection);
+    return projection.moderatableText();
+  }
+
   private void validateTags(
       PostVisibility visibility, List<Integer> taggedUserIds, String content) {
     if (PostVisibility.PRIVATE.equals(visibility) && !CollectionUtils.isEmpty(taggedUserIds)) {
@@ -560,16 +586,12 @@ public class PostService {
       post.setHashtags(new HashSet<>());
     }
 
-    // Decrease usage count for old hashtags if updating
+    // Decrease usage count for old hashtags if updating. In the database, like the increment
+    // below: read-minus-one-write in Java lost a concurrent decrement on a shared tag, and a
+    // counter nothing recomputes from the join table never recovers from that.
     if (!post.getHashtags().isEmpty()) {
-      post.getHashtags()
-          .forEach(
-              h -> {
-                if (h.getUsageCount() != null && h.getUsageCount() > 0) {
-                  h.setUsageCount(h.getUsageCount() - 1);
-                }
-              });
-      hashtagRepository.saveAll(post.getHashtags());
+      hashtagRepository.decrementUsage(
+          post.getHashtags().stream().map(HashtagEntity::getName).toArray(String[]::new));
     }
 
     Set<HashtagEntity> newHashtags = new HashSet<>();
@@ -577,30 +599,18 @@ public class PostService {
       Matcher matcher = HASHTAG_PATTERN.matcher(post.getContent());
       Set<String> tagNames = new HashSet<>();
       while (matcher.find()) {
-        tagNames.add(matcher.group(1).toLowerCase());
+        tagNames.add(matcher.group(1).toLowerCase(Locale.ROOT));
       }
 
       if (!tagNames.isEmpty()) {
-        List<HashtagEntity> existingTags = hashtagRepository.findByNameIn(tagNames);
-        Set<String> existingNames =
-            existingTags.stream().map(HashtagEntity::getName).collect(Collectors.toSet());
-
-        for (String name : tagNames) {
-          if (!existingNames.contains(name)) {
-            HashtagEntity newTag = new HashtagEntity();
-            newTag.setName(name);
-            newTag.setUsageCount(0);
-            existingTags.add(newTag);
-          }
-        }
-
-        // Increase usage count for tags that will be linked
-        for (HashtagEntity tag : existingTags) {
-          tag.setUsageCount((tag.getUsageCount() == null ? 0 : tag.getUsageCount()) + 1);
-        }
-
-        List<HashtagEntity> savedTags = hashtagRepository.saveAll(existingTags);
-        newHashtags.addAll(savedTags);
+        // Create-then-increment, both in the database. The previous version selected the existing
+        // tags, built the missing ones in memory, incremented every counter in Java and saved the
+        // lot — which lost a concurrent increment on a shared tag, and raced two posters straight
+        // into the UNIQUE constraint on t_hashtags.name. Postgres arbitrates both now.
+        String[] names = tagNames.toArray(String[]::new);
+        hashtagRepository.createMissing(names);
+        hashtagRepository.incrementUsage(names);
+        newHashtags.addAll(hashtagRepository.findByNameIn(tagNames));
       }
     }
 

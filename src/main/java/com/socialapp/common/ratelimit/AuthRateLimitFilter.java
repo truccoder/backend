@@ -93,10 +93,8 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     response
         .getWriter()
         .write(
-            """
-            {"code":429,"error":"Too Many Requests",\
-            "message":"Too many authentication attempts. Please try again later.",\
-            "path":"%s"}"""
-                .formatted(request.getRequestURI()));
+            RateLimitErrorBody.tooManyRequests(
+                "Too many authentication attempts. Please try again later.",
+                request.getRequestURI()));
   }
 }
