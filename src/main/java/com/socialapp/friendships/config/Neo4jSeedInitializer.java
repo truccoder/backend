@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.Session;
@@ -137,7 +138,7 @@ public class Neo4jSeedInitializer {
         content
             .lines()
             .filter(line -> !line.stripLeading().startsWith("//"))
-            .reduce("", (a, b) -> a + "\n" + b);
+            .collect(Collectors.joining("\n"));
 
     return Arrays.stream(withoutComments.split(";"))
         .map(String::strip)

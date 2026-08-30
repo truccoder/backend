@@ -16,8 +16,8 @@ bộ seed review được, thay vì mỗi lần sinh lại là một diff 120.00
 
 BA LỚP TỰ CANH, và cả ba đều canh những thứ KHÔNG CÓ TEST NÀO BẮT ĐƯỢC:
 
-  1. Trùng số version. Flyway phân giải một dãy version duy nhất trên cả ba location, nên một số
-     đã bị db/migration chiếm sẽ làm app KHÔNG KHỞI ĐỘNG ĐƯỢC. Dãy này đã bị chiếm mất hai lần
+  1. Trùng số version. Flyway phân giải một dãy version duy nhất trên cả db/migration lẫn db/seed,
+     nên một số đã bị db/migration chiếm sẽ làm app KHÔNG KHỞI ĐỘNG ĐƯỢC. Dãy này đã bị chiếm mất hai lần
      trong ba ngày (V71-V73, rồi V74/V76/V77/V78) — nên đây là kiểm tra chạy mỗi lần sinh, không
      phải một lời dặn trong tài liệu.
 
@@ -36,6 +36,7 @@ import random
 import re
 import sys
 import unicodedata
+from datetime import date, timedelta
 from pathlib import Path
 
 # Trên Windows, stdout của Python mặc định là cp1252 và KHÔNG mã hoá được tiếng Việt: mọi dòng
@@ -49,10 +50,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SEED = 20260828
 
+# Mốc "hôm nay" của bộ seed. GIỮ CỐ ĐỊNH, KHÔNG dùng date.today(): đầu ra phải tất định (xem chú
+# thích đầu file). Chỉ dùng cho vài giá trị thời gian TUYỆT ĐỐI không viết được dưới dạng
+# `now() - INTERVAL` — startTime/endTime của EVENT và endDate của POLL, vốn là chuỗi ISO nằm trong
+# jsonb. Mọi mốc thời gian khác vẫn tương đối theo now() lúc migrate. Regen lâu sau mốc này thì
+# cập nhật hằng số rồi chạy lại — cùng tinh thần với ngày xác minh trong book_catalog.py.
+TODAY = date(2026, 8, 30)
+
 ROOT = Path(__file__).resolve().parents[2]
 SEED_DIR = ROOT / "src" / "main" / "resources" / "db" / "seed"
 MIGRATION_DIR = ROOT / "src" / "main" / "resources" / "db" / "migration"
-SEED_DEV_DIR = ROOT / "src" / "main" / "resources" / "db" / "seed-dev"
 # Cypher nằm CÙNG CHỖ với các file SQL mà nó phải khớp, và được đóng vào jar nên
 # Neo4jSeedInitializer đọc được ở mọi môi trường — kể cả production, nơi không có
 # docker-compose nào của repo này chạy.
@@ -66,6 +73,12 @@ ID_MAP = ROOT / "scripts" / "seed" / "id-map.md"
 # Vì sao bắt đầu ở 80: db/migration đã dùng tới V78 và db/seed đã có V75/V79. Số cao nhất đang
 # tồn tại là 79. Bỏ trống 75 và 79 sau khi xoá hai file đó là chấp nhận được — Flyway không đòi
 # dãy liền mạch, và out-of-order: false chỉ cấm chèn số THẤP HƠN số đã apply.
+#
+# BỘ SEED ĐÃ ĐƯỢC RE-BASELINE 2026-08-30: V88 mang lại parent_node_id (cây lộ trình), và mọi file
+# V81-V92 được sinh lại một lượt. Deploy nào ship bản này PHẢI drop schema production trước khi
+# migrate (xem scripts/prod/rebaseline-seed.sql và README) — nếu không, checksum V88 cũ lệch với
+# file mới và Flyway chặn khởi động. V95 (một UPDATE gắn cây chạy sau V88) đã bị xoá: sau re-baseline
+# nó thừa.
 HAND_WRITTEN = {80: "seed_reset", 92: "seed_ui_fixtures"}
 GENERATED = {
     81: "seed_users",
@@ -278,13 +291,13 @@ def jsonb(items):
 # ═══ Lớp tự canh 1: trùng số version ═══════════════════════════════════════════════════════════
 
 def scan_existing_versions():
-    """Số version đang tồn tại, kèm đường dẫn, gom từ cả ba location.
+    """Số version đang tồn tại, kèm đường dẫn, gom từ cả db/migration lẫn db/seed.
 
-    Quét cả ba vì Flyway phân giải chung một dãy: trùng số giữa db/seed và db/migration là lỗi
+    Quét cả hai vì Flyway phân giải chung một dãy: trùng số giữa db/seed và db/migration là lỗi
     khởi động ("Found more than one migration with version N"), không phải cảnh báo bỏ qua được.
     """
     found = {}
-    for directory in (MIGRATION_DIR, SEED_DIR, SEED_DEV_DIR):
+    for directory in (MIGRATION_DIR, SEED_DIR):
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("V*.sql")):
@@ -307,8 +320,8 @@ def guard_version_collisions(will_write):
         sys.exit(
             "DỪNG — trùng số version Flyway.\n"
             + "\n".join(problems)
-            + "\n\nFlyway dùng MỘT dãy version cho cả ba location, nên trùng số làm app không\n"
-            "khởi động được. Dời dãy seed lên trên số cao nhất đang tồn tại rồi chạy lại."
+            + "\n\nFlyway dùng MỘT dãy version cho cả db/migration lẫn db/seed, nên trùng số làm\n"
+            "app không khởi động được. Dời dãy seed lên trên số cao nhất đang tồn tại rồi chạy lại."
         )
 
 
@@ -512,8 +525,9 @@ def build_people(rng):
             years = rng.choice([0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 7, 8, 9, 10, 12, 15])
         seniority = next(level for cutoff, level in SENIORITY_BY_YEARS if years <= cutoff)
 
-        # 18 người thường cố ý KHÔNG có hồ sơ nghề nghiệp: hồ sơ là tuỳ chọn trong ứng dụng, và
-        # nếu ai cũng có thì nhánh "chưa điền hồ sơ" của trang cá nhân không bao giờ chạy.
+        # 19 người thường cố ý KHÔNG có hồ sơ nghề nghiệp (9004, 9005, cộng mọi uid chia hết cho
+        # 29): hồ sơ là tuỳ chọn trong ứng dụng, và nếu ai cũng có thì nhánh "chưa điền hồ sơ" của
+        # trang cá nhân không bao giờ chạy.
         has_profile = not is_admin and uid not in {9004, 9005} and (uid % 29) != 0
 
         # Avatar: cứ 11 người thì 1 người để trống, để nhánh rơi-về-chữ-viết-tắt có dữ liệu. Hai
@@ -652,7 +666,7 @@ known_tech_stack / interested_domains / work_history là jsonb. interested_domai
 từ vựng mà t_projects.tags dùng (xem DOMAINS trong generator) — MatchmakingService so hai cột này
 bằng phép giao, nên hai kho từ khác nhau làm gợi ý dự án rỗng mà không báo lỗi gì.
 
-18 người thường cố ý không có hồ sơ: hồ sơ là tuỳ chọn, và nếu ai cũng có thì nhánh "chưa điền
+19 người thường cố ý không có hồ sơ: hồ sơ là tuỳ chọn, và nếu ai cũng có thì nhánh "chưa điền
 hồ sơ" của trang cá nhân không bao giờ chạy.
 """)
     stack_case = "\n".join(
@@ -1422,28 +1436,39 @@ def build_posts(rng, people, edges):
         return rng.choices(weighted_authors, weights=weight_list)[0]
 
     # ── EVENT ──────────────────────────────────────────────────────────────────────────────────
+    # ~70% sự kiện SẮP diễn ra (RSVP mới có nghĩa), ~30% ĐÃ diễn ra để nhánh "sự kiện kết thúc" có
+    # dữ liệu. Chia bằng (i*7)%10 < 7 — mỗi giá trị 0-9 xuất hiện đúng một lần mỗi 10 nên tỉ lệ
+    # đúng 70/30 mà vẫn rải đều. Ngày tính từ TODAY (hằng số cố định). created_at của bài (age)
+    # đặt tường minh cho khớp: sự kiện tương lai thì vừa mới đăng, sự kiện quá khứ thì đăng trước
+    # khi nó diễn ra.
     start, count = POST_RANGES["EVENT"]
     for i in range(count):
         pid = start + i
         topic, _ = TOPICS[i % len(TOPICS)]
         author = pick_author()
         online = i % 3 == 0
-        month = (i % 12) + 1
-        day = (i % 27) + 1
+        if (i * 7) % 10 < 7:
+            day_offset = rng.randint(3, 90)
+            announced_days_ago = rng.randint(1, 45)
+            tail = "đăng ký sớm còn chỗ nhé cả nhà."
+        else:
+            day_offset = -rng.randint(2, 120)
+            announced_days_ago = -day_offset + rng.randint(3, 20)
+            tail = "buổi này đã diễn ra, video và slide mình để ở phần bình luận."
+        when = TODAY + timedelta(days=day_offset)
         detail = {
             "eventTitle": f"Buổi chia sẻ: {topic}",
             "eventDescription": "Trình bày 30 phút, hỏi đáp 30 phút. Ưu tiên tình huống gặp thật "
                                 "trên hệ thống đang chạy.",
-            "startTime": f"2026-{month:02d}-{day:02d}T18:30:00+07:00",
-            "endTime": f"2026-{month:02d}-{day:02d}T21:00:00+07:00",
+            "startTime": f"{when.isoformat()}T18:30:00+07:00",
+            "endTime": f"{when.isoformat()}T21:00:00+07:00",
             "timezone": "Asia/Ho_Chi_Minh",
             "location": None if online else EVENT_PLACES[i % len(EVENT_PLACES)],
             "onlineUrl": f"https://meet.google.com/seed-event-{pid}" if online else None,
             "maxAttendees": 20 + (i % 8) * 10,
         }
-        add("EVENT", pid,
-            f"Buổi chia sẻ số {i + 1} về {topic} — đăng ký sớm còn chỗ nhé cả nhà.",
-            author, detail=detail)
+        add("EVENT", pid, f"Buổi chia sẻ số {i + 1} về {topic} — {tail}",
+            author, detail=detail, age=announced_days_ago)
 
     # ── CODE_SNIPPET ───────────────────────────────────────────────────────────────────────────
     start, count = POST_RANGES["CODE_SNIPPET"]
@@ -1511,9 +1536,18 @@ def build_posts(rng, people, edges):
         ("Thư mục seed nên chạy ở đâu?",
          ["Chỉ dev", "Dev và staging", "Cả production", "Không dùng seed"]),
     ]
+    # ~75% khảo sát CÒN mở (endDate ở tương lai), ~25% ĐÃ đóng — nhánh "poll kết thúc, chỉ xem
+    # kết quả" cần dữ liệu. Poll đã đóng thì created_at phải nằm TRƯỚC endDate, nên đặt age tường minh.
     for i in range(count):
         pid = start + i
         question, options = poll_sets[i % len(poll_sets)]
+        if (i * 3) % 4 != 0:
+            end = TODAY + timedelta(days=rng.choice([10, 20, 30, 45, 90]))
+            age = None
+        else:
+            closed_days_ago = rng.choice([4, 10, 20, 45])
+            end = TODAY - timedelta(days=closed_days_ago)
+            age = closed_days_ago + rng.randint(7, 90)
         detail = {
             "question": question,
             "options": [
@@ -1521,10 +1555,10 @@ def build_posts(rng, people, edges):
                 for j, text in enumerate(options)
             ],
             "allowMultipleVotes": i % 4 == 0,
-            "endDate": "2026-12-31T23:59:59+07:00",
+            "endDate": f"{end.isoformat()}T23:59:59+07:00",
         }
         add("POLL", pid, f"Khảo sát nhanh số {i + 1}, mong mọi người bấm giúp.", pick_author(),
-            detail=detail)
+            detail=detail, age=age)
 
     # ── LINK ───────────────────────────────────────────────────────────────────────────────────
     start, count = POST_RANGES["LINK"]
@@ -1878,14 +1912,21 @@ def build_engagement(rng, people, posts, quiz_posts, edges, author_weights):
     for pid in regulars[:7]:
         assert state_of[pid] == ("PUBLIC", "APPROVED"), (pid, state_of[pid])
 
+    age_by_cid = {}
+
     def add_comment(post_id, author, content, parent=None, age=None):
         nonlocal next_cid
         cid = next_cid
         next_cid += 1
-        comments.append((cid, post_id, author,
-                         content,
-                         parent,
-                         age if age is not None else rng.randint(1, 300)))
+        if age is None:
+            if parent is not None and parent in age_by_cid:
+                # Trả lời BẮT BUỘC mới hơn bình luận nó trả lời — một trả lời "cũ hơn" cha là thứ
+                # luồng thật không tạo ra được, và nhìn rất vô lý khi mở luồng ra xem.
+                age = rng.randint(1, max(1, age_by_cid[parent] - 1))
+            else:
+                age = rng.randint(1, 300)
+        comments.append((cid, post_id, author, content, parent, age))
+        age_by_cid[cid] = age
         return cid
 
     def other_than(author_id):
@@ -3424,60 +3465,154 @@ SELECT setval('socialapp.q_post_reports_id',
 # Danh mục lấy đúng enum TrendingCategory: OPENSOURCE, EVENT, NEW_TECH, REGULATION, MINDSET,
 # TOOL, CAREER, OTHER. Gán sai một giá trị là IllegalArgumentException lúc đọc entity, không phải
 # một ô trống trên giao diện.
+#
+# (tiêu đề, category, source, author, summary, tags). Mỗi tin gắn NGUỒN tự nhiên của nó thay vì
+# rải nguồn theo vị trí: một tiêu đề GitHub crawl từ Hacker News nhìn là biết dữ liệu bịa. author
+# theo đúng thứ crawler thật ghi — HACKER_NEWS là handle người đăng, GITHUB là owner login,
+# DEV_TO là tên tác giả. image_url để NULL: HN cũng không có ảnh, và TrendingCrawlScheduler chạy
+# mỗi giờ sẽ lấp ảnh thật ngay khi BE online — bộ này chỉ là nền cho lúc offline / giờ đầu.
 TRENDING = [
-    ("Java 25 phát hành bản hỗ trợ dài hạn", "NEW_TECH"),
-    ("Postgres 18 cải thiện đáng kể tốc độ VACUUM", "NEW_TECH"),
-    ("Redis đổi giấy phép lần thứ hai trong hai năm", "REGULATION"),
-    ("Kubernetes bỏ hỗ trợ một API đã đánh dấu lỗi thời", "NEW_TECH"),
-    ("Báo cáo lương ngành phần mềm Việt Nam quý này", "CAREER"),
-    ("Xu hướng tuyển dụng nghiêng về kỹ sư đa năng", "CAREER"),
-    ("Nhiều đội quay lại monolith sau vài năm microservices", "MINDSET"),
-    ("Thảo luận: có nên viết test cho mã sắp bỏ", "MINDSET"),
-    ("Một thư viện phổ biến chuyển sang quỹ mã nguồn mở", "OPENSOURCE"),
-    ("Hướng dẫn xoay vòng khoá bí mật mà không gián đoạn", "TOOL"),
-    ("Hội thảo kỹ thuật thường niên mở đăng ký", "EVENT"),
-    ("Bộ công cụ dòng lệnh mới cho việc dò hiệu năng", "TOOL"),
+    ("Java 25 ra bản LTS, mặc định bật generational ZGC", "NEW_TECH", "HACKER_NEWS", "todsacerdoti",
+     "Bản hỗ trợ dài hạn kế tiếp sau Java 21. Đáng chú ý nhất là ZGC thế hệ mới thành mặc định và "
+     "structured concurrency rời khỏi preview.", ["java", "jvm", "gc"]),
+    ("PostgreSQL 18: I/O bất đồng bộ và VACUUM nhanh hơn hẳn", "NEW_TECH", "HACKER_NEWS", "tptacek",
+     "io_uring cho đường đọc, cùng một lượt VACUUM gom được nhiều dead tuple hơn mỗi vòng. Người "
+     "chạy bảng lớn nên đọc kỹ phần thay đổi cấu hình mặc định.", ["postgresql", "database", "performance"]),
+    ("Redis đổi giấy phép lần thứ hai trong hai năm", "REGULATION", "HACKER_NEWS", "ingve",
+     "Bản mới quay lại một giấy phép gần với mã nguồn mở hơn sau làn sóng chỉ trích và sự ra đời "
+     "của Valkey. Bài phân tích lại toàn bộ dòng thời gian.", ["redis", "license", "opensource"]),
+    ("Kubernetes 1.34 gỡ bỏ vài API đã đánh dấu lỗi thời từ lâu", "NEW_TECH", "HACKER_NEWS", "mooreds",
+     "Danh sách API bị gỡ và cách dò trong cụm trước khi nâng cấp. Vài Helm chart phổ biến vẫn "
+     "còn tham chiếu phiên bản cũ.", ["kubernetes", "devops", "migration"]),
+    ("polars — DataFrame trên Rust, API giống pandas", "OPENSOURCE", "GITHUB", "pola-rs",
+     "Thư viện xử lý dữ liệu dạng cột, chạy song song và lười đánh giá. Bản mới thêm streaming "
+     "engine cho tập dữ liệu lớn hơn RAM.", ["rust", "python", "data"]),
+    ("bun — runtime JavaScript gộp cả bundler và test runner", "OPENSOURCE", "GITHUB", "oven-sh",
+     "Bản mới tập trung vào tương thích Node và tốc độ cài phụ thuộc. Nhiều dự án chuyển CI sang "
+     "bun chỉ để rút ngắn bước install.", ["javascript", "nodejs", "tooling"]),
+    ("duckdb — cơ sở dữ liệu phân tích chạy trong tiến trình", "OPENSOURCE", "GITHUB", "duckdb",
+     "SQLite cho phân tích: một file, không server, đọc thẳng Parquet và CSV. Bản mới cải thiện "
+     "bộ nhớ khi join tập lớn.", ["database", "analytics", "sql"]),
+    ("Nhiều đội quay lại monolith sau vài năm microservices", "MINDSET", "DEV_TO", "Nguyễn Minh Đức",
+     "Ghi lại quá trình gộp mười hai dịch vụ về ba, và những chi phí ẩn của microservices mà "
+     "sơ đồ kiến trúc không cho thấy.", ["architecture", "microservices", "monolith"]),
+    ("Có nên viết test cho đoạn mã sắp bị xoá?", "MINDSET", "DEV_TO", "Trần Thu Hà",
+     "Lập luận cho cả hai phía, và một quy tắc đơn giản: test để mã đổi được an toàn, nên mã "
+     "không đổi nữa thì test cũng hết việc.", ["testing", "mindset", "refactoring"]),
+    ("Đọc query plan trước khi thêm index", "TOOL", "DEV_TO", "Phạm Quốc Bảo",
+     "Hướng dẫn từng bước đọc EXPLAIN ANALYZE của Postgres, kèm bốn dấu hiệu cho biết index sẽ "
+     "không giúp gì.", ["postgresql", "performance", "database"]),
+    ("Xoay vòng khoá bí mật mà không gián đoạn dịch vụ", "TOOL", "DEV_TO", "Lê Hoàng Nam",
+     "Mẫu hai khoá song song: phát khoá mới, chấp nhận cả hai trong thời gian chuyển tiếp, rồi "
+     "mới thu hồi khoá cũ. Kèm ví dụ cho JWT và khoá API.", ["security", "secrets", "operations"]),
+    ("uv — trình quản lý gói Python viết bằng Rust", "TOOL", "GITHUB", "astral-sh",
+     "Thay thế pip và virtualenv, giải phụ thuộc nhanh hơn nhiều lần. Bản mới thêm khoá phiên "
+     "bản khoá liên nền tảng.", ["python", "packaging", "tooling"]),
+    ("Báo cáo lương ngành phần mềm Việt Nam nửa cuối năm", "CAREER", "HACKER_NEWS", "mooreds",
+     "Tổng hợp từ hơn ba nghìn phản hồi: mức trung vị theo cấp bậc, chênh lệch giữa các thành "
+     "phố, và tác động của làm việc từ xa lên lương.", ["career", "salary", "vietnam"]),
+    ("Thị trường tuyển dụng nghiêng về kỹ sư đa năng", "CAREER", "DEV_TO", "Đỗ Thị Lan",
+     "Phân tích tin tuyển dụng trong sáu tháng: số vị trí đòi cả hai đầu tăng, số vị trí chuyên "
+     "sâu một mảng giảm. Kèm góc nhìn nên phản ứng thế nào.", ["career", "hiring", "fullstack"]),
+    ("Phỏng vấn kỹ thuật không hỏi thuật toán", "CAREER", "DEV_TO", "Vũ Đình Khoa",
+     "Một quy trình dựa trên bài tập sát việc thật và đọc mã có sẵn, cùng dữ liệu cho thấy nó "
+     "dự đoán hiệu quả công việc tốt hơn.", ["career", "interview", "hiring"]),
+    ("Hội thảo Vietnam Web Summit mở đăng ký", "EVENT", "HACKER_NEWS", "ingve",
+     "Sự kiện thường niên về kỹ thuật web, năm nay có nhánh riêng cho hiệu năng và khả năng "
+     "truy cập. Vé sớm giới hạn số lượng.", ["event", "web", "conference"]),
+    ("GopherCon công bố danh sách diễn giả", "EVENT", "HACKER_NEWS", "todsacerdoti",
+     "Chủ đề tập trung vào công cụ, hồ sơ hiệu năng và các thay đổi sắp tới của bộ thu gom rác "
+     "trong Go.", ["event", "golang", "conference"]),
+    ("htmx 2.0: bớt JavaScript, trả HTML từ máy chủ", "NEW_TECH", "HACKER_NEWS", "tptacek",
+     "Bản chính thức của cách tiếp cận 'hypermedia làm trung tâm'. Bài viết so sánh thẳng với "
+     "một ứng dụng SPA tương đương về dòng mã và thời gian tải.", ["frontend", "htmx", "web"]),
+    ("SQLite thêm chế độ ghi đồng thời nhiều tiến trình", "NEW_TECH", "HACKER_NEWS", "ingve",
+     "Tính năng thử nghiệm cho phép nhiều tiến trình ghi mà không khoá toàn bộ file. Vẫn còn "
+     "cảnh báo rõ ràng về phạm vi dùng.", ["sqlite", "database", "concurrency"]),
+    ("OWASP cập nhật danh sách Top 10 rủi ro ứng dụng web", "REGULATION", "HACKER_NEWS", "tptacek",
+     "Lỗi cấu hình và lỗ hổng chuỗi cung ứng leo hạng. Bài viết đối chiếu từng mục với các sự "
+     "cố có thật trong năm.", ["security", "owasp", "appsec"]),
+    ("Quy định mới về lưu trữ dữ liệu người dùng trong nước", "REGULATION", "DEV_TO", "Hoàng Anh Tuấn",
+     "Tóm tắt phần liên quan tới đội kỹ thuật: dữ liệu nào phải đặt máy chủ trong nước, thời "
+     "hạn chuyển đổi, và ảnh hưởng lên lựa chọn nhà cung cấp đám mây.", ["regulation", "data", "compliance"]),
+    ("tokio — runtime bất đồng bộ cho Rust", "OPENSOURCE", "GITHUB", "tokio-rs",
+     "Bản mới cải thiện bộ lập lịch tác vụ và thêm công cụ theo dõi tác vụ bị treo. Nền tảng "
+     "của phần lớn dịch vụ mạng viết bằng Rust.", ["rust", "async", "networking"]),
+    ("ripgrep — tìm chuỗi trong mã nhanh hơn grep", "OPENSOURCE", "GITHUB", "BurntSushi",
+     "Công cụ dòng lệnh tôn trọng .gitignore và quét song song. Bài viết của tác giả giải thích "
+     "các lựa chọn thiết kế đứng sau tốc độ.", ["cli", "rust", "tooling"]),
+    ("Đo p99 thay vì trung bình, và vì sao điều đó quan trọng", "MINDSET", "DEV_TO", "Ngô Phương Linh",
+     "Một request chậm trong một trăm vẫn là một phần trăm người dùng bực bội. Bài viết chỉ cách "
+     "dựng biểu đồ phân vị và đọc nó.", ["performance", "observability", "metrics"]),
+    ("Ghi lại quyết định kiến trúc bằng một trang mỗi lần", "MINDSET", "DEV_TO", "Bùi Thanh Sơn",
+     "Mẫu ADR gọn: bối cảnh, lựa chọn, hệ quả, phương án đã loại. Đội mới vào đọc lại hiểu vì "
+     "sao hệ thống thành ra như bây giờ.", ["architecture", "documentation", "team"]),
+    ("k6 — kiểm thử tải viết bằng JavaScript", "TOOL", "GITHUB", "grafana",
+     "Kịch bản tải viết như mã thường, chạy được trong CI. Bản mới thêm báo cáo ngưỡng rõ ràng "
+     "hơn khi tích hợp pipeline.", ["testing", "performance", "load-testing"]),
+    ("OpenTelemetry ổn định phần logs, khép lại bộ ba tín hiệu", "NEW_TECH", "HACKER_NEWS", "mooreds",
+     "Sau metrics và traces, đặc tả logs đạt mốc ổn định. Nhiều thư viện bắt đầu bỏ định dạng "
+     "log riêng để theo chuẩn chung.", ["observability", "opentelemetry", "logging"]),
+    ("Terraform và cuộc dịch chuyển sang OpenTofu", "REGULATION", "HACKER_NEWS", "todsacerdoti",
+     "Một năm sau khi tách nhánh, bài viết tổng kết số dự án đã chuyển, khác biệt tính năng và "
+     "những gì cần lưu ý khi di trú state.", ["terraform", "opentofu", "infrastructure"]),
+    ("Zed — trình soạn thảo mã viết bằng Rust, mở mã nguồn", "OPENSOURCE", "GITHUB", "zed-industries",
+     "Tập trung vào độ trễ gõ phím và cộng tác thời gian thực. Bản mới thêm hỗ trợ gỡ lỗi tích "
+     "hợp cho vài ngôn ngữ.", ["editor", "rust", "tooling"]),
+    ("Học trong ngành: chọn thứ đáng học, bỏ qua thứ đang ồn ào", "CAREER", "DEV_TO", "Trịnh Gia Hân",
+     "Khung ra quyết định học cái gì: nền tảng lâu bền trước, công cụ theo nhu cầu công việc "
+     "sau, và cách nhận ra một xu hướng sẽ không trụ được.", ["career", "learning", "mindset"]),
+    ("Cách một đội nhỏ vận hành hạ tầng mà không cần trực đêm", "OTHER", "DEV_TO", "Lý Tuấn Kiệt",
+     "Ghi chép về việc chọn dịch vụ quản lý thay vì tự vận hành, đặt cảnh báo hành động được, "
+     "và viết runbook cho ba sự cố hay gặp nhất.", ["operations", "devops", "team"]),
+    ("Vì sao build CI của bạn chậm, và bốn cách rút ngắn", "OTHER", "DEV_TO", "Nguyễn Hải Đăng",
+     "Phân tích một pipeline mười tám phút xuống còn sáu: cache phụ thuộc, chạy song song, bỏ "
+     "bước trùng, và tách test chậm ra nhánh riêng.", ["cicd", "performance", "tooling"]),
+    ("caddy — web server tự động cấp chứng chỉ HTTPS", "OPENSOURCE", "GITHUB", "caddyserver",
+     "Cấu hình ngắn, HTTPS bật sẵn không cần thao tác. Bản mới cải thiện reverse proxy và thêm "
+     "chỉ số Prometheus mặc định.", ["web-server", "https", "devops"]),
 ]
 
 
 def emit_trending(rng):
-    f = SqlFile(91, "seed_trending", "40 tin xu hướng.")
+    f = SqlFile(91, "seed_trending",
+                f"{len(TRENDING)} tin xu hướng, mỗi tin có nguồn, tác giả và tóm tắt riêng.")
     f.note("""
 FILE NÀY SINH TỰ ĐỘNG bởi scripts/seed/generate_seed.py — sửa tay sẽ bị ghi đè.
 
-KHÔNG CÓ PHẦN GITHUB. Quyết định 25/08: không liên kết tài khoản nào với GitHub, nên t_github_stats
-để trống hẳn. Hệ quả cần biết trước, không phải lỗi: SkillVerificationService.verifyViaExternalApi
-tra bảng đó để tự xác minh kỹ năng, không có hàng nào thì nhánh này LUÔN TRẢ FALSE và mọi yêu cầu
-xác minh kỹ năng rơi về duyệt tay. Với buổi demo đây lại là điều tốt — hàng đợi quản trị có việc
-thật — nhưng phải ghi vào README, nếu không lần sau sẽ có người đi tìm lỗi trong hàm đó.
+KHÔNG CÓ PHẦN GITHUB STATS. Quyết định 25/08: không liên kết tài khoản nào với GitHub, nên
+t_github_stats để trống hẳn. Hệ quả cần biết trước, không phải lỗi:
+SkillVerificationService.verifyViaExternalApi tra bảng đó để tự xác minh kỹ năng, không có hàng
+nào thì nhánh này LUÔN TRẢ FALSE và mọi yêu cầu xác minh kỹ năng rơi về duyệt tay. Với buổi demo
+đây lại là điều tốt — hàng đợi quản trị có việc thật. (source GITHUB dưới đây là của tin xu hướng
+crawl từ GitHub Trending, không liên quan gì tới t_github_stats.)
 
 UNIQUE(source, source_id): source_id phải khác nhau từng dòng, nếu không chỉ chèn được một tin.
 
-source RẢI QUA BA HẰNG CỦA TrendingSource (HACKER_NEWS, DEV_TO, GITHUB). Enum đó có đúng ba giá
-trị — một hằng cho mỗi crawler còn sống — và KHÔNG có 'SEED'. Cột là varchar(50) không có CHECK
-nên một nhãn tự chế vẫn chèn được, rồi nổ ở Hibernate lúc đọc và làm GET /v1/api/trending trả 500.
-Thêm hằng 'SEED' vào enum thì rẻ hơn về phía seed nhưng đắt hơn nhiều ở chỗ khác: nó nới
-TrendingItemDto.source trong hợp đồng OpenAPI, tức client sinh ra ở frontend phải sinh lại theo.
-Bộ seed đi theo ứng dụng, không bắt ứng dụng đi theo mình.
+source lấy đúng BA HẰNG của TrendingSource (HACKER_NEWS, DEV_TO, GITHUB) — một hằng cho mỗi crawler
+còn sống, KHÔNG có 'SEED'. Cột là varchar(50) không có CHECK nên một nhãn tự chế vẫn chèn được,
+rồi nổ ở Hibernate lúc đọc và làm GET /v1/api/trending trả 500. Mỗi tin gắn nguồn tự nhiên của nó
+(GitHub cho repo, dev.to cho bài blog, HN cho tin tổng hợp) thay vì rải nguồn theo vị trí.
 
-URL vẫn trỏ tin-tuc.example.test dù nhãn nguồn là thật: .test là tên miền dành riêng, không định
-tuyến được (RFC 2606). Đổi sang news.ycombinator.com hay dev.to sẽ cho ra những liên kết trông
-thật rồi 404 khi bấm — tệ hơn một liên kết thấy ngay là dữ liệu mẫu.
+author theo đúng thứ crawler thật ghi: HACKER_NEWS là handle người đăng, GITHUB là owner login,
+DEV_TO là tên tác giả. image_url để NULL — HN cũng không có ảnh, và TrendingCrawlScheduler chạy
+mỗi giờ sẽ lấp ảnh thật ngay khi BE online. Đây chỉ là bộ nền cho lúc offline / giờ đầu.
+
+URL trỏ tin-tuc.example.test: .test là tên miền dành riêng, không định tuyến được (RFC 2606). Đổi
+sang news.ycombinator.com hay dev.to sẽ cho ra liên kết trông thật rồi 404 khi bấm — tệ hơn một
+liên kết thấy ngay là dữ liệu mẫu. Crawler thật ghi URL thật; bộ nền này thì không.
 """)
     f.rule()
     rows = []
-    sources = ["HACKER_NEWS", "DEV_TO", "GITHUB"]
-    for i in range(40):
-        title, category = TRENDING[i % len(TRENDING)]
-        age = rng.randint(1, 60)
+    for i, (title, category, source, author, summary, tags) in enumerate(TRENDING):
+        published = rng.randint(2, 75)
+        crawled = max(0, published - rng.choice([0, 0, 1, 2, 3]))
         rows.append(
-            f"    ({q(title + ' (số ' + str(i + 1) + ')')}, "
-            f"{q('Tóm tắt ngắn cho tin số ' + str(i + 1) + ', đủ để quyết định có mở ra đọc hay không.')}, "
+            f"    ({q(title)}, {q(summary)}, "
             f"{q('https://tin-tuc.example.test/bai/' + str(i + 1))}, NULL, "
-            f"{q(sources[i % len(sources)])}, "
-            f"{q('seed-' + str(i + 1))}, {q(category)}, {jsonb(['tin-tuc'])}, "
-            f"{rng.randint(120, 9800)}, NULL, now() - INTERVAL '{age} days', "
-            f"now() - INTERVAL '{age} days')"
+            f"{q(source)}, {q('seed-' + str(i + 1))}, {q(category)}, {jsonb(tags)}, "
+            f"{rng.randint(120, 9800)}, {q(author)}, "
+            f"now() - INTERVAL '{published} days', now() - INTERVAL '{crawled} days')"
         )
     f.sql(
         "INSERT INTO socialapp.t_trending_items\n"
@@ -3956,8 +4091,8 @@ def write_id_map(people, posts, books, projects, roadmaps, eng):
 
 def main():
     guard_version_collisions(GENERATED)
-    lo, hi = min(GENERATED), max(GENERATED)
-    print(f"  dãy V{lo}-V{hi} còn trống — không đụng db/migration hay db/seed hiện có")
+    nums = ", ".join(f"V{v}" for v in sorted(GENERATED))
+    print(f"  sinh {nums} — không đụng db/migration hay file db/seed viết tay")
 
     rng = random.Random(SEED)
     people = build_people(rng)

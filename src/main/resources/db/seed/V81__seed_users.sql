@@ -580,7 +580,7 @@ SELECT p.id,
 -- từ vựng mà t_projects.tags dùng (xem DOMAINS trong generator) — MatchmakingService so hai cột này
 -- bằng phép giao, nên hai kho từ khác nhau làm gợi ý dự án rỗng mà không báo lỗi gì.
 --
--- 18 người thường cố ý không có hồ sơ: hồ sơ là tuỳ chọn, và nếu ai cũng có thì nhánh "chưa điền
+-- 19 người thường cố ý không có hồ sơ: hồ sơ là tuỳ chọn, và nếu ai cũng có thì nhánh "chưa điền
 -- hồ sơ" của trang cá nhân không bao giờ chạy.
 
 INSERT INTO socialapp.t_user_professional_profiles

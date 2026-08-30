@@ -68,7 +68,7 @@ Email: `<username>@elitenexus.test`
 | id | Tựa | Giá |
 |---|---|---|
 | 3001 | Clean Code | miễn phí |
-| 3002 | The Go Programming Language | 79.000₫ |
-| 3003 | Clean Architecture | 149.000₫ |
-| 3004 | Effective Java | 49.000₫ |
-| 3005 | Refactoring | 79.000₫ |
+| 3002 | The Go Programming Language | 249.000₫ |
+| 3003 | Clean Architecture | 199.000₫ |
+| 3004 | Effective Java | 249.000₫ |
+| 3005 | Refactoring | 149.000₫ |

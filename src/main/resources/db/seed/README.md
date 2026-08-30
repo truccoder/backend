@@ -235,6 +235,12 @@ thực (`V71` xoá sạch chúng ở mỗi lần migrate), `t_google_calendar_to
   dữ liệu thì thêm file mới với số version cao hơn.
 - **Đừng sửa tay `V81`–`V91`.** Chúng sinh tự động; sửa tay sẽ bị ghi đè ở lần chạy generator kế
   tiếp. Sửa `scripts/seed/generate_seed.py` rồi chạy lại.
+- **Bộ seed đã được RE-BASELINE ngày 2026-08-30.** `V88` nay mang `parent_node_id` (cây lộ trình),
+  và toàn bộ `V81`–`V92` được sinh lại một lượt — nên **checksum của chúng khác với bản `f9aeea7`
+  đang chạy trên production**. Deploy nào ship bản này PHẢI drop schema production trước khi
+  migrate, nếu không `validate-on-migrate` chặn khởi động ở `V88`. Các bước cụ thể (kèm sao lưu):
+  **`scripts/prod/rebaseline-seed.sql`**. Trước 2026-08-30, cây lộ trình nằm ở `V95` — một `UPDATE`
+  chạy sau `V88` — vì lúc đó chưa re-baseline được; `V95` nay đã xoá.
 - **Lấy mẫu ngẫu nhiên phải dùng hai modulo nguyên tố cùng nhau** cho điều kiện lọc và cho biểu thức
   chọn giá trị. Dùng chung một modulo làm kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55` cũ, làm
   mất hẳn hai trạng thái thanh toán.
