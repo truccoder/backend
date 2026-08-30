@@ -118,7 +118,8 @@ class ExplanationControllerTest {
     @DisplayName("shouldReturn200_whenNoBodyIsSent_happyPath")
     void shouldReturn200_whenNoBodyIsSent_happyPath() throws Exception {
       // Given — @RequestBody(required = false): omitting the body entirely is valid
-      when(explanationService.explainPost(eq(currentUser.getId()), eq(1), isNull(), isNull()))
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), isNull(), isNull()))
           .thenReturn(sampleExplanation());
 
       // When / Then
@@ -134,7 +135,7 @@ class ExplanationControllerTest {
     void shouldReturn200_whenFeedbackNoteIsProvided_happyPath() throws Exception {
       // Given
       when(explanationService.explainPost(
-              eq(currentUser.getId()), eq(1), eq("Too advanced"), isNull()))
+              eq(currentUser.getId()), eq(1), eq("Too advanced"), isNull(), isNull()))
           .thenReturn(sampleExplanation());
       String requestJson =
           """
@@ -155,7 +156,8 @@ class ExplanationControllerTest {
     void shouldPassLanguageThrough() throws Exception {
       // Given — the client knows its own VI/EN setting; the endpoint reads no Accept-Language, so
       // this field is the only way that choice can reach the model
-      when(explanationService.explainPost(eq(currentUser.getId()), eq(1), isNull(), eq("vi")))
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), eq("vi"), isNull()))
           .thenReturn(sampleExplanation());
 
       // When / Then
@@ -166,7 +168,49 @@ class ExplanationControllerTest {
                   .content("{ \"language\": \"vi\" }"))
           .andExpect(status().isOk());
 
-      verify(explanationService).explainPost(eq(currentUser.getId()), eq(1), isNull(), eq("vi"));
+      verify(explanationService)
+          .explainPost(eq(currentUser.getId()), eq(1), isNull(), eq("vi"), isNull());
+    }
+
+    @Test
+    @DisplayName("shouldPassUseVaultContextFalseThroughToTheService")
+    void shouldPassVaultToggleThrough() throws Exception {
+      // Given — the reader turned vault context off for this one post
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), isNull(), eq(false)))
+          .thenReturn(sampleExplanation());
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(KNOWLEDGE_URL + "/posts/1/explain"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"useVaultContext\": false }"))
+          .andExpect(status().isOk());
+
+      verify(explanationService)
+          .explainPost(eq(currentUser.getId()), eq(1), isNull(), isNull(), eq(false));
+    }
+
+    @Test
+    @DisplayName("shouldPassNullVaultToggle_whenTheFieldIsAbsent")
+    void shouldNotInventAVaultToggle() throws Exception {
+      // Given — an absent field is NOT a decision. It has to arrive as null, because false would
+      // silently switch off context for every client that has not been updated to send the field.
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), eq("vi"), isNull()))
+          .thenReturn(sampleExplanation());
+
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(KNOWLEDGE_URL + "/posts/1/explain"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"language\": \"vi\" }"))
+          .andExpect(status().isOk());
+
+      verify(explanationService)
+          .explainPost(eq(currentUser.getId()), eq(1), isNull(), eq("vi"), isNull());
     }
 
     @Test
@@ -185,7 +229,7 @@ class ExplanationControllerTest {
                   .content(injection))
           .andExpect(status().isUnprocessableEntity());
 
-      verify(explanationService, never()).explainPost(any(), any(), any(), any());
+      verify(explanationService, never()).explainPost(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -193,7 +237,8 @@ class ExplanationControllerTest {
     void shouldAcceptRegionalTag() throws Exception {
       // Given — BVA on the pattern: a language subtag alone is the common case, and a
       // language-region tag is the longest shape a browser locale normally produces
-      when(explanationService.explainPost(eq(currentUser.getId()), eq(1), isNull(), eq("en-GB")))
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), eq("en-GB"), isNull()))
           .thenReturn(sampleExplanation());
 
       // When / Then
@@ -209,7 +254,8 @@ class ExplanationControllerTest {
     @DisplayName("shouldReturn404_whenPostDoesNotExist")
     void shouldReturn404_whenPostDoesNotExist() throws Exception {
       // Given
-      when(explanationService.explainPost(eq(currentUser.getId()), eq(999), isNull(), isNull()))
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(999), isNull(), isNull(), isNull()))
           .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found: 999"));
 
       // When / Then
@@ -223,7 +269,8 @@ class ExplanationControllerTest {
     @DisplayName("shouldReturn428_whenProfileIsMissing")
     void shouldReturn428_whenProfileIsMissing() throws Exception {
       // Given
-      when(explanationService.explainPost(eq(currentUser.getId()), eq(1), isNull(), isNull()))
+      when(explanationService.explainPost(
+              eq(currentUser.getId()), eq(1), isNull(), isNull(), isNull()))
           .thenThrow(
               new ResponseStatusException(
                   HttpStatus.PRECONDITION_REQUIRED,

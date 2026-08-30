@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
@@ -22,12 +23,14 @@ import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
 import com.socialapp.knowledge.dto.SaveExplanationRequestDto;
 import com.socialapp.knowledge.entity.ExplanationEntity;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.entity.VaultContextSettingsEntity;
 import com.socialapp.knowledge.entity.VaultNoteEntity;
 import com.socialapp.knowledge.entity.enums.ExplanationStyle;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.ExplanationRepository;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.repository.VaultContextSettingsRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
@@ -52,6 +55,7 @@ public class ExplanationService {
   private final ExplanationRepository explanationRepository;
   private final UserProfessionalProfileRepository profileRepository;
   private final VaultNoteRepository vaultNoteRepository;
+  private final VaultContextSettingsRepository settingsRepository;
   private final PersonalAccessTokenRepository tokenRepository;
   private final PostRepository postRepository;
   private final PostVisibilityService postVisibilityService;
@@ -73,6 +77,18 @@ public class ExplanationService {
    */
   public ExplanationResponseDto explainPost(
       Integer userId, Integer postId, String feedbackNote, String language) {
+    // AN OVERLOAD RATHER THAN A FIFTH ARGUMENT AT EVERY CALL SITE. "No opinion about vault
+    // context" is exactly what every existing caller means, and null is what that reads as
+    // downstream — so this is not a legacy shim, it is the shorter way to say the common thing.
+    return explainPost(userId, postId, feedbackNote, language, null);
+  }
+
+  public ExplanationResponseDto explainPost(
+      Integer userId,
+      Integer postId,
+      String feedbackNote,
+      String language,
+      Boolean useVaultContext) {
     PostEntity post =
         postRepository
             .findById(postId)
@@ -99,7 +115,7 @@ public class ExplanationService {
 
     requireAiBudget(userId);
 
-    String vaultContext = loadVaultContext(userId);
+    String vaultContext = loadVaultContext(userId, useVaultContext);
     String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
     GeminiExplanationResult parsed = parseGeminiResponse(geminiResponse);
@@ -175,7 +191,25 @@ public class ExplanationService {
     }
   }
 
-  private String loadVaultContext(Integer userId) {
+  /**
+   * The reader's own notes, summarised for the prompt — or {@code null} when they must not be used.
+   *
+   * <p>Three gates, in order of how cheap they are to check:
+   *
+   * <ol>
+   *   <li>{@code useVaultContext} — this request's own answer. {@code FALSE} and only {@code FALSE}
+   *       turns it off; {@code null} means the caller expressed no preference, which is not the
+   *       same as saying no.
+   *   <li>A {@code BIDIRECTIONAL} token must exist. This is the permission the notes arrived
+   *       under, so it is also the permission they may be read under.
+   *   <li>There must be notes.
+   * </ol>
+   */
+  private String loadVaultContext(Integer userId, Boolean useVaultContext) {
+    if (Boolean.FALSE.equals(useVaultContext)) {
+      return null;
+    }
+
     boolean hasBidirectionalAccess =
         tokenRepository.findByUserId(userId).stream()
             .anyMatch(t -> VaultPermission.BIDIRECTIONAL.equals(t.getVaultPermission()));
@@ -184,7 +218,22 @@ public class ExplanationService {
       return null;
     }
 
-    List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdWithTags(userId);
+    /*
+     * ORDERED, AND NO LONGER FILTERED BY "HAS TAGS" — two bugs that only showed up together.
+     *
+     * This used to call findByUserIdWithTags, whose `tags IS NOT NULL` clause SILENTLY DROPPED
+     * EVERY UNTAGGED NOTE. A reader who does not tag — which is most people, and the plugin does
+     * not require it — synced their whole vault and got no context at all, with nothing anywhere
+     * saying why. The tags were never the point either: they are one of three things sent, and a
+     * note contributes its filename and links whether or not it has any.
+     *
+     * The query also had no ORDER BY, so the 50-note slice below was 50 rows in whatever order
+     * Postgres felt like returning — which could change after a vacuum. "Which of my notes does
+     * the AI see?" had no answer anyone could give. Most-recently-edited is the ordering every
+     * reading of this code already assumed.
+     */
+    List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+    notes = applyTagFilter(userId, notes);
     if (notes.isEmpty()) {
       return null;
     }
@@ -207,6 +256,51 @@ public class ExplanationService {
                     + " | Links: "
                     + n.getLinks())
         .collect(Collectors.joining("\n"));
+  }
+
+  /**
+   * Narrow the vault to the notes the reader said may be used.
+   *
+   * <p>The plugin pushes a WHOLE vault — daily logs, meeting notes, everything — and before this
+   * filter the only control anyone had was all-or-nothing. Someone who wanted the model to see
+   * their backend notes but not their journal had to stop syncing entirely.
+   *
+   * <p><b>Exclusions are applied after inclusions and always win.</b> A note tagged both
+   * {@code #tech} and {@code #private} is dropped. The other order would let a broad include
+   * quietly override a deliberate exclusion, and on a privacy control that is the direction of
+   * mistake that actually hurts.
+   *
+   * <p>Comparison is on lower-cased tags because {@code VaultNoteService.normalise} stores the
+   * settings that way; note tags come from the plugin unmodified, so the folding happens here.
+   */
+  private List<VaultNoteEntity> applyTagFilter(Integer userId, List<VaultNoteEntity> notes) {
+    VaultContextSettingsEntity settings = settingsRepository.findById(userId).orElse(null);
+    if (Objects.isNull(settings)) {
+      return notes;
+    }
+
+    Set<String> include = Set.copyOf(settings.getIncludeTags());
+    Set<String> exclude = Set.copyOf(settings.getExcludeTags());
+    if (include.isEmpty() && exclude.isEmpty()) {
+      return notes;
+    }
+
+    return notes.stream()
+        .filter(
+            note -> {
+              Set<String> tags =
+                  note.getTags().stream()
+                      .map(tag -> tag.toLowerCase(Locale.ROOT))
+                      .collect(Collectors.toSet());
+
+              // An empty include list means "no restriction", not "match nothing" — otherwise
+              // configuring only an exclusion would silently blank the whole vault.
+              if (!include.isEmpty() && tags.stream().noneMatch(include::contains)) {
+                return false;
+              }
+              return tags.stream().noneMatch(exclude::contains);
+            })
+        .toList();
   }
 
   private String buildPrompt(

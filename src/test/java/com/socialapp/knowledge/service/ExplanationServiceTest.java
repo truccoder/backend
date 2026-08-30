@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -34,6 +35,7 @@ import com.socialapp.knowledge.dto.SaveExplanationRequestDto;
 import com.socialapp.knowledge.entity.ExplanationEntity;
 import com.socialapp.knowledge.entity.PersonalAccessTokenEntity;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.entity.VaultContextSettingsEntity;
 import com.socialapp.knowledge.entity.VaultNoteEntity;
 import com.socialapp.knowledge.entity.WorkExperience;
 import com.socialapp.knowledge.entity.enums.ExplanationStyle;
@@ -41,6 +43,7 @@ import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.ExplanationRepository;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.repository.VaultContextSettingsRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostVisibility;
@@ -65,6 +68,7 @@ class ExplanationServiceTest {
   @Mock private ExplanationRepository explanationRepository;
   @Mock private UserProfessionalProfileRepository profileRepository;
   @Mock private VaultNoteRepository vaultNoteRepository;
+  @Mock private VaultContextSettingsRepository settingsRepository;
   @Mock private PersonalAccessTokenRepository tokenRepository;
   @Mock private PostRepository postRepository;
   @Mock private PostVisibilityService postVisibilityService;
@@ -87,6 +91,7 @@ class ExplanationServiceTest {
             explanationRepository,
             profileRepository,
             vaultNoteRepository,
+            settingsRepository,
             tokenRepository,
             postRepository,
             postVisibilityService,
@@ -443,7 +448,7 @@ class ExplanationServiceTest {
                   PersonalAccessTokenEntity.builder()
                       .vaultPermission(VaultPermission.BIDIRECTIONAL)
                       .build()));
-      when(vaultNoteRepository.findByUserIdWithTags(USER_ID)).thenReturn(List.of());
+      when(vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(USER_ID)).thenReturn(List.of());
       stubGeminiEcho();
 
       // When
@@ -466,7 +471,7 @@ class ExplanationServiceTest {
                   PersonalAccessTokenEntity.builder()
                       .vaultPermission(VaultPermission.BIDIRECTIONAL)
                       .build()));
-      when(vaultNoteRepository.findByUserIdWithTags(USER_ID))
+      when(vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(USER_ID))
           .thenReturn(
               List.of(
                   VaultNoteEntity.builder()
@@ -481,6 +486,186 @@ class ExplanationServiceTest {
 
       // Then
       assertThat(promptCaptor.getValue()).contains("EXISTING KNOWLEDGE").contains("f.md");
+    }
+
+    @Test
+    @DisplayName("should include a note that carries no tags")
+    void shouldIncludeUntaggedNote() {
+      // Given — REGRESSION. loadVaultContext used to read findByUserIdWithTags, whose
+      // `tags IS NOT NULL` clause silently dropped every untagged note. A reader who does not tag
+      // — most people, and the plugin does not require it — synced their whole vault and got no
+      // context at all, with nothing anywhere saying why.
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
+      when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
+      when(tokenRepository.findByUserId(USER_ID))
+          .thenReturn(
+              List.of(
+                  PersonalAccessTokenEntity.builder()
+                      .vaultPermission(VaultPermission.BIDIRECTIONAL)
+                      .build()));
+      when(vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(USER_ID))
+          .thenReturn(List.of(VaultNoteEntity.builder().filename("untagged.md").build()));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("EXISTING KNOWLEDGE").contains("untagged.md");
+    }
+
+    @Test
+    @DisplayName("should omit vault context when the caller asked for it to be off")
+    void shouldOmitVaultContext_whenCallerOptedOut() {
+      // Given — a BIDIRECTIONAL token and notes both exist, so every gate the old code checked
+      // says "include"; the request itself is the only thing saying otherwise.
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
+      when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null, false);
+
+      // Then — and it must not have paid for the lookups either
+      assertThat(promptCaptor.getValue()).doesNotContain("EXISTING KNOWLEDGE");
+      verify(tokenRepository, never()).findByUserId(USER_ID);
+      verify(vaultNoteRepository, never()).findByUserIdOrderByUpdatedAtDesc(USER_ID);
+    }
+
+    @Test
+    @DisplayName("should include vault context when the caller said nothing about it")
+    void shouldIncludeVaultContext_whenToggleIsNull() {
+      // Given — BVA on the tri-state: null is "no preference" and must keep the old behaviour.
+      // Only an explicit false switches the context off.
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
+      when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
+      when(tokenRepository.findByUserId(USER_ID))
+          .thenReturn(
+              List.of(
+                  PersonalAccessTokenEntity.builder()
+                      .vaultPermission(VaultPermission.BIDIRECTIONAL)
+                      .build()));
+      when(vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(USER_ID))
+          .thenReturn(List.of(VaultNoteEntity.builder().filename("kept.md").build()));
+      stubGeminiEcho();
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("kept.md");
+    }
+
+    private void stubVaultWith(VaultNoteEntity... notes) {
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post(POST_ID, "content")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
+      when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
+      when(tokenRepository.findByUserId(USER_ID))
+          .thenReturn(
+              List.of(
+                  PersonalAccessTokenEntity.builder()
+                      .vaultPermission(VaultPermission.BIDIRECTIONAL)
+                      .build()));
+      when(vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(USER_ID))
+          .thenReturn(List.of(notes));
+      stubGeminiEcho();
+    }
+
+    private static VaultNoteEntity tagged(String filename, String... tags) {
+      return VaultNoteEntity.builder().filename(filename).tags(List.of(tags)).build();
+    }
+
+    @Test
+    @DisplayName("should keep only notes carrying an included tag")
+    void shouldApplyIncludeTags() {
+      // Given — the plugin pushes a WHOLE vault, journals included; this is the control that
+      // lets somebody offer their backend notes without offering their diary
+      stubVaultWith(tagged("api.md", "backend"), tagged("diary.md", "daily-log"));
+      when(settingsRepository.findById(USER_ID))
+          .thenReturn(
+              Optional.of(
+                  VaultContextSettingsEntity.builder()
+                      .userId(USER_ID)
+                      .includeTags(List.of("backend"))
+                      .excludeTags(List.of())
+                      .build()));
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("api.md").doesNotContain("diary.md");
+    }
+
+    @Test
+    @DisplayName("should let an exclusion beat an inclusion on the same note")
+    void shouldLetExcludeWin() {
+      // Given — BVA on the precedence rule. A note tagged both ways is the only case where the
+      // order of the two lists is observable, and getting it backwards would let a broad include
+      // silently override a deliberate exclusion.
+      stubVaultWith(tagged("secret.md", "backend", "private"), tagged("api.md", "backend"));
+      when(settingsRepository.findById(USER_ID))
+          .thenReturn(
+              Optional.of(
+                  VaultContextSettingsEntity.builder()
+                      .userId(USER_ID)
+                      .includeTags(List.of("backend"))
+                      .excludeTags(List.of("private"))
+                      .build()));
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("api.md").doesNotContain("secret.md");
+    }
+
+    @Test
+    @DisplayName("should treat an empty include list as no restriction")
+    void shouldNotBlankTheVaultWhenOnlyExcluding() {
+      // Given — configuring ONLY an exclusion must not be read as "include nothing". Getting this
+      // wrong empties the whole vault the moment somebody excludes one tag, and the symptom —
+      // explanations quietly stop mentioning their notes — has no error message anywhere.
+      stubVaultWith(tagged("api.md", "backend"), tagged("diary.md", "daily-log"));
+      when(settingsRepository.findById(USER_ID))
+          .thenReturn(
+              Optional.of(
+                  VaultContextSettingsEntity.builder()
+                      .userId(USER_ID)
+                      .includeTags(List.of())
+                      .excludeTags(List.of("daily-log"))
+                      .build()));
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("api.md").doesNotContain("diary.md");
+    }
+
+    @Test
+    @DisplayName("should match tags case-insensitively")
+    void shouldFoldCase() {
+      // Given — settings are stored lower-cased by VaultNoteService.normalise, but note tags
+      // arrive from the plugin exactly as the user typed them in their file
+      stubVaultWith(tagged("api.md", "Backend"));
+      when(settingsRepository.findById(USER_ID))
+          .thenReturn(
+              Optional.of(
+                  VaultContextSettingsEntity.builder()
+                      .userId(USER_ID)
+                      .includeTags(List.of("backend"))
+                      .excludeTags(List.of())
+                      .build()));
+
+      // When
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(promptCaptor.getValue()).contains("api.md");
     }
   }
 

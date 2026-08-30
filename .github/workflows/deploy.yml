@@ -200,7 +200,11 @@ jobs:
             done
 
             if [ -n "$HEALTHY" ]; then
-              docker image prune -f
+              # `|| true`: dọn image cũ chỉ là dọn rác, không phải điều kiện thành công của deploy.
+              # Daemon từ chối chạy hai prune cùng lúc ("a prune operation is already running") —
+              # gặp lúc cron dọn dẹp trên máy chủ hoặc một lần deploy khác chồng lấn — không nên vì
+              # thế mà báo đỏ cả job trong khi backend đã healthy.
+              docker image prune -f || echo "::warning::docker image prune thất bại (bỏ qua) — không ảnh hưởng deploy vì backend đã healthy."
               exit 0
             fi
 

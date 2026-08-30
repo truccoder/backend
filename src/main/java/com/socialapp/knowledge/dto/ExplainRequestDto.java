@@ -38,4 +38,21 @@ public class ExplainRequestDto {
       regexp = "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
       message = "language must be a BCP-47 tag such as 'vi', 'en' or 'en-GB'")
   private String language;
+
+  /**
+   * Whether the reader's vault notes may be used as context for <em>this one</em> explanation.
+   *
+   * <p><b>THE SWITCH ALREADY EXISTED; IT JUST HAD NO DIAL.</b> {@code
+   * ExplanationService#loadVaultContext} returns null unless the user holds a {@code BIDIRECTIONAL}
+   * token, so whether the model sees a reader's note titles has been decided all along by a
+   * permission they picked once, in a token dialog, possibly months earlier. That is the wrong
+   * grain: the answer is not the same for every post. Somebody reading up on a topic they have
+   * notes about wants those notes brought in; somebody reading outside their field wants a plain
+   * explanation rather than one bent toward what they already wrote down.
+   *
+   * <p>{@code null} means "yes", so a client that does not send the field behaves exactly as
+   * before. Only an explicit {@code false} turns the context off — an absent field is not a
+   * decision and must not read as one.
+   */
+  private Boolean useVaultContext;
 }

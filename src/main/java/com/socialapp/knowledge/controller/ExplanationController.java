@@ -28,8 +28,12 @@ public class ExplanationController {
       @Valid @RequestBody(required = false) ExplainRequestDto request) {
     String feedbackNote = request != null ? request.getFeedbackNote() : null;
     String language = request != null ? request.getLanguage() : null;
+    // Stays a Boolean rather than collapsing to a primitive here: null ("caller said nothing")
+    // and FALSE ("caller said no") mean different things to loadVaultContext, and an absent body
+    // must keep meaning the former.
+    Boolean useVaultContext = request != null ? request.getUseVaultContext() : null;
     return explanationService.explainPost(
-        SecurityUtils.getCurrentUserId(), postId, feedbackNote, language);
+        SecurityUtils.getCurrentUserId(), postId, feedbackNote, language, useVaultContext);
   }
 
   @PostMapping("/save")
