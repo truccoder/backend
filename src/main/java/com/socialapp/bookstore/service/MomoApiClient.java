@@ -1,9 +1,12 @@
 package com.socialapp.bookstore.service;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -26,7 +29,6 @@ public class MomoApiClient {
   private final MomoProperties momoProperties;
   private final WebClient momoWebClient;
 
-  private static final String REQUEST_TYPE = "payWithATM";
   private static final int SUCCESS_RESULT_CODE = 0;
   private static final int ORDER_INFO_MAX_LENGTH = 100;
 
@@ -36,13 +38,32 @@ public class MomoApiClient {
     this.momoWebClient = momoWebClient;
   }
 
+  /**
+   * A globally unique order id.
+   *
+   * <p>The timestamp alone was not enough: {@code transaction_ref} is UNIQUE, so two purchases
+   * created in the same millisecond — different buyers, different books, nothing to do with each
+   * other — produced the same id and the second one died on the constraint, surfacing to the buyer
+   * as a meaningless 409. {@code orderId} is also MoMo's idempotency key, which makes a collision
+   * worse than a nuisance. The random suffix removes the coincidence.
+   */
   public String createOrderId() {
-    return momoProperties.getPartnerCode() + System.currentTimeMillis();
+    return momoProperties.getPartnerCode()
+        + System.currentTimeMillis()
+        + "-"
+        + Long.toHexString(ThreadLocalRandom.current().nextLong(0x1000000L, 0xFFFFFFFL));
   }
 
   public Map<String, Object> requestPaymentLink(
       String orderId, String requestId, String amount, String orderInfoRaw, String extraData) {
     String orderInfo = truncateOrderInfo(orderInfoRaw);
+
+    // READ ONCE. This value is both signed (rawSignature, immediately below) and sent
+    // (requestBody, further down); reading the property twice would let the two disagree and MoMo
+    // would reject the request as a signature mismatch. Which flow it names, and why the choice is
+    // configurable at all, is documented on MomoProperties#requestType.
+    String requestType = momoProperties.getRequestType();
+
     String rawSignature =
         "accessKey="
             + momoProperties.getAccessKey()
@@ -63,7 +84,7 @@ public class MomoApiClient {
             + "&requestId="
             + requestId
             + "&requestType="
-            + REQUEST_TYPE;
+            + requestType;
     String signature = hmacSHA256(momoProperties.getSecretKey(), rawSignature);
 
     Map<String, Object> requestBody = new LinkedHashMap<>();
@@ -76,9 +97,26 @@ public class MomoApiClient {
     requestBody.put("redirectUrl", momoProperties.getRedirectUrl());
     requestBody.put("ipnUrl", momoProperties.getIpnUrl());
     requestBody.put("extraData", extraData);
-    requestBody.put("requestType", REQUEST_TYPE);
+    requestBody.put("requestType", requestType);
     requestBody.put("signature", signature);
     requestBody.put("lang", "vi");
+
+    // How long MoMo keeps this order payable, in minutes.
+    //
+    // Load-bearing, and not a tuning knob. MomoService reuses the single purchase row per
+    // (book, buyer) and overwrites its transaction_ref once the previous pending attempt is older
+    // than PENDING_PAYMENT_STALE_MINUTES. That is only safe if the old order is dead by then —
+    // otherwise a customer can still pay the earlier link, MoMo sends an IPN for an orderId this
+    // database no longer holds, and the money arrives with no row to credit it to.
+    //
+    // Nothing was sent here before, so the order lived for MoMo's own default, which is far longer
+    // than that window. Sending the same number the overwrite rule uses makes the assumption true
+    // by construction instead of by hope.
+    //
+    // Deliberately not part of rawSignature: MoMo's create-order signature is a fixed field list
+    // (accessKey, amount, extraData, ipnUrl, orderId, orderInfo, partnerCode, redirectUrl,
+    // requestId, requestType) and adding to it would make every request fail signature validation.
+    requestBody.put("orderExpireTime", momoProperties.getOrderExpireMinutes());
 
     Map<String, Object> response = postForMap("/v2/gateway/api/create", requestBody);
 
@@ -119,10 +157,22 @@ public class MomoApiClient {
     return postForMap("/v2/gateway/api/query", requestBody);
   }
 
+  /**
+   * Whether an IPN payload really came from MoMo.
+   *
+   * <p>Compared with {@link MessageDigest#isEqual}, which takes the same time whichever byte first
+   * differs. {@code equalsIgnoreCase} returns as soon as it finds a mismatch, so how long it takes
+   * leaks how much of a guessed signature was right. Over the internet against a 64-character hex
+   * string that is not a practical attack — this is the cheap habit rather than a fix for something
+   * exploitable, and the case-folding it replaces is preserved by lower-casing both sides first.
+   */
   public boolean verifyIpnSignature(Map<String, Object> payload) {
     String computedSignature = buildIpnSignature(payload);
     String receivedSignature = String.valueOf(payload.get("signature"));
-    return computedSignature.equalsIgnoreCase(receivedSignature);
+
+    return MessageDigest.isEqual(
+        computedSignature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8),
+        receivedSignature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8));
   }
 
   private String buildIpnSignature(Map<String, Object> payload) {

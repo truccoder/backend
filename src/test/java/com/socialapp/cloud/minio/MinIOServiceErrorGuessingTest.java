@@ -24,6 +24,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.common.exception.StorageException;
+
 import io.minio.BucketExistsArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
@@ -137,8 +139,9 @@ class MinIOServiceErrorGuessingTest {
     }
 
     @Test
-    @DisplayName("shouldPropagateIOException_whenFileStreamIsCorruptedMidRead")
-    void shouldPropagateIOException_whenFileStreamIsCorruptedMidRead() throws Exception {
+    @DisplayName("shouldReportStorageFailure_IOException_whenFileStreamIsCorruptedMidRead")
+    void shouldReportStorageFailure_IOException_whenFileStreamIsCorruptedMidRead()
+        throws Exception {
       // Given — bucket check succeeds, but reading the file's content fails partway through
       // (e.g. the client's temp storage for the multipart upload got truncated)
       when(minioClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
@@ -148,8 +151,9 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then — propagated as-is; wrapping is the caller's responsibility
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, corruptedFile))
-          .isInstanceOf(IOException.class)
-          .hasMessageContaining("truncated multipart body");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(IOException.class)
+          .hasStackTraceContaining("truncated multipart body");
     }
   }
 
@@ -162,8 +166,9 @@ class MinIOServiceErrorGuessingTest {
   class ThirdPartyOutageTests {
 
     @Test
-    @DisplayName("shouldPropagateSocketTimeoutException_whenBucketExistsCheckTimesOut")
-    void shouldPropagateSocketTimeoutException_whenBucketExistsCheckTimesOut() throws Exception {
+    @DisplayName("shouldReportStorageFailure_SocketTimeoutException_whenBucketExistsCheckTimesOut")
+    void shouldReportStorageFailure_SocketTimeoutException_whenBucketExistsCheckTimesOut()
+        throws Exception {
       // Given — the very first call this service makes (checking the bucket) times out, before
       // the file's content is ever touched
       when(minioClient.bucketExists(any(BucketExistsArgs.class)))
@@ -172,13 +177,15 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then — propagated unchanged, not swallowed or reduced to a generic failure
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, file))
-          .isInstanceOf(SocketTimeoutException.class)
-          .hasMessageContaining("Read timed out");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(SocketTimeoutException.class)
+          .hasStackTraceContaining("Read timed out");
     }
 
     @Test
-    @DisplayName("shouldPropagateConnectException_whenPutObjectHitsNetworkError")
-    void shouldPropagateConnectException_whenPutObjectHitsNetworkError() throws Exception {
+    @DisplayName("shouldReportStorageFailure_ConnectException_whenPutObjectHitsNetworkError")
+    void shouldReportStorageFailure_ConnectException_whenPutObjectHitsNetworkError()
+        throws Exception {
       // Given — bucket check succeeds, but the actual upload can't reach the MinIO host
       when(minioClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
       when(minioClient.putObject(any(PutObjectArgs.class)))
@@ -187,13 +194,14 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, file))
-          .isInstanceOf(ConnectException.class)
-          .hasMessageContaining("Connection refused");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(ConnectException.class)
+          .hasStackTraceContaining("Connection refused");
     }
 
     @Test
-    @DisplayName("shouldPropagateServerException_whenPutObjectReturns500")
-    void shouldPropagateServerException_whenPutObjectReturns500() throws Exception {
+    @DisplayName("shouldReportStorageFailure_ServerException_whenPutObjectReturns500")
+    void shouldReportStorageFailure_ServerException_whenPutObjectReturns500() throws Exception {
       // Given — MinIO responded, but with a genuine server-side failure
       when(minioClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
       when(minioClient.putObject(any(PutObjectArgs.class)))
@@ -204,12 +212,13 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, file))
-          .isInstanceOf(ServerException.class);
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(ServerException.class);
     }
 
     @Test
-    @DisplayName("shouldPropagateExactOriginalException_notWrapOrReplaceIt")
-    void shouldPropagateExactOriginalException_notWrapOrReplaceIt() throws Exception {
+    @DisplayName("shouldKeepTheOriginalExceptionAsTheCause")
+    void shouldKeepTheOriginalExceptionAsTheCause() throws Exception {
       // Given — diagnosability: this thin wrapper must never obscure the real cause
       when(minioClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
       ServerException original = new ServerException("Internal error", 503, "trace-id-2");
@@ -218,7 +227,8 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, file))
-          .isSameAs(original);
+          .isInstanceOf(StorageException.class)
+          .hasCause(original);
     }
 
     @Test
@@ -237,8 +247,9 @@ class MinIOServiceErrorGuessingTest {
     }
 
     @Test
-    @DisplayName("shouldPropagateException_whenBucketCreationRacesAnotherInstance")
-    void shouldPropagateException_whenBucketCreationRacesAnotherInstance() throws Exception {
+    @DisplayName("shouldReportStorageFailure_Exception_whenBucketCreationRacesAnotherInstance")
+    void shouldReportStorageFailure_Exception_whenBucketCreationRacesAnotherInstance()
+        throws Exception {
       // Given — classic TOCTOU race: bucketExists() says false, but by the time makeBucket()
       // runs, another concurrent request/instance has already created it, and MinIO rejects
       // the duplicate creation attempt
@@ -250,8 +261,9 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then — surfaces to the caller rather than silently retrying or crashing oddly
       assertThatThrownBy(() -> minIOService.uploadFile(BUCKET, OBJECT_KEY, file))
-          .isInstanceOf(ServerException.class)
-          .hasMessageContaining("already owned");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(ServerException.class)
+          .hasStackTraceContaining("already owned");
     }
   }
 
@@ -264,8 +276,9 @@ class MinIOServiceErrorGuessingTest {
   class ListAllFilesTests {
 
     @Test
-    @DisplayName("shouldPropagateException_whenIterationFailsPartwayThroughPagination")
-    void shouldPropagateException_whenIterationFailsPartwayThroughPagination() throws Exception {
+    @DisplayName("shouldReportStorageFailure_Exception_whenIterationFailsPartwayThroughPagination")
+    void shouldReportStorageFailure_Exception_whenIterationFailsPartwayThroughPagination()
+        throws Exception {
       // Given — MinIO's listObjects() is lazy: the first page succeeds, but the connection
       // drops while fetching a later page — a realistic large-bucket production scenario
       Item firstItem = mock(Item.class);
@@ -280,21 +293,24 @@ class MinIOServiceErrorGuessingTest {
       // When / Then — the exception from the failed page propagates; results already collected
       // before the failure are simply discarded rather than returned partially/silently
       assertThatThrownBy(() -> minIOService.listAllFiles(BUCKET))
-          .isInstanceOf(SocketTimeoutException.class)
-          .hasMessageContaining("Read timed out");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(SocketTimeoutException.class)
+          .hasStackTraceContaining("Read timed out");
     }
 
     @Test
-    @DisplayName("shouldPropagateErrorResponseException_whenListObjectsItselfFails")
-    void shouldPropagateErrorResponseException_whenListObjectsItselfFails() throws Exception {
+    @DisplayName("shouldReportStorageFailure_ErrorResponseException_whenListObjectsItselfFails")
+    void shouldReportStorageFailure_ErrorResponseException_whenListObjectsItselfFails()
+        throws Exception {
       // Given — the very first result carries the failure (e.g. bucket was deleted mid-listing)
       Result<Item> failedResult = new Result<>(new IOException("Bucket no longer exists"));
       when(minioClient.listObjects(any(ListObjectsArgs.class))).thenReturn(List.of(failedResult));
 
       // When / Then
       assertThatThrownBy(() -> minIOService.listAllFiles(BUCKET))
-          .isInstanceOf(IOException.class)
-          .hasMessageContaining("Bucket no longer exists");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(IOException.class)
+          .hasStackTraceContaining("Bucket no longer exists");
     }
 
     @Test
@@ -326,8 +342,9 @@ class MinIOServiceErrorGuessingTest {
   class EnsurePublicReadPolicyTests {
 
     @Test
-    @DisplayName("shouldPropagateErrorResponseException_whenSetBucketPolicyIsRejected")
-    void shouldPropagateErrorResponseException_whenSetBucketPolicyIsRejected() throws Exception {
+    @DisplayName("shouldReportStorageFailure_ErrorResponseException_whenSetBucketPolicyIsRejected")
+    void shouldReportStorageFailure_ErrorResponseException_whenSetBucketPolicyIsRejected()
+        throws Exception {
       // Given — malformed policy JSON or insufficient permission is rejected by the server;
       // ErrorResponseException requires a full ErrorResponse/Response to build in real code, so
       // a ServerException stands in here for "MinIO responded with a rejection"
@@ -335,8 +352,9 @@ class MinIOServiceErrorGuessingTest {
 
       // When / Then
       assertThatThrownBy(() -> minIOService.ensurePublicReadPolicy(BUCKET))
-          .isInstanceOf(ServerException.class)
-          .hasMessageContaining("Denied");
+          .isInstanceOf(StorageException.class)
+          .hasRootCauseInstanceOf(ServerException.class)
+          .hasStackTraceContaining("Denied");
     }
   }
 }

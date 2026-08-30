@@ -20,8 +20,10 @@ jobs:
     steps:
       - name: Get branch SHA
         id: branch
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+          echo "sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
 
       - name: Wait for Branch CI
         env:
@@ -31,6 +33,11 @@ jobs:
         run: |
           echo "Polling Branch CI status for SHA: $SHA"
 
+          # 30 x 10s = 5 phút. Ngày 2026-08-26 job này đỏ vì timeout và mốc 5 phút bị nghi oan:
+          # thủ phạm là bước "Validate commit message" bên branch-ci.yml chạy nhầm lệnh nằm trong
+          # commit message rồi treo. Sửa ở đó xong thì Branch CI về lại vài phút, nên giữ 5 phút.
+          # Nếu sau này lại đỏ vì timeout, hãy đo `validate-and-build` trước đã — nới ngân sách chỉ
+          # che triệu chứng.
           MAX_ATTEMPTS=30
           SLEEP_SECONDS=10
 
@@ -79,7 +86,7 @@ jobs:
             attempt=$((attempt+1))
           done
 
-          echo "❌ Timeout waiting for Branch CI"
+          echo "❌ Timeout waiting for Branch CI sau $((MAX_ATTEMPTS * SLEEP_SECONDS))s"
           exit 1
 
   pr-validation:
@@ -88,10 +95,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Truyền qua `env`, không nội suy thẳng vào script: tiêu đề PR là chuỗi người dùng gõ, một
+      # dấu backtick trong đó là lệnh chạy trên runner. Xem chú thích dài ở branch-ci.yml.
       - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
-
           echo "PR title: $PR_TITLE"
 
           if [[ ! "$PR_TITLE" =~ ^\[[A-Za-z0-9]+\] ]]; then
@@ -110,9 +119,9 @@ jobs:
     steps:
       - name: Extract Trello short link
         id: extract
+        env:
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
         run: |
-          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
-
           echo "Branch: $BRANCH_NAME"
 
           SHORT_LINK=$(echo "$BRANCH_NAME" | sed -E 's#task/([A-Za-z0-9]+).*#\1#')
@@ -123,10 +132,10 @@ jobs:
 
       - name: Determine PR status
         id: status
+        env:
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
         run: |
-          ACTION="${{ github.event.action }}"
-          MERGED="${{ github.event.pull_request.merged }}"
-
           if [ "$ACTION" = "opened" ]; then
             STATUS="OPENED"
 
@@ -152,11 +161,13 @@ jobs:
 
       - name: Get existing attachments
         id: attachments
+        env:
+          SHORT_LINK: ${{ steps.extract.outputs.short_link }}
+          TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
+          TRELLO_TOKEN: ${{ secrets.TRELLO_API_TOKEN }}
         run: |
-          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
-
           RESPONSE=$(curl --silent \
-            --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments?key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_API_TOKEN }}")
+            --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}")
 
           echo "$RESPONSE" > attachments.json
 
@@ -164,9 +175,9 @@ jobs:
 
       - name: Check if PR already attached
         id: existing
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          PR_URL="${{ github.event.pull_request.html_url }}"
-
           EXISTING=$(jq -r \
             --arg PR_URL "$PR_URL" \
             '.[] | select(.url == $PR_URL) | .id' \
@@ -186,30 +197,35 @@ jobs:
 
       - name: Attach PR to Trello card
         if: steps.existing.outputs.exists == 'false'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHORT_LINK: ${{ steps.extract.outputs.short_link }}
+          TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
+          TRELLO_TOKEN: ${{ secrets.TRELLO_API_TOKEN }}
         run: |
-          PR_URL="${{ github.event.pull_request.html_url }}"
-          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
-
           echo "Attaching PR: $PR_URL"
           echo "Card short link: $SHORT_LINK"
 
           curl --fail --request POST \
             --url "https://api.trello.com/1/cards/${SHORT_LINK}/attachments" \
             --data-urlencode "url=$PR_URL" \
-            --data "name=PR #${{ github.event.pull_request.number }}" \
-            --data "key=${{ secrets.TRELLO_API_KEY }}" \
-            --data "token=${{ secrets.TRELLO_API_TOKEN }}"
+            --data-urlencode "name=PR #${PR_NUMBER}" \
+            --data-urlencode "key=${TRELLO_KEY}" \
+            --data-urlencode "token=${TRELLO_TOKEN}"
 
           echo "✅ Successfully attached PR to Trello card"
 
       - name: Add PR status comment to Trello
+        env:
+          SHORT_LINK: ${{ steps.extract.outputs.short_link }}
+          STATUS: ${{ steps.status.outputs.status }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
+          TRELLO_TOKEN: ${{ secrets.TRELLO_API_TOKEN }}
         run: |
-          SHORT_LINK="${{ steps.extract.outputs.short_link }}"
-          STATUS="${{ steps.status.outputs.status }}"
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          PR_URL="${{ github.event.pull_request.html_url }}"
-          AUTHOR="${{ github.event.pull_request.user.login }}"
-
           COMMENT=$(cat <<EOF
           🚀 Pull Request Update
 
@@ -224,7 +240,7 @@ jobs:
           curl --fail --request POST \
             --url "https://api.trello.com/1/cards/${SHORT_LINK}/actions/comments" \
             --data-urlencode "text=$COMMENT" \
-            --data "key=${{ secrets.TRELLO_API_KEY }}" \
-            --data "token=${{ secrets.TRELLO_API_TOKEN }}"
+            --data-urlencode "key=${TRELLO_KEY}" \
+            --data-urlencode "token=${TRELLO_TOKEN}"
 
           echo "✅ Successfully added Trello comment"

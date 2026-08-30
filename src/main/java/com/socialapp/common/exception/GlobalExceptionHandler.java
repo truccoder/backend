@@ -27,7 +27,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
@@ -149,6 +151,37 @@ public class GlobalExceptionHandler {
         .code(NOT_FOUND.value())
         .error(NOT_FOUND.getReasonPhrase())
         .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
+  /**
+   * A URL that maps to no controller at all — a typo in a frontend route, a client still calling an
+   * endpoint that moved, a scanner walking the host.
+   *
+   * <p>Same defect the {@link HttpRequestMethodNotSupportedException} handler below was written to
+   * fix, one step earlier in the dispatch: with no handler for it, this fell through to the
+   * catch-all {@code Exception} handler and came back <b>500</b>. That is wrong twice over — it
+   * tells the caller the server broke when the caller asked for something that does not exist, and
+   * it hides real 500s among the noise. Spring Boot 3.2+ raises {@code NoResourceFoundException}
+   * from the static-resource handler once a request has exhausted every controller mapping, so this
+   * is the point where "no such endpoint" becomes knowable.
+   *
+   * <p><b>Logged at WARN without the stack trace</b>, unlike every other handler here. A stack trace
+   * describes where the server went wrong, and nothing went wrong: the frames would be the same
+   * dispatch plumbing every time, carrying no information the path itself does not already give.
+   * Left at {@code writeLog}, any host on the public internet turns a scanner sweep into a wall of
+   * ERROR stack traces — the exact condition that trains people to ignore the error log.
+   */
+  @ResponseStatus(NOT_FOUND)
+  @ExceptionHandler(NoResourceFoundException.class)
+  public ErrorResponseDto handle(NoResourceFoundException ex, HttpServletRequest request) {
+    log.warn("No endpoint [{} {}]", request.getMethod(), request.getRequestURI());
+
+    return ErrorResponseDto.builder()
+        .code(NOT_FOUND.value())
+        .error(NOT_FOUND.getReasonPhrase())
+        .message("No endpoint " + request.getMethod() + " " + request.getRequestURI())
         .path(request.getRequestURI())
         .build();
   }
@@ -298,6 +331,27 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // Covers a required @RequestPart that's omitted or sent under a different part name (e.g. a
+  // client posting to /v1/api/media with its files under "image" instead of "files"). The sibling
+  // of the two handlers above, and it fell through to the generic Exception handler for the same
+  // reason they used to: a mis-named multipart part is the caller's mistake, and reporting it as
+  // 500 sends a client looking for a server fault that is not there.
+  @ResponseStatus(BAD_REQUEST)
+  @ExceptionHandler(MissingServletRequestPartException.class)
+  public ErrorResponseDto handle(
+      MissingServletRequestPartException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    String message = format("Missing required file part '%s'", ex.getRequestPartName());
+
+    return ErrorResponseDto.builder()
+        .code(BAD_REQUEST.value())
+        .error(BAD_REQUEST.getReasonPhrase())
+        .message(message)
+        .path(request.getRequestURI())
+        .build();
+  }
+
   // Covers a request body that isn't parseable JSON at all (syntax error, truncated body, wrong
   // structure) — distinct from MethodArgumentNotValidException, where the JSON parses fine but a
   // field fails a Bean Validation constraint. Previously fell through to the generic Exception
@@ -358,12 +412,22 @@ public class GlobalExceptionHandler {
                 .build());
   }
 
-  // Covers service-layer "wrong current state for this action" checks (e.g. reviewing a post
-  // that isn't PENDING_REVIEW anymore) — previously fell through to the generic Exception
-  // handler and was incorrectly reported as 500 instead of a 409 Conflict.
+  /**
+   * Service-layer "wrong current state for this action" checks — reviewing a post that is no longer
+   * PENDING_REVIEW, accepting an application already decided, applying to a filled position.
+   *
+   * <p><b>{@link ConflictException}, not {@code IllegalStateException}.</b> This handler used to be
+   * registered for the latter, which worked for the handful of places that threw it deliberately
+   * and was wrong for every other source of it: the JDK, Hibernate, Spring and Jackson all raise
+   * {@code IllegalStateException} for real programming errors. Each of those reached the client as
+   * a 409 — an instruction to retry something that could never succeed — carrying the raw internal
+   * message, which is precisely the disclosure the catch-all handler below goes out of its way to
+   * prevent. An unexpected {@code IllegalStateException} now falls through to that handler, where
+   * it belongs.
+   */
   @ResponseStatus(CONFLICT)
-  @ExceptionHandler(IllegalStateException.class)
-  public ErrorResponseDto handle(IllegalStateException ex, HttpServletRequest request) {
+  @ExceptionHandler(ConflictException.class)
+  public ErrorResponseDto handle(ConflictException ex, HttpServletRequest request) {
     writeLog(ex, request);
 
     return ErrorResponseDto.builder()
@@ -497,6 +561,17 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  /**
+   * The last resort, for anything with no handler of its own.
+   *
+   * <p><b>The message is fixed, not {@code ex.getMessage()}.</b> Every other handler in this class
+   * returns a message somebody wrote for a reader; this one used to return whatever the underlying
+   * exception happened to say, and by definition the exceptions that reach here are the ones
+   * nobody anticipated — Hibernate, the JDBC driver, Jackson, WebClient. Those messages carry SQL
+   * fragments, constraint and column names, internal hostnames and file paths. The full exception,
+   * message and stack trace both, still goes to the log via {@link #writeLog}, which is where it
+   * is useful; the client gets the status and nothing that describes our internals.
+   */
   @ResponseStatus(INTERNAL_SERVER_ERROR)
   @ExceptionHandler(Exception.class)
   public ErrorResponseDto handle(Exception ex, HttpServletRequest request) {
@@ -505,7 +580,7 @@ public class GlobalExceptionHandler {
     return ErrorResponseDto.builder()
         .code(INTERNAL_SERVER_ERROR.value())
         .error(INTERNAL_SERVER_ERROR.getReasonPhrase())
-        .message(ex.getMessage())
+        .message("An unexpected error occurred. Please try again later.")
         .path(request.getRequestURI())
         .build();
   }

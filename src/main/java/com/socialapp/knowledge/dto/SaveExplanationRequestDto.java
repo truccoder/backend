@@ -2,6 +2,8 @@ package com.socialapp.knowledge.dto;
 
 import java.util.List;
 
+import com.socialapp.common.enums.LearningCategory;
+
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
@@ -20,4 +22,12 @@ public class SaveExplanationRequestDto {
   private List<ExplanationResponseDto.ExternalLink> externalLinks;
 
   private Integer complexityScore;
+
+  /**
+   * Gửi trả lại nguyên giá trị nhận được từ lần sinh giải thích, hệt như {@link #externalLinks}.
+   *
+   * <p>Thiếu trường này thì mọi bản lưu đều rơi về {@code OTHER} dù model đã phân loại đúng, và
+   * lỗi đó chỉ lộ ra ở Kho lưu trữ — nơi mọi thứ nằm chung một tab.
+   */
+  private LearningCategory category;
 }
