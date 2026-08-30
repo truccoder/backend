@@ -116,6 +116,18 @@ public class PostEntity {
   @UpdateTimestamp private OffsetDateTime updatedAt;
 
   /**
+   * When the author last edited this post's content, or {@code null} if nobody ever has.
+   *
+   * <p>Deliberately separate from {@link #updatedAt}: that column is bumped by Hibernate on
+   * <i>any</i> write to this row, including ones the author never made — {@code
+   * ModerationEventListener} rewrites {@code moderationStatus} on the same row asynchronously,
+   * 1-2 seconds after creation, once Gemini/Cloud Vision return. Only {@code
+   * PostService#updatePost} sets this field, so its presence means what a reader expects it to
+   * mean: someone edited the content.
+   */
+  private OffsetDateTime editedAt;
+
+  /**
    * Every piece of free text on this post that content moderation must read.
    *
    * <p><b>Why this lives on the entity.</b> Both moderation paths — the synchronous rule engine in

@@ -33,10 +33,14 @@ public class PersonalAccessTokenService {
 
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
+  /** Long enough to tell tokens apart, short enough to leave the secret's entropy intact. */
+  private static final int TOKEN_PREFIX_LENGTH = 12;
+
   @Transactional
   public CreateTokenResponseDto createToken(Integer userId, CreateTokenRequestDto request) {
     String rawToken = generateToken();
     String tokenHash = hashToken(rawToken);
+    String tokenPrefix = rawToken.substring(0, Math.min(TOKEN_PREFIX_LENGTH, rawToken.length()));
 
     OffsetDateTime expiresAt = null;
     if (Objects.nonNull(request.getExpiresInDays()) && request.getExpiresInDays() > 0) {
@@ -52,6 +56,7 @@ public class PersonalAccessTokenService {
         PersonalAccessTokenEntity.builder()
             .userId(userId)
             .tokenHash(tokenHash)
+            .tokenPrefix(tokenPrefix)
             .name(request.getName())
             .expiresAt(expiresAt)
             .vaultPermission(permission)
@@ -103,6 +108,7 @@ public class PersonalAccessTokenService {
                 PersonalAccessTokenResponseDto.builder()
                     .id(token.getId())
                     .name(token.getName())
+                    .tokenPrefix(token.getTokenPrefix())
                     .expiresAt(token.getExpiresAt())
                     .lastUsedAt(token.getLastUsedAt())
                     .vaultPermission(token.getVaultPermission())

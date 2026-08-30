@@ -932,8 +932,12 @@ def write_cypher(people, edges):
         lines += [
             f"UNWIND [{pairs}] AS pair",
             "MATCH (a:User {userId: pair[0]}), (b:User {userId: pair[1]})",
-            "MERGE (a)-[:FRIENDS_WITH]->(b)",
-            "MERGE (b)-[:FRIENDS_WITH]->(a);",
+            # Một cạnh VÔ HƯỚNG, đúng như createFriendship ghi lúc chạy runtime
+            # (FriendshipRepository.java) — hai MERGE có hướng trước đây tạo ra hai quan hệ riêng
+            # biệt giữa cùng một cặp node, khiến mọi MATCH vô hướng ở tầng đọc
+            # (findFriendIdsAfterCursor, countFriends) khớp cả hai và trả về cùng một người hai
+            # lần. Xem B30 trong docs/backend-plan.md.
+            "MERGE (a)-[:FRIENDS_WITH]-(b);",
             "",
         ]
 

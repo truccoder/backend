@@ -1,6 +1,7 @@
 package com.socialapp.posts.service;
 
 import java.beans.FeatureDescriptor;
+import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -279,6 +280,10 @@ public class PostService {
     // Safe to do before the check because a rejection throws, and the surrounding @Transactional
     // rolls the entity back with it.
     BeanUtils.copyProperties(request, post, nullPropertyNames(request));
+    // Marks this as an author-driven edit, distinct from updatedAt — see PostEntity#editedAt.
+    // Set unconditionally: even an edit moderation later rejects already changed the content the
+    // author intended to publish.
+    post.setEditedAt(OffsetDateTime.now());
 
     if (moderationProperties.isEnabled()) {
       ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, post.moderatableText());

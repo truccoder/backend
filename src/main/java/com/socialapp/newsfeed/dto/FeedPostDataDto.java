@@ -77,7 +77,8 @@ public class FeedPostDataDto {
   private OffsetDateTime createdAt;
 
   /**
-   * When the post was last written to, or {@code null} for a post nobody has edited.
+   * When the author last edited this post's content, or {@code null} for a post nobody has
+   * edited.
    *
    * <p>Not cosmetic. Three things in this system point at the body of a post and are only true of
    * the body they were computed from: a skill verification whose proof is that post, a stored
@@ -85,11 +86,11 @@ public class FeedPostDataDto {
    * arrives unannounced invalidates all three silently, and a reader has no way to tell that the
    * text in front of them is not the text that was verified.
    *
-   * <p>Null for an unedited post rather than equal to {@code createdAt}: the client shows "edited"
-   * from the presence of this value, and a mapper that always filled it in would mark every post
-   * in the feed as edited. {@code PostEntity.updatedAt} is written by Hibernate's {@code
-   * @UpdateTimestamp}, which fires on insert too, so the comparison against {@code createdAt}
-   * below is what separates "never edited" from "edited".
+   * <p>Sourced from {@code PostEntity#editedAt}, not {@code PostEntity#updatedAt}. The latter is
+   * Hibernate's {@code @UpdateTimestamp} and bumps on any write to the row — including
+   * {@code ModerationEventListener}'s async moderation-status update, 1-2 seconds after every
+   * post is created — which is not an edit. See B28 in {@code docs/backend-plan.md} for the
+   * incident this replaced a timing heuristic with.
    */
   private OffsetDateTime updatedAt;
 

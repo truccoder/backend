@@ -233,10 +233,12 @@ class FeedPostDataMapperTest {
   @DisplayName("updatedAt")
   class EditedAt {
 
-    private FeedPostDataDto mapWithTimestamps(OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+    private FeedPostDataDto mapWithTimestamps(
+        OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime editedAt) {
       PostEntity post = post(10, AUTHOR_ID);
       post.setCreatedAt(createdAt);
       post.setUpdatedAt(updatedAt);
+      post.setEditedAt(editedAt);
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
       return mapper.toFeedPostData(post);
     }
@@ -244,57 +246,47 @@ class FeedPostDataMapperTest {
     @Test
     @DisplayName("stays null for a post nobody has edited")
     void nullForUnedited() {
-      // Given — @CreationTimestamp and @UpdateTimestamp are two generators and both fire on the
-      // same INSERT, so an untouched post already carries an updated_at a few microseconds later.
-      // A straight isAfter() comparison would mark every post in the feed as edited.
+      // Given — editedAt null, updatedAt equal to createdAt (the ordinary case: one INSERT, no
+      // asynchronous write ever touched the row).
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, created.plusNanos(400_000));
+      FeedPostDataDto data = mapWithTimestamps(created, created, null);
 
       // Then
       assertThat(data.getUpdatedAt()).isNull();
     }
 
     @Test
-    @DisplayName("stays null exactly at the one-second threshold (boundary)")
-    void nullAtThreshold() {
-      // Given — BVA on EDIT_THRESHOLD: the comparison is strictly greater than
+    @DisplayName("stays null even when updatedAt drifts far from createdAt — B28")
+    void nullDespiteUpdatedAtDrift() {
+      // Given — this is the exact shape of B28 (docs/backend-plan.md): ModerationEventListener
+      // rewrites moderationStatus on the same row 1-2s after creation, bumping @UpdateTimestamp,
+      // on a post nobody has edited. A mapper reading updatedAt (or a threshold on it) would
+      // mislabel this as edited; reading editedAt does not.
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+      OffsetDateTime moderationRewrite = created.plusSeconds(2);
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, created.plusSeconds(1));
+      FeedPostDataDto data = mapWithTimestamps(created, moderationRewrite, null);
 
       // Then
       assertThat(data.getUpdatedAt()).isNull();
     }
 
     @Test
-    @DisplayName("carries the timestamp once a real edit has landed (boundary: threshold + 1ms)")
+    @DisplayName("carries the timestamp once PostService#updatePost has set editedAt")
     void setForEdited() {
-      // Given — BVA just past the threshold. A real edit is a second request, minutes apart.
+      // Given
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
-      OffsetDateTime edited = created.plusSeconds(1).plusNanos(1_000_000);
+      OffsetDateTime edited = created.plusMinutes(5);
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, edited);
+      FeedPostDataDto data = mapWithTimestamps(created, edited, edited);
 
       // Then — three things point at the body of a post (a skill proof, a stored explanation, the
       // reputation its reactions awarded); an edit that arrives unannounced invalidates all three
       assertThat(data.getUpdatedAt()).isEqualTo(edited);
-    }
-
-    @Test
-    @DisplayName("stays null for a row written before updated_at was populated")
-    void nullWhenColumnIsNull() {
-      // Given — EP: legacy row, updated_at NULL
-      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
-
-      // When
-      FeedPostDataDto data = mapWithTimestamps(created, null);
-
-      // Then
-      assertThat(data.getUpdatedAt()).isNull();
     }
   }
 }

@@ -106,7 +106,11 @@ public class Neo4jSeedInitializer {
               .single()
               .get("t")
               .asLong();
-      // Cạnh là hai chiều nên số quan hệ bằng đúng hai lần số cặp bạn bè trong Postgres.
+      // Một cạnh VÔ HƯỚNG cho mỗi cặp (đúng như createFriendship ghi lúc runtime), nên số quan hệ
+      // khớp đúng số cặp bạn bè trong Postgres — không còn nhân hai như trước B30
+      // (docs/backend-plan.md). Nhân hai ở đây từng là dấu hiệu ĐÚNG của một seed SAI: mỗi
+      // findFriendIdsAfterCursor/countFriends đọc bằng pattern vô hướng nên khớp cả hai cạnh có
+      // hướng của cùng một cặp, trả trùng người.
       log.info("neo4j.seed-on-start: xong, {} node User, {} quan hệ FRIENDS_WITH", users, edges);
     } catch (IOException | RuntimeException e) {
       log.error(

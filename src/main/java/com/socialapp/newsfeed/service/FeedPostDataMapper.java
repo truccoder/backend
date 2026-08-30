@@ -1,7 +1,5 @@
 package com.socialapp.newsfeed.service;
 
-import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -142,37 +140,12 @@ public class FeedPostDataMapper {
         // does not know — see FeedPostDataDto#reactionSummary.
         .reactionSummary(reactionSummary)
         .createdAt(post.getCreatedAt())
-        .updatedAt(editedAt(post))
+        // post.getUpdatedAt() (Hibernate's @UpdateTimestamp) is NOT what belongs here — it bumps
+        // on any write to the row, including ModerationEventListener's async status update 1-2s
+        // after creation, which is not an edit. editedAt is only ever set by
+        // PostService#updatePost — see PostEntity#editedAt and B28 in docs/backend-plan.md.
+        .updatedAt(post.getEditedAt())
         .build();
-  }
-
-  /**
-   * How long after creation a write has to land before it counts as an edit.
-   *
-   * <p>{@code @CreationTimestamp} and {@code @UpdateTimestamp} are two separate generators and
-   * both fire on the same INSERT, so a post nobody has ever touched still stores an {@code
-   * updated_at} — a few microseconds after {@code created_at}, never exactly equal to it. A plain
-   * {@code isAfter} comparison would therefore mark every post in the feed as edited. A second is
-   * far longer than the gap between two generator calls in one insert and far shorter than any
-   * real edit, which always needs a second request.
-   */
-  private static final Duration EDIT_THRESHOLD = Duration.ofSeconds(1);
-
-  /**
-   * {@code updatedAt} for a post that has actually been edited, null for one that has not — see
-   * {@link #EDIT_THRESHOLD} for why this is not a straight null-check on the column.
-   *
-   * <p>Null rather than the creation time, because the client reads the presence of this field as
-   * "this post was edited". Rows written before {@code updated_at} existed carry NULL and land on
-   * the same answer.
-   */
-  private OffsetDateTime editedAt(PostEntity post) {
-    if (Objects.isNull(post.getUpdatedAt()) || Objects.isNull(post.getCreatedAt())) {
-      return null;
-    }
-    return Duration.between(post.getCreatedAt(), post.getUpdatedAt()).compareTo(EDIT_THRESHOLD) > 0
-        ? post.getUpdatedAt()
-        : null;
   }
 
   /**
