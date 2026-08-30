@@ -102,6 +102,11 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
    * <p>{@code excludedAuthorIds} carries the caller's block set and must never be empty — {@code
    * NOT IN ()} is not valid SQL. Callers pass a sentinel id no user can have; see {@code
    * PostQueryService}.
+   *
+   * <p>{@code hashtag} is the folded tag name a client clicked, or {@code null} for the unfiltered
+   * feed. It is matched with a correlated {@code EXISTS} rather than a {@code JOIN p.hashtags}: a
+   * join over the many-to-many multiplies a post row by its tag count, which would put duplicates
+   * on the page and break the {@code limit + 1} cursor. The subquery keeps one row per post.
    */
   @Query(
       """
@@ -110,11 +115,15 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
         AND p.moderationStatus = com.socialapp.moderation.enums.ModerationStatus.APPROVED
         AND p.authorId NOT IN :excludedAuthorIds
         AND (:cursor IS NULL OR p.id < :cursor)
+        AND (:hashtag IS NULL OR EXISTS (
+              SELECT ph.id FROM PostEntity ph JOIN ph.hashtags h
+              WHERE ph.id = p.id AND h.name = :hashtag))
       ORDER BY p.id DESC
       """)
   List<PostEntity> findPublicFeed(
       @Param("excludedAuthorIds") Collection<Integer> excludedAuthorIds,
       @Param("cursor") Integer cursor,
+      @Param("hashtag") String hashtag,
       Pageable pageable);
 
   /**

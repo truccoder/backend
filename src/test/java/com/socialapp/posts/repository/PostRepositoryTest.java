@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.AbstractIntegrationTest;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.EventDetails;
+import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
 import com.socialapp.posts.entity.PostTagId;
@@ -34,6 +35,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
 
   @Autowired private PostRepository postRepository;
   @Autowired private UserRepository userRepository;
+  @Autowired private HashtagRepository hashtagRepository;
 
   private Integer authorId;
 
@@ -621,7 +623,7 @@ class PostRepositoryTest extends AbstractIntegrationTest {
 
       // When
       List<PostEntity> result =
-          postRepository.findPublicFeed(List.of(-1), null, PageRequest.of(0, 50));
+          postRepository.findPublicFeed(List.of(-1), null, null, PageRequest.of(0, 50));
 
       // Then
       assertThat(result).extracting(PostEntity::getId).contains(visible.getId());
@@ -647,10 +649,52 @@ class PostRepositoryTest extends AbstractIntegrationTest {
 
       // When
       List<PostEntity> result =
-          postRepository.findPublicFeed(List.of(authorId), null, PageRequest.of(0, 50));
+          postRepository.findPublicFeed(List.of(authorId), null, null, PageRequest.of(0, 50));
 
       // Then
       assertThat(result).extracting(PostEntity::getId).doesNotContain(blocked.getId());
+    }
+
+    @Test
+    @DisplayName("narrows to one tag when hashtag is given, one row per post despite many tags")
+    void filtersByHashtag() {
+      // Given: a post carrying two tags, and another carrying only one of them.
+      // Names are prefixed so they cannot collide with the six tags V41 seeds.
+      HashtagEntity java = hashtagRepository.saveAndFlush(hashtag("b31feedjava"));
+      HashtagEntity spring = hashtagRepository.saveAndFlush(hashtag("b31feedspring"));
+
+      PostEntity twoTags =
+          post(authorId, "two tags", PostVisibility.PUBLIC, ModerationStatus.APPROVED);
+      twoTags.getHashtags().add(java);
+      twoTags.getHashtags().add(spring);
+      twoTags = postRepository.saveAndFlush(twoTags);
+
+      PostEntity oneTag =
+          post(authorId, "one tag", PostVisibility.PUBLIC, ModerationStatus.APPROVED);
+      oneTag.getHashtags().add(java);
+      postRepository.saveAndFlush(oneTag);
+
+      postRepository.saveAndFlush(
+          post(authorId, "no tags", PostVisibility.PUBLIC, ModerationStatus.APPROVED));
+
+      // When
+      List<PostEntity> javaPosts =
+          postRepository.findPublicFeed(List.of(-1), null, "b31feedjava", PageRequest.of(0, 50));
+      List<PostEntity> springPosts =
+          postRepository.findPublicFeed(List.of(-1), null, "b31feedspring", PageRequest.of(0, 50));
+
+      // Then: the post with both tags appears exactly once in the java list, not twice
+      assertThat(javaPosts)
+          .extracting(PostEntity::getId)
+          .containsExactly(oneTag.getId(), twoTags.getId());
+      assertThat(springPosts).extracting(PostEntity::getId).containsExactly(twoTags.getId());
+    }
+
+    private HashtagEntity hashtag(String name) {
+      HashtagEntity tag = new HashtagEntity();
+      tag.setName(name);
+      tag.setUsageCount(0);
+      return tag;
     }
   }
 }

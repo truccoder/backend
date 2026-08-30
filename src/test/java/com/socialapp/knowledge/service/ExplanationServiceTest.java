@@ -105,6 +105,13 @@ class ExplanationServiceTest {
     return post;
   }
 
+  private static PostEntity codeSnippetPost(String caption, String language, String code) {
+    PostEntity post = post(POST_ID, caption);
+    post.setPostType(com.socialapp.posts.entity.enums.PostType.CODE_SNIPPET);
+    post.setCodeSnippetDetails(new com.socialapp.posts.entity.CodeSnippetDetails(language, code));
+    return post;
+  }
+
   private static UserProfessionalProfileEntity profile(
       ExplanationStyle style, List<WorkExperience> workHistory) {
     UserProfessionalProfileEntity profile = new UserProfessionalProfileEntity();
@@ -201,6 +208,32 @@ class ExplanationServiceTest {
       assertThat(result.getExplanationContent()).isEqualTo("Explained");
       assertThat(result.getConcepts()).containsExactly("c1");
       assertThat(result.getComplexityScore()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("should send the snippet's code to the model, not just its (often blank) caption")
+    void shouldExplainTheCodeOfACodeSnippetPost() {
+      // Given — a CODE_SNIPPET whose body lives in the jsonb detail block, with a blank caption,
+      // which is the normal shape. Reading only post.getContent() handed Gemini an empty string
+      // and the reader got an explanation of nothing.
+      when(postRepository.findById(POST_ID))
+          .thenReturn(
+              Optional.of(codeSnippetPost("", "java", "int add(int a, int b) { return a + b; }")));
+      when(postVisibilityService.isVisibleTo(any(), eq(USER_ID))).thenReturn(true);
+      when(profileRepository.findById(USER_ID)).thenReturn(Optional.of(profile(null, null)));
+      when(tokenRepository.findByUserId(USER_ID)).thenReturn(List.of());
+      when(geminiClient.generateContent(promptCaptor.capture()))
+          .thenReturn("{\"explanation\": \"e\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then — the code reaches the prompt, fenced and language-tagged
+      assertThat(promptCaptor.getValue())
+          .contains("```java")
+          .contains("int add(int a, int b) { return a + b; }");
+      // Then — and the card's "original" panel is not blank either
+      assertThat(result.getOriginalContent()).contains("int add(int a, int b) { return a + b; }");
     }
   }
 

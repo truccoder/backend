@@ -115,14 +115,20 @@ public class ExplanationService {
 
     requireAiBudget(userId);
 
+    // Not post.getContent(): a CODE_SNIPPET keeps its code in a jsonb detail block and an ARTICLE
+    // keeps its body in another, so content is routinely blank on exactly the posts worth
+    // explaining. explainableText() gathers every block a reader looks at — same fix moderation
+    // already made with moderatableText(). Used for both the prompt and originalContent so the
+    // card's "original" panel is not blank either.
+    String explainable = post.explainableText();
     String vaultContext = loadVaultContext(userId, useVaultContext);
-    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext, language);
+    String prompt = buildPrompt(explainable, profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
     GeminiExplanationResult parsed = parseGeminiResponse(geminiResponse);
 
     return ExplanationResponseDto.builder()
         .postId(postId)
-        .originalContent(post.getContent())
+        .originalContent(explainable)
         .explanationContent(parsed.explanation)
         .concepts(parsed.concepts)
         .prerequisites(parsed.prerequisites)

@@ -1,15 +1,18 @@
 package com.socialapp.posts.repository;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import com.socialapp.hashtags.dto.HashtagDto;
 import com.socialapp.posts.entity.HashtagEntity;
 
 @Repository
@@ -17,6 +20,50 @@ public interface HashtagRepository extends JpaRepository<HashtagEntity, Integer>
   Optional<HashtagEntity> findByName(String name);
 
   List<HashtagEntity> findByNameIn(Collection<String> names);
+
+  /**
+   * Type-ahead for the composer and the search box: the tags whose name starts with {@code prefix}
+   * and that at least one post carries, most-used first.
+   *
+   * <p>Derived rather than {@code @Query} so Spring Data escapes {@code %} and {@code _} in the
+   * bound prefix — a user typing {@code java_} must not have the {@code _} act as a wildcard.
+   * {@code idx_hashtags_name_prefix} ({@code text_pattern_ops}, added in {@code V99}) answers the
+   * left-anchored {@code LIKE}.
+   *
+   * <p>{@code UsageCountGreaterThan(0)} drops the dead tags: {@code V41} seeds a handful at zero and
+   * a tag can drift back to zero as posts that used it are edited or deleted. Completing to one of
+   * those lands the reader on an empty feed, so a suggestion that leads nowhere is worse than a
+   * shorter list. The caller passes {@code 0}.
+   *
+   * <p>{@code usageCount} is then the sort key because it is the number the product already
+   * maintains per tag; a tie breaks on the name so the list is stable between keystrokes.
+   */
+  List<HashtagEntity> findByNameStartingWithAndUsageCountGreaterThanOrderByUsageCountDescNameAsc(
+      String prefix, int minUsageCount, Pageable pageable);
+
+  /**
+   * The tags carried by the most PUBLIC, APPROVED posts created since {@code since}, most first.
+   *
+   * <p><b>Counted from {@code t_post_hashtags} inside the window, not read off {@code
+   * usage_count}.</b> That counter is a lifetime running total — it is what {@code
+   * /hashtags/suggest} sorts on — and says nothing about what is being talked about this week. This
+   * query joins the link table to the posts so the number reflects the window the caller asked for.
+   *
+   * <p>Only PUBLIC + APPROVED posts count: a trending list is a public artefact, and a tag must not
+   * ride onto it on the back of friends-only or not-yet-moderated posts nobody else can open.
+   */
+  @Query(
+      """
+      SELECT new com.socialapp.hashtags.dto.HashtagDto(h.name, COUNT(p.id))
+      FROM PostEntity p
+      JOIN p.hashtags h
+      WHERE p.createdAt >= :since
+        AND p.visibility = com.socialapp.posts.entity.enums.PostVisibility.PUBLIC
+        AND p.moderationStatus = com.socialapp.moderation.enums.ModerationStatus.APPROVED
+      GROUP BY h.name
+      ORDER BY COUNT(p.id) DESC, h.name ASC
+      """)
+  List<HashtagDto> findTrendingSince(@Param("since") OffsetDateTime since, Pageable pageable);
 
   /**
    * Creates the tags that do not exist yet, leaving the ones that do untouched.

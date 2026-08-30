@@ -164,6 +164,51 @@ public class PostEntity {
     return String.join(System.lineSeparator(), parts);
   }
 
+  /**
+   * This post as plain text for the AI explanation prompt — everything a reader is looking at when
+   * they press "explain this for me", not just {@link #content}.
+   *
+   * <p><b>Same reason for existing as {@link #moderatableText()}.</b> A CODE_SNIPPET keeps its code
+   * in {@link #codeSnippetDetails} and an ARTICLE keeps its body in {@link #articleDetails}, so a
+   * path that read only {@code content} was handing the model an empty string for exactly the posts
+   * most worth explaining — the reader got an explanation of nothing. This reuses the same
+   * detail-block collectors as moderation.
+   *
+   * <p>It stays a separate method rather than a second caller of {@code moderatableText()} because
+   * the two format for different audiences: moderation wants raw text to scan, this wants text a
+   * person and the model can follow, so the snippet is wrapped in a fenced block tagged with its
+   * language instead of dumped in bare. Location text is left out — a place name is not something
+   * there is anything to explain about.
+   *
+   * @return the text to explain, joined by newlines; never null, possibly empty
+   */
+  public String explainableText() {
+    List<String> parts = new ArrayList<>();
+
+    addIfPresent(parts, content);
+    addArticleText(parts);
+    addEventText(parts);
+    addPollText(parts);
+    addLinkText(parts);
+    addQuizText(parts);
+
+    if (codeSnippetDetails != null
+        && codeSnippetDetails.getCode() != null
+        && !codeSnippetDetails.getCode().isBlank()) {
+      String language =
+          codeSnippetDetails.getLanguage() == null ? "" : codeSnippetDetails.getLanguage().strip();
+      parts.add(
+          "```"
+              + language
+              + System.lineSeparator()
+              + codeSnippetDetails.getCode()
+              + System.lineSeparator()
+              + "```");
+    }
+
+    return String.join(System.lineSeparator(), parts);
+  }
+
   private void addArticleText(List<String> parts) {
     if (articleDetails == null) {
       return;

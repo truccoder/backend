@@ -606,7 +606,7 @@ class PostControllerTest {
     @DisplayName("shouldReturn200AndACursorPage_happyPath")
     void shouldReturnPage() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, null, 20))
           .thenReturn(
               new PostPageResponseDto(
                   java.util.List.of(FeedPostDataDto.builder().postId(9).authorId(3).build()),
@@ -626,14 +626,14 @@ class PostControllerTest {
     @DisplayName("shouldRouteToTheDiscoveryFeed_notToAPostWhoseIdIsPublic")
     void shouldNotBeSwallowedByThePostIdRoute() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, null, 20))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When
       mockMvc.perform(authed(get(POSTS_URL + "/public"))).andExpect(status().isOk());
 
       // Then — the literal segment must win over the {postId} template
-      verify(postQueryService).getPublicFeed(currentUser.getId(), null, 20);
+      verify(postQueryService).getPublicFeed(currentUser.getId(), null, null, 20);
       verify(postQueryService, never()).getPost(any(), any());
     }
 
@@ -641,7 +641,7 @@ class PostControllerTest {
     @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
     void shouldPassPagingThrough() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), 30, 5))
+      when(postQueryService.getPublicFeed(currentUser.getId(), 30, null, 5))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When
@@ -650,20 +650,36 @@ class PostControllerTest {
           .andExpect(status().isOk());
 
       // Then
-      verify(postQueryService).getPublicFeed(currentUser.getId(), 30, 5);
+      verify(postQueryService).getPublicFeed(currentUser.getId(), 30, null, 5);
     }
 
     @Test
     @DisplayName("shouldReturn200_whenCalledByAGuest_becauseThisIsAGuestsHomePage")
     void shouldServeGuests() throws Exception {
       // Given: no Authorization header
-      when(postQueryService.getPublicFeed(null, null, 20))
+      when(postQueryService.getPublicFeed(null, null, null, 20))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When / Then — /v1/api/feed is a per-user Redis fan-out and cannot be opened, so this is
       // the page an anonymous visitor lands on
       mockMvc.perform(get(POSTS_URL + "/public")).andExpect(status().isOk());
-      verify(postQueryService).getPublicFeed(null, null, 20);
+      verify(postQueryService).getPublicFeed(null, null, null, 20);
+    }
+
+    @Test
+    @DisplayName("shouldPassHashtagThrough_whenAHashtagBadgeIsClicked")
+    void shouldPassHashtagThrough() throws Exception {
+      // Given
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, "java", 20))
+          .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(POSTS_URL + "/public")).param("hashtag", "java"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(postQueryService).getPublicFeed(currentUser.getId(), null, "java", 20);
     }
   }
 
