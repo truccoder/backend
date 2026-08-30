@@ -63,6 +63,9 @@ public class TrendingItemEntity {
 
   @CreationTimestamp private OffsetDateTime crawledAt;
 
+  // One field per column; a JPA entity's all-args builder constructor legitimately has this many
+  // parameters, so ExcessiveParameterList doesn't point at a real design smell here.
+  @SuppressWarnings("PMD.ExcessiveParameterList")
   @Builder
   public TrendingItemEntity(
       Integer id,

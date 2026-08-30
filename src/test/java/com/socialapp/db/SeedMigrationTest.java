@@ -851,6 +851,27 @@ class SeedMigrationTest {
         .isGreaterThan(0);
   }
 
+  @Test
+  @DisplayName("V88 · cây nút lộ trình: cha con cùng lộ trình, cha khai trước, đủ cả hai bậc")
+  void roadmapNodesFormAParentChildTree() throws Exception {
+    // Mỗi nút con phải trỏ vào một nút cha CÙNG lộ trình — một parent lệch roadmap làm màn hình
+    // cây lộ trình chèn một nút lạ vào nhánh sai, và không một endpoint nào báo lỗi.
+    assertThat(
+            count(
+                "SELECT COUNT(*) FROM socialapp.t_roadmap_nodes c"
+                    + " JOIN socialapp.t_roadmap_nodes p ON p.id = c.parent_node_id"
+                    + " WHERE p.roadmap_id <> c.roadmap_id"))
+        .isZero();
+    // Và trong seed thật này cây phải có cả gốc lẫn con — một thế hệ seed mà mọi parent_node_id
+    // đều NULL thì cây đã bị làm phẳng, tức là mất đúng tính năng này.
+    assertThat(count("SELECT COUNT(*) FROM socialapp.t_roadmap_nodes WHERE parent_node_id IS NULL"))
+        .isGreaterThan(0);
+    assertThat(
+            count(
+                "SELECT COUNT(*) FROM socialapp.t_roadmap_nodes WHERE parent_node_id IS NOT NULL"))
+        .isGreaterThan(0);
+  }
+
   /**
    * Mọi cột ánh xạ bằng {@code @Enumerated(EnumType.STRING)} chỉ được chứa những chuỗi mà enum
    * Java tương ứng đọc lại được.

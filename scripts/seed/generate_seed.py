@@ -2909,6 +2909,18 @@ SELECT setval(pg_get_serial_sequence('socialapp.t_project_applications', 'id'),
 # ĐỘ PHỦ CHỦ ĐỀ, còn tên nút, mô tả và thứ tự đều viết lại bằng tiếng Việt, bám chương trình học
 # trong nước. Khi hội đồng hỏi lộ trình này ở đâu ra, "nhóm tự thiết kế" là câu trả lời tốt hơn
 # hẳn "dịch từ roadmap.sh".
+#
+# CẤU TRÚC MỘT NÚT: ("tên", "mô tả") là nút gốc, ("tên", "mô tả", "tên nút cha") là nút con.
+# Phần tử thứ ba tham chiếu nút cha BẰNG TÊN trong cùng lộ trình, và build_roadmaps tra tên đó
+# trong các nút ĐÃ khai trước nó — nên nút cha phải nằm TRƯỚC nút con trong danh sách. Vi phạm
+# thì KeyError ngay lúc sinh, chứ không âm thầm ra một cây thiếu nhánh.
+#
+# Vì sao tra theo tên chứ không theo chỉ số: chỉ số làm mọi lần chèn thêm một nút ở giữa lộ trình
+# âm thầm đổi cha của các nút phía sau. Tên thì hoặc đúng, hoặc nổ.
+#
+# THỨ TỰ CÁC NÚT TRONG MỖI LỘ TRÌNH LÀ HỢP ĐỒNG, KHÔNG PHẢI THẨM MỸ: id nút được cấp tuần tự theo
+# đúng thứ tự duyệt danh sách này, và V90 tính điểm uy tín theo `user_id:node_id`. Đảo hai dòng
+# trong cùng một lộ trình là đổi id của cả hai. Thêm/bớt nút thì được, đảo chỗ thì không.
 
 ROADMAPS = [
     ("Backend cho người mới", "BACKEND",
@@ -2916,10 +2928,10 @@ ROADMAPS = [
         ("Giao thức HTTP", "Phương thức, mã trạng thái, header. Phân biệt 401 và 403."),
         ("Một ngôn ngữ máy chủ", "Chọn một và đi sâu: Java, Go, Python hay Node đều được."),
         ("Cơ sở dữ liệu quan hệ", "Bảng, khoá, ràng buộc. Viết được truy vấn có JOIN mà không đoán."),
-        ("Thiết kế API", "Đặt tên tài nguyên, phân trang, xử lý lỗi nhất quán."),
-        ("ORM và cái giá của nó", "Hiểu N+1 sinh ra từ đâu, và vì sao fetch join không phải liều thuốc chung."),
-        ("Giao dịch", "Bốn tính chất ACID, mức cô lập, và chuyện gọi nội bộ làm mất giao dịch."),
-        ("Đánh index", "Thứ tự cột, tiền tố trái, partial index. Đọc được query plan."),
+        ("Thiết kế API", "Đặt tên tài nguyên, phân trang, xử lý lỗi nhất quán.", "Giao thức HTTP"),
+        ("ORM và cái giá của nó", "Hiểu N+1 sinh ra từ đâu, và vì sao fetch join không phải liều thuốc chung.", "Cơ sở dữ liệu quan hệ"),
+        ("Giao dịch", "Bốn tính chất ACID, mức cô lập, và chuyện gọi nội bộ làm mất giao dịch.", "Cơ sở dữ liệu quan hệ"),
+        ("Đánh index", "Thứ tự cột, tiền tố trái, partial index. Đọc được query plan.", "Cơ sở dữ liệu quan hệ"),
         ("Caching", "Chọn TTL, xử lý cache stampede, và vấn đề khó nhất: vô hiệu hoá cache."),
         ("Hàng đợi và việc nền", "Tách việc chạy lâu khỏi request. Idempotency khi phải thử lại."),
         ("Ghi log và đo đạc", "Mã theo dõi xuyên suốt, đo p99 thay vì trung bình."),
@@ -2931,13 +2943,13 @@ ROADMAPS = [
         ("HTML ngữ nghĩa", "Dùng đúng thẻ. Đây cũng là bước đầu của khả năng truy cập."),
         ("CSS bố cục", "Flexbox và Grid. Hiểu vì sao layout shift làm người đọc mất chỗ."),
         ("JavaScript nền tảng", "Bất đồng bộ, closure, module. Trước khi học framework."),
-        ("TypeScript", "Kiểu là tài liệu chạy được. Bắt lỗi trước khi người dùng bắt."),
-        ("Một framework", "React, Vue hay Svelte. Hiểu vòng đời render của nó."),
-        ("Quản lý trạng thái", "Phân biệt trạng thái máy chủ và trạng thái giao diện."),
-        ("Gọi dữ liệu", "Trạng thái tải, lỗi, rỗng. Ba trạng thái hay bị quên nhất."),
-        ("Khả năng truy cập", "Dùng được bằng bàn phím, đọc được bằng trình đọc màn hình."),
+        ("TypeScript", "Kiểu là tài liệu chạy được. Bắt lỗi trước khi người dùng bắt.", "JavaScript nền tảng"),
+        ("Một framework", "React, Vue hay Svelte. Hiểu vòng đời render của nó.", "JavaScript nền tảng"),
+        ("Quản lý trạng thái", "Phân biệt trạng thái máy chủ và trạng thái giao diện.", "Một framework"),
+        ("Gọi dữ liệu", "Trạng thái tải, lỗi, rỗng. Ba trạng thái hay bị quên nhất.", "Một framework"),
+        ("Khả năng truy cập", "Dùng được bằng bàn phím, đọc được bằng trình đọc màn hình.", "HTML ngữ nghĩa"),
         ("Hiệu năng web", "Chia gói theo route, tải ảnh đúng kích thước, đo bằng số thật."),
-        ("Kiểm thử giao diện", "Test theo hành vi người dùng, không theo chi tiết cài đặt."),
+        ("Kiểm thử giao diện", "Test theo hành vi người dùng, không theo chi tiết cài đặt.", "Một framework"),
         ("Dựng và đóng gói", "Hiểu công cụ đang làm gì với mã của bạn."),
      ]),
     ("DevOps thực dụng", "DEVOPS",
@@ -2945,12 +2957,12 @@ ROADMAPS = [
         ("Dòng lệnh Linux", "Tệp, tiến trình, quyền. Đọc được log mà không cần giao diện."),
         ("Quản lý phiên bản", "Nhánh, gộp, và cách viết lịch sử mà người sau đọc được."),
         ("Container", "Image khác container. Mỗi chỉ thị là một lớp."),
-        ("Tích hợp liên tục", "Chạy test tự động. CI đỏ là tín hiệu, không phải phiền toái."),
-        ("Triển khai liên tục", "Ra bản mới thường xuyên và nhỏ, để quay lui rẻ."),
+        ("Tích hợp liên tục", "Chạy test tự động. CI đỏ là tín hiệu, không phải phiền toái.", "Quản lý phiên bản"),
+        ("Triển khai liên tục", "Ra bản mới thường xuyên và nhỏ, để quay lui rẻ.", "Tích hợp liên tục"),
         ("Hạ tầng dưới dạng mã", "Mô tả hạ tầng bằng tệp, không bằng thao tác tay."),
-        ("Điều phối container", "Khi nào cần và khi nào chưa cần Kubernetes."),
+        ("Điều phối container", "Khi nào cần và khi nào chưa cần Kubernetes.", "Container"),
         ("Giám sát", "Chỉ số, log, vết. Biết dịch vụ hỏng trước khi người dùng báo."),
-        ("Cảnh báo", "Cảnh báo phải hành động được, nếu không nó sẽ bị tắt tiếng."),
+        ("Cảnh báo", "Cảnh báo phải hành động được, nếu không nó sẽ bị tắt tiếng.", "Giám sát"),
         ("Sao lưu và khôi phục", "Bản sao lưu chưa từng khôi phục thử thì chưa phải bản sao lưu."),
         ("Chi phí", "Đọc hoá đơn, tìm chỗ trả tiền cho thứ không ai dùng."),
      ]),
@@ -2958,22 +2970,22 @@ ROADMAPS = [
      "Từ tệp CSV tới mô hình chạy trong sản xuất.", [
         ("Python cho dữ liệu", "Thao tác bảng dữ liệu thành thạo trước khi nói tới mô hình."),
         ("Thống kê nền tảng", "Phân phối, tương quan, và vì sao tương quan không phải nhân quả."),
-        ("Làm sạch dữ liệu", "Phần lớn thời gian nằm ở đây, không phải ở chỗ chọn thuật toán."),
-        ("Trực quan hoá", "Biểu đồ để hiểu, không phải để trang trí báo cáo."),
-        ("Học có giám sát", "Hồi quy và phân loại. Hiểu rò rỉ dữ liệu."),
-        ("Đánh giá mô hình", "Chọn chỉ số hợp bài toán. Độ chính xác thường là chỉ số tệ."),
-        ("Kỹ thuật đặc trưng", "Đặc trưng tốt thắng mô hình phức tạp, gần như luôn luôn."),
+        ("Làm sạch dữ liệu", "Phần lớn thời gian nằm ở đây, không phải ở chỗ chọn thuật toán.", "Python cho dữ liệu"),
+        ("Trực quan hoá", "Biểu đồ để hiểu, không phải để trang trí báo cáo.", "Python cho dữ liệu"),
+        ("Học có giám sát", "Hồi quy và phân loại. Hiểu rò rỉ dữ liệu.", "Thống kê nền tảng"),
+        ("Đánh giá mô hình", "Chọn chỉ số hợp bài toán. Độ chính xác thường là chỉ số tệ.", "Học có giám sát"),
+        ("Kỹ thuật đặc trưng", "Đặc trưng tốt thắng mô hình phức tạp, gần như luôn luôn.", "Làm sạch dữ liệu"),
         ("Đường ống dữ liệu", "Từ notebook sang quy trình chạy lại được."),
-        ("Đưa mô hình lên sản xuất", "Phiên bản, theo dõi trôi dữ liệu, và cách quay lui."),
+        ("Đưa mô hình lên sản xuất", "Phiên bản, theo dõi trôi dữ liệu, và cách quay lui.", "Đường ống dữ liệu"),
         ("Đạo đức dữ liệu", "Thiên lệch trong dữ liệu thành thiên lệch trong quyết định."),
      ]),
     ("An toàn ứng dụng", "SECURITY",
      "Nghĩ như người tấn công để viết mã như người phòng thủ.", [
         ("Mô hình hoá mối đe doạ", "Ai muốn gì, và họ vào bằng đường nào."),
         ("Xác thực", "Mật khẩu băm đúng cách, phiên hết hạn, và chống dò."),
-        ("Phân quyền", "Kiểm ở máy chủ. Ẩn nút trên giao diện không phải phân quyền."),
+        ("Phân quyền", "Kiểm ở máy chủ. Ẩn nút trên giao diện không phải phân quyền.", "Xác thực"),
         ("Mười rủi ro phổ biến", "Danh sách OWASP, đọc lại hằng năm vì nó đổi."),
-        ("Chèn mã", "SQL, lệnh hệ thống, mẫu. Luôn dùng tham số hoá."),
+        ("Chèn mã", "SQL, lệnh hệ thống, mẫu. Luôn dùng tham số hoá.", "Mười rủi ro phổ biến"),
         ("Bí mật và khoá", "Không nằm trong repo. Xoay vòng được khi lộ."),
         ("Phụ thuộc bên thứ ba", "Chuỗi cung ứng là đường vào mà ít người canh."),
         ("Ghi nhật ký an toàn", "Ghi đủ để điều tra, không ghi thứ làm rò rỉ."),
@@ -2982,11 +2994,11 @@ ROADMAPS = [
     ("Kiểm thử và chất lượng", "QA",
      "Xây lưới an toàn để đội dám thay đổi mã.", [
         ("Kim tự tháp kiểm thử", "Nhiều test nhỏ, ít test lớn. Ngược lại thì chậm và giòn."),
-        ("Test đơn vị", "Nhanh, độc lập, không phụ thuộc thứ tự chạy."),
-        ("Test tích hợp", "Chạy trên đúng cơ sở dữ liệu mà production dùng."),
-        ("Test đầu cuối", "Ít thôi, và bám hành vi người dùng."),
-        ("Dữ liệu kiểm thử", "Dựng và dọn sạch sẽ. Dữ liệu rớt lại làm test đỏ ngẫu nhiên."),
-        ("Test giòn", "Nguyên nhân thường là chờ theo thời gian thay vì chờ theo điều kiện."),
+        ("Test đơn vị", "Nhanh, độc lập, không phụ thuộc thứ tự chạy.", "Kim tự tháp kiểm thử"),
+        ("Test tích hợp", "Chạy trên đúng cơ sở dữ liệu mà production dùng.", "Kim tự tháp kiểm thử"),
+        ("Test đầu cuối", "Ít thôi, và bám hành vi người dùng.", "Kim tự tháp kiểm thử"),
+        ("Dữ liệu kiểm thử", "Dựng và dọn sạch sẽ. Dữ liệu rớt lại làm test đỏ ngẫu nhiên.", "Test tích hợp"),
+        ("Test giòn", "Nguyên nhân thường là chờ theo thời gian thay vì chờ theo điều kiện.", "Test đầu cuối"),
         ("Độ phủ", "Hữu ích như tín hiệu, tai hại như mục tiêu."),
         ("Kiểm thử hiệu năng", "Đo dưới tải giống thật, không phải trên máy cá nhân."),
         ("Văn hoá chất lượng", "Chất lượng là việc của cả đội, không của riêng một vai."),
@@ -2994,9 +3006,9 @@ ROADMAPS = [
     ("Kỹ sư Mobile", "MOBILE",
      "Ứng dụng chạy tốt cả khi mạng chập chờn và pin sắp hết.", [
         ("Nền tảng và vòng đời", "Màn hình bị huỷ và dựng lại bất cứ lúc nào."),
-        ("Giao diện khai báo", "Compose hoặc SwiftUI. Trạng thái quyết định giao diện."),
+        ("Giao diện khai báo", "Compose hoặc SwiftUI. Trạng thái quyết định giao diện.", "Nền tảng và vòng đời"),
         ("Lưu trữ cục bộ", "Dữ liệu phải còn khi đóng ứng dụng."),
-        ("Offline-first", "Ghi trước, đồng bộ sau, và giải quyết xung đột."),
+        ("Offline-first", "Ghi trước, đồng bộ sau, và giải quyết xung đột.", "Lưu trữ cục bộ"),
         ("Gọi mạng", "Thử lại có giới hạn, và đừng thử lại thứ không idempotent."),
         ("Hiệu năng", "Cuộn mượt quan trọng hơn mọi hiệu ứng."),
         ("Kích thước gói cài", "Người dùng bỏ tải khi ứng dụng quá nặng."),
@@ -3011,49 +3023,49 @@ ROADMAPS = [
      "Đủ sâu ở hai đầu để không phải chờ người khác.", [
         ("Nền tảng web", "Trình duyệt làm gì với một request."),
         ("Một ngôn ngữ hai đầu", "Giảm chi phí chuyển ngữ cảnh trong ngày làm việc."),
-        ("Ranh giới máy chủ và máy khách", "Cái gì tính ở đâu, và vì sao."),
+        ("Ranh giới máy chủ và máy khách", "Cái gì tính ở đâu, và vì sao.", "Nền tảng web"),
         ("Thiết kế dữ liệu", "Lược đồ quyết định phần lớn độ khó về sau."),
-        ("Xác thực đầu cuối", "Từ ô đăng nhập tới phân quyền ở tầng dịch vụ."),
+        ("Xác thực đầu cuối", "Từ ô đăng nhập tới phân quyền ở tầng dịch vụ.", "Ranh giới máy chủ và máy khách"),
         ("Trải nghiệm lập trình viên", "Chạy được toàn bộ hệ thống bằng một lệnh."),
         ("Triển khai một mình", "Biết đủ hạ tầng để tự đưa sản phẩm ra."),
      ]),
     ("Nền tảng khoa học máy tính", "OTHER",
      "Những thứ không đổi khi framework đổi.", [
         ("Cấu trúc dữ liệu", "Mảng, bảng băm, cây, đồ thị. Biết chọn cái nào."),
-        ("Độ phức tạp", "Ước lượng được trước khi đo."),
-        ("Giải thuật cơ bản", "Sắp xếp, tìm kiếm, duyệt đồ thị."),
+        ("Độ phức tạp", "Ước lượng được trước khi đo.", "Cấu trúc dữ liệu"),
+        ("Giải thuật cơ bản", "Sắp xếp, tìm kiếm, duyệt đồ thị.", "Cấu trúc dữ liệu"),
         ("Hệ điều hành", "Tiến trình, luồng, bộ nhớ, tệp."),
         ("Mạng máy tính", "Vì sao một request chậm mà CPU vẫn rảnh."),
-        ("Hệ phân tán", "Đánh đổi giữa nhất quán và sẵn sàng."),
+        ("Hệ phân tán", "Đánh đổi giữa nhất quán và sẵn sàng.", "Mạng máy tính"),
      ]),
     ("Phát triển sự nghiệp", "CAREER",
      "Kỹ năng quyết định bạn đi được bao xa, không phải bao nhanh.", [
         ("Viết rõ ràng", "Tài liệu và tin nhắn là công cụ làm việc chính của kỹ sư."),
         ("Nhận và cho phản hồi", "Tách con người khỏi đoạn mã."),
         ("Ước lượng", "Nói được mức không chắc chắn thay vì một con số giả vờ chắc."),
-        ("Làm việc nhóm", "Đồng bộ ít, tin nhau nhiều."),
+        ("Làm việc nhóm", "Đồng bộ ít, tin nhau nhiều.", "Nhận và cho phản hồi"),
         ("Phỏng vấn", "Cả hai phía đều đang đánh giá lẫn nhau."),
-        ("Dẫn dắt kỹ thuật", "Ra quyết định và chịu trách nhiệm về nó."),
+        ("Dẫn dắt kỹ thuật", "Ra quyết định và chịu trách nhiệm về nó.", "Làm việc nhóm"),
         ("Học liên tục", "Chọn thứ đáng học, bỏ qua thứ đang ồn ào."),
      ]),
     ("Kiến trúc phần mềm", "BACKEND",
      "Ra quyết định lớn với ít thông tin, và ghi lại vì sao.", [
         ("Ghép lỏng và gắn kết", "Hai chỉ số cũ mà vẫn đúng."),
-        ("Kiến trúc phân tầng", "Đơn giản, đủ dùng cho phần lớn hệ thống."),
+        ("Kiến trúc phân tầng", "Đơn giản, đủ dùng cho phần lớn hệ thống.", "Ghép lỏng và gắn kết"),
         ("Thiết kế theo miền", "Ngôn ngữ chung giữa kỹ sư và người dùng."),
-        ("Khi nào tách dịch vụ", "Câu trả lời thường là chưa."),
-        ("Giao tiếp giữa dịch vụ", "Đồng bộ hay bất đồng bộ, và cái giá của mỗi lựa chọn."),
+        ("Khi nào tách dịch vụ", "Câu trả lời thường là chưa.", "Kiến trúc phân tầng"),
+        ("Giao tiếp giữa dịch vụ", "Đồng bộ hay bất đồng bộ, và cái giá của mỗi lựa chọn.", "Khi nào tách dịch vụ"),
         ("Ghi lại quyết định", "Một trang cho mỗi quyết định lớn, kèm phương án đã loại."),
         ("Tiến hoá hệ thống", "Đổi dần, không viết lại."),
      ]),
     ("Sản phẩm cho kỹ sư", "OTHER",
      "Hiểu vì sao mình đang xây thứ này.", [
         ("Phát hiện vấn đề", "Người dùng nói triệu chứng, không nói nguyên nhân."),
-        ("Nghiên cứu người dùng", "Quan sát nhiều hơn hỏi."),
+        ("Nghiên cứu người dùng", "Quan sát nhiều hơn hỏi.", "Phát hiện vấn đề"),
         ("Chỉ số", "Chọn chỉ số mà đội có thể tác động được."),
         ("Phạm vi", "Cắt phạm vi là kỹ năng, không phải thất bại."),
-        ("Thử nghiệm", "Bản nhỏ nhất trả lời được câu hỏi."),
-        ("Tăng trưởng", "Giữ chân trước, mở rộng sau."),
+        ("Thử nghiệm", "Bản nhỏ nhất trả lời được câu hỏi.", "Phạm vi"),
+        ("Tăng trưởng", "Giữ chân trước, mở rộng sau.", "Chỉ số"),
      ]),
 ]
 
@@ -3068,9 +3080,21 @@ def build_roadmaps(rng, people):
         rid = 2001 + i
         roadmaps.append({"id": rid, "name": name, "category": category, "description": desc,
                          "age": 500 - i * 8})
-        for order, (node_name, node_desc) in enumerate(node_specs):
+        node_by_name = {}
+        for order, spec in enumerate(node_specs):
+            node_name, node_desc = spec[0], spec[1]
+            parent_id = None
+            if len(spec) == 3:
+                parent_id = node_by_name.get(spec[2])
+                if parent_id is None:
+                    # Không KeyError thầm lặng từ dict — tên nút sai chính tả phải nói rõ nút nào,
+                    # ở lộ trình nào, đang trỏ vào đâu.
+                    raise ValueError(
+                        f"Nút '{node_name}' (lộ trình '{name}') khai cha '{spec[2]}' nhưng nút đó "
+                        "chưa xuất hiện — nút cha phải nằm TRƯỚC nút con trong danh sách.")
             nodes.append({"id": next_node, "roadmap_id": rid, "name": node_name,
-                          "description": node_desc, "order": order})
+                          "description": node_desc, "parent": parent_id, "order": order})
+            node_by_name[node_name] = next_node
             next_node += 1
 
     seen = set()
@@ -3116,8 +3140,14 @@ và đây là ĐỒ ÁN SẼ ĐƯỢC CHẤM. roadmap.sh chỉ được dùng đ
 
 t_roadmaps và t_roadmap_nodes dùng SERIAL, nên setval ở cuối file gọi qua pg_get_serial_sequence.
 
+CÂY NÚT: parent_node_id tự tham chiếu — nút gốc NULL, nút con trỏ tới id của nút cha CÙNG lộ
+trình. Mọi hàng con đều nằm SAU hàng cha của nó trong câu INSERT, nên FK tự tham chiếu được thoả
+mãn ngay trong một câu mà không cần hai lượt chèn. Không có ngẫu nhiên ở đây: chacon là nội dung
+do nhóm thiết kế, ghi thẳng trong ROADMAPS ở generate_seed.py.
+
 Tiến độ cố ý DANG DỞ: người học thật bỏ giữa chừng nhiều hơn hoàn thành, và một lộ trình ai cũng
-xong 100% thì thanh tiến độ không còn gì để hiển thị.
+xong 100% thì thanh tiến độ không còn gì để hiển thị. Tiến độ gắn trên MỌI cấp — khác seed cũ
+(V58, chỉ nút lá), vì ở mô hình này nút gốc cũng là một kỹ năng học được, không chỉ là nhãn nhóm.
 """)
     f.rule()
 
@@ -3133,7 +3163,8 @@ xong 100% thì thanh tiến độ không còn gì để hiển thị.
     )
 
     rows = [
-        f"    ({n['id']}, {n['roadmap_id']}, {q(n['name'])}, {q(n['description'])}, NULL, "
+        f"    ({n['id']}, {n['roadmap_id']}, {q(n['name'])}, {q(n['description'])}, "
+        f"{str(n['parent']) if n['parent'] else 'NULL'}, "
         f"{n['order']}, now() - INTERVAL '400 days', now() - INTERVAL '400 days')"
         for n in nodes
     ]
