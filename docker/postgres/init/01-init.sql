@@ -1,1 +1,13 @@
+-- Chạy đúng MỘT lần, ở lần khởi tạo đầu tiên của volume Postgres (cơ chế
+-- /docker-entrypoint-initdb.d). Sau đó container bỏ qua thư mục này.
+--
+-- ── Có thừa không? Gần như, và vẫn giữ ──────────────────────────────────────────────────────
+-- Flyway tự tạo schema được khai ở `spring.flyway.schemas` khi nó chưa tồn tại (`createSchemas`
+-- mặc định là true, và repo không đặt lại). Nên trong đường đi bình thường, dòng dưới đây không
+-- làm gì cả.
+--
+-- Giữ lại vì nó rẻ và nó đỡ cho hai trường hợp mà Flyway không đỡ: một, ai đó nối psql vào
+-- container mới trước khi ứng dụng khởi động lần đầu; hai, `createSchemas` bị đặt thành false ở
+-- một môi trường nào đó về sau — khi ấy triệu chứng là ứng dụng không khởi động được với một lỗi
+-- nói về schema, thứ mất thời gian để lần ra. Một dòng SQL chạy một lần không đáng để đánh đổi.
 CREATE SCHEMA IF NOT EXISTS "socialapp";

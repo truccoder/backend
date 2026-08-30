@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.AbstractIntegrationTest;
 import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.FileFormat;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -65,6 +66,17 @@ class BookRepositoryTest extends AbstractIntegrationTest {
     BookEntity entity = book(authorId, title, null);
     entity.setAvgRating(avgRating);
     entity.setReviewCount(reviewCount);
+    return entity;
+  }
+
+  /**
+   * Tên riêng chứ không nạp chồng {@code book(...)}: đã có sẵn {@code book(authorId, title,
+   * String)} và các lời gọi truyền {@code null} vào tham số thứ ba, nên thêm một overload chỉ
+   * khác kiểu tham số cuối sẽ làm chính những lời gọi đó không còn biên dịch được.
+   */
+  private static BookEntity categorised(Integer authorId, String title, LearningCategory category) {
+    BookEntity entity = book(authorId, title, (String) null);
+    entity.setCategory(category);
     return entity;
   }
 
@@ -254,6 +266,112 @@ class BookRepositoryTest extends AbstractIntegrationTest {
 
       // Then
       assertThat(result.getContent()).isEmpty();
+    }
+  }
+
+  @Nested
+  @DisplayName("findLibraryPage")
+  class FindLibraryPage {
+
+    @Test
+    @DisplayName("returns the whole library, newest first, when no category is given")
+    void returnsEverythingWhenNoCategory() {
+      // Given
+      BookEntity backend =
+          bookRepository.saveAndFlush(categorised(authorId, "Backend", LearningCategory.BACKEND));
+      BookEntity mobile =
+          bookRepository.saveAndFlush(categorised(authorId, "Mobile", LearningCategory.MOBILE));
+
+      // When
+      List<BookEntity> result = bookRepository.findLibraryPage(null, null, PageRequest.of(0, 10));
+
+      // Then — id giảm dần, và cuốn thứ hai lưu vào phải đứng trước
+      assertThat(result)
+          .extracting(BookEntity::getId)
+          .containsExactly(mobile.getId(), backend.getId());
+    }
+
+    @Test
+    @DisplayName("keeps only the requested category when one is given")
+    void filtersByCategory() {
+      // Given
+      BookEntity mobile =
+          bookRepository.saveAndFlush(categorised(authorId, "Mobile", LearningCategory.MOBILE));
+      bookRepository.saveAndFlush(categorised(authorId, "Backend", LearningCategory.BACKEND));
+
+      // When
+      List<BookEntity> result =
+          bookRepository.findLibraryPage(null, LearningCategory.MOBILE, PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).extracting(BookEntity::getId).containsExactly(mobile.getId());
+    }
+
+    @Test
+    @DisplayName("finds a book that no unfiltered first page would have reached")
+    void filtersBeforePagingNotAfter() {
+      // Given: cuốn MOBILE là cuốn CŨ NHẤT, còn trang đầu không lọc thì lấy hai cuốn mới nhất.
+      // Đây là ca duy nhất phân biệt được "lọc trong SQL" với "lọc sau khi đã cắt trang" — cách
+      // thứ hai sẽ trả về danh sách rỗng ở đúng chỗ này.
+      BookEntity mobile =
+          bookRepository.saveAndFlush(categorised(authorId, "Mobile", LearningCategory.MOBILE));
+      bookRepository.saveAndFlush(categorised(authorId, "Backend 1", LearningCategory.BACKEND));
+      bookRepository.saveAndFlush(categorised(authorId, "Backend 2", LearningCategory.BACKEND));
+
+      // When
+      List<BookEntity> result =
+          bookRepository.findLibraryPage(null, LearningCategory.MOBILE, PageRequest.of(0, 2));
+
+      // Then
+      assertThat(result).extracting(BookEntity::getId).containsExactly(mobile.getId());
+    }
+
+    @Test
+    @DisplayName("applies the cursor and the category together")
+    void combinesCursorAndCategory() {
+      // Given
+      BookEntity older =
+          bookRepository.saveAndFlush(categorised(authorId, "QA cũ", LearningCategory.QA));
+      bookRepository.saveAndFlush(categorised(authorId, "Backend", LearningCategory.BACKEND));
+      BookEntity newer =
+          bookRepository.saveAndFlush(categorised(authorId, "QA mới", LearningCategory.QA));
+
+      // When: trang thứ hai của tab QA
+      List<BookEntity> result =
+          bookRepository.findLibraryPage(newer.getId(), LearningCategory.QA, PageRequest.of(0, 10));
+
+      // Then: con trỏ loại bỏ cuốn QA mới hơn, bộ lọc loại bỏ cuốn BACKEND nằm giữa
+      assertThat(result).extracting(BookEntity::getId).containsExactly(older.getId());
+    }
+
+    @Test
+    @DisplayName("returns an empty page for a category with no books")
+    void returnsEmptyForUnusedCategory() {
+      // Given
+      bookRepository.saveAndFlush(categorised(authorId, "Backend", LearningCategory.BACKEND));
+
+      // When
+      List<BookEntity> result =
+          bookRepository.findLibraryPage(null, LearningCategory.CAREER, PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("defaults a book saved without a category to OTHER")
+    void defaultsToOther() {
+      // Given: cột là NOT NULL ở V78, nên "không khai báo" phải thành một giá trị thật chứ không
+      // phải một lần ghi thất bại.
+      BookEntity saved = bookRepository.saveAndFlush(book(authorId, "Không chủ đề", (String) null));
+
+      // When
+      List<BookEntity> result =
+          bookRepository.findLibraryPage(null, LearningCategory.OTHER, PageRequest.of(0, 10));
+
+      // Then
+      assertThat(saved.getCategory()).isEqualTo(LearningCategory.OTHER);
+      assertThat(result).extracting(BookEntity::getId).containsExactly(saved.getId());
     }
   }
 }

@@ -26,9 +26,16 @@ public class RoadmapService {
   @Transactional
   public RoadmapDto createRoadmap(RoadmapDto dto) {
     RoadmapEntity entity =
-        RoadmapEntity.builder().name(dto.getName()).description(dto.getDescription()).build();
+        RoadmapEntity.builder()
+            .name(dto.getName())
+            .description(dto.getDescription())
+            .category(dto.getCategory())
+            .build();
     entity = roadmapRepository.save(entity);
     dto.setId(entity.getId());
+    // Đọc ngược từ entity chứ không giữ nguyên dto: người gọi bỏ trống category thì thứ đã được
+    // lưu là OTHER, và phản hồi phải nói đúng thứ đã lưu.
+    dto.setCategory(entity.getCategory());
     return dto;
   }
 
@@ -40,6 +47,7 @@ public class RoadmapService {
               dto.setId(e.getId());
               dto.setName(e.getName());
               dto.setDescription(e.getDescription());
+              dto.setCategory(e.getCategory());
               return dto;
             })
         .collect(Collectors.toList());

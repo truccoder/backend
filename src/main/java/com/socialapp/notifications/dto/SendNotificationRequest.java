@@ -22,6 +22,10 @@ public class SendNotificationRequest {
   private String body;
   private Integer referenceId;
   private String referenceType;
+
+  /** The post containing {@code referenceId} when it is a comment; null for everything else. */
+  private Integer postId;
+
   @Builder.Default private NotificationChannel channel = NotificationChannel.BOTH;
   private Map<String, String> pushData;
 }
