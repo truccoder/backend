@@ -1,6 +1,7 @@
 package com.socialapp.search.dto;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
@@ -8,6 +9,7 @@ import com.socialapp.posts.entity.CodeSnippetDetails;
 import com.socialapp.posts.entity.LinkDetails;
 import com.socialapp.posts.entity.PollDetails;
 import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.enums.ReactionType;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -23,6 +25,10 @@ public class PostDto {
   private String content;
   private String eventName;
   private Integer authorId;
+
+  /** Deep-link key for the author's profile — same reasoning as the feed payload's field. */
+  private String authorUsername;
+
   private String authorFullName;
   private String authorProfilePictureUrl;
   private Integer authorEliteScore;
@@ -57,4 +63,14 @@ public class PostDto {
   private QnaDetails qnaDetails;
   private PollDetails pollDetails;
   private LinkDetails linkDetails;
+
+  /**
+   * The per-type reaction breakdown, the same field {@code FeedPostDataDto} carries and for the
+   * same reason — a search result renders the same card as a feed row, so a field present on one
+   * and missing on the other is a card that loses its reaction chips when the reader arrives by
+   * searching instead of scrolling.
+   *
+   * <p>Types nobody chose are absent rather than zero.
+   */
+  private Map<ReactionType, Long> reactionSummary;
 }

@@ -2,7 +2,8 @@ package com.socialapp.common.ratelimit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,12 +16,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -42,7 +44,6 @@ class AuthRateLimitFilterTest {
   private static final String AUTH_PATH = "/v1/api/auth/login";
 
   @Mock private StringRedisTemplate redisTemplate;
-  @Mock private ValueOperations<String, String> valueOperations;
   @Mock private FilterChain filterChain;
 
   private AuthRateLimitFilter filter;
@@ -50,7 +51,6 @@ class AuthRateLimitFilterTest {
 
   @BeforeEach
   void setUp() {
-    when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     properties = new AuthRateLimitProperties();
     properties.setRequests(20);
     properties.setWindow(Duration.ofMinutes(5));
@@ -62,6 +62,13 @@ class AuthRateLimitFilterTest {
     MockHttpServletRequest request = new MockHttpServletRequest("POST", uri);
     request.setRemoteAddr("203.0.113.9");
     return request;
+  }
+
+  /** Makes the next limiter call report {@code count} events so far in the window. */
+  private void stubCount(long count) {
+    when(redisTemplate.execute(
+            ArgumentMatchers.<RedisScript<Long>>any(), anyList(), ArgumentMatchers.<Object>any()))
+        .thenReturn(count);
   }
 
   @Nested
@@ -110,7 +117,7 @@ class AuthRateLimitFilterTest {
     @DisplayName("lets the request through while inside the budget")
     void allowsWithinBudget() throws Exception {
       // GIVEN this is the 20th request in the window, exactly at the limit
-      when(valueOperations.increment(anyString())).thenReturn(20L);
+      stubCount(20L);
       MockHttpServletRequest request = request(AUTH_PATH);
       MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -126,7 +133,7 @@ class AuthRateLimitFilterTest {
     @DisplayName("rejects with 429 and Retry-After once over the budget")
     void rejectsOverBudget() throws Exception {
       // GIVEN one request past the limit
-      when(valueOperations.increment(anyString())).thenReturn(21L);
+      stubCount(21L);
       MockHttpServletResponse response = new MockHttpServletResponse();
 
       filter.doFilterInternal(request(AUTH_PATH), response, filterChain);
@@ -140,7 +147,7 @@ class AuthRateLimitFilterTest {
     @Test
     @DisplayName("says nothing about which account, so it cannot be used to enumerate users")
     void responseRevealsNothingAboutTheAccount() throws Exception {
-      when(valueOperations.increment(anyString())).thenReturn(21L);
+      stubCount(21L);
       MockHttpServletResponse response = new MockHttpServletResponse();
 
       filter.doFilterInternal(request(AUTH_PATH), response, filterChain);
@@ -157,18 +164,24 @@ class AuthRateLimitFilterTest {
     @Test
     @DisplayName("counts per source address, so one attacker cannot spend everyone's budget")
     void countsPerSourceAddress() throws Exception {
-      when(valueOperations.increment(anyString())).thenReturn(1L);
+      stubCount(1L);
 
       filter.doFilterInternal(request(AUTH_PATH), new MockHttpServletResponse(), filterChain);
 
-      verify(valueOperations).increment("ratelimit:auth:203.0.113.9");
+      verify(redisTemplate)
+          .execute(
+              ArgumentMatchers.<RedisScript<Long>>any(),
+              eq(List.of("ratelimit:auth:203.0.113.9")),
+              ArgumentMatchers.<Object>any());
     }
 
     @Test
     @DisplayName("fails open when Redis is unavailable")
     void failsOpenWhenRedisIsDown() throws Exception {
       // GIVEN Redis is refusing connections
-      when(valueOperations.increment(anyString())).thenThrow(new RuntimeException("redis down"));
+      when(redisTemplate.execute(
+              ArgumentMatchers.<RedisScript<Long>>any(), anyList(), ArgumentMatchers.<Object>any()))
+          .thenThrow(new RuntimeException("redis down"));
       MockHttpServletResponse response = new MockHttpServletResponse();
 
       filter.doFilterInternal(request(AUTH_PATH), response, filterChain);

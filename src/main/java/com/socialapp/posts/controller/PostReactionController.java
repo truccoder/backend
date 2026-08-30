@@ -4,6 +4,7 @@ import java.util.Map;
 
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.common.utils.Constants;
 import com.socialapp.posts.dto.MyReactionResponseDto;
 import com.socialapp.posts.dto.ReactorPageResponseDto;
 import com.socialapp.posts.dto.UpsertPostReactionRequestDto;
@@ -12,6 +13,7 @@ import com.socialapp.posts.service.PostReactionService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -43,7 +45,8 @@ public class PostReactionController {
       @PathVariable Integer postId,
       @RequestParam(required = false) ReactionType type,
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = "20") @Positive int limit) {
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
     return postReactionService.getReactors(
         SecurityUtils.getCurrentUserId(), postId, type, cursor, limit);
   }

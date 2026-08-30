@@ -74,6 +74,44 @@ class TrendingServiceTest {
     }
 
     @Test
+    @DisplayName("should carry the crawled image through to the client")
+    void shouldMapTheImageUrl() {
+      // Given — the entity has held this column since V12 and the DTO did not carry it, so a
+      // picture the crawler stored still reached the client as a card with no image
+      TrendingItemEntity entity =
+          TrendingItemEntity.builder()
+              .id(1)
+              .title("A")
+              .category(TrendingCategory.TOOL)
+              .imageUrl("https://cdn.example.com/cover.png")
+              .build();
+      when(trendingItemRepository.findTrendingNormalized(any(), isNull(), isNull(), any()))
+          .thenReturn(new PageImpl<>(java.util.List.of(entity)));
+
+      // When
+      TrendingPageResponseDto result = trendingService.getTrending(null, null, "week", 1, 10);
+
+      // Then
+      assertThat(result.getItems().get(0).getImageUrl())
+          .isEqualTo("https://cdn.example.com/cover.png");
+    }
+
+    @Test
+    @DisplayName("should send a null image for a source that supplies none")
+    void shouldMapAMissingImageAsNull() {
+      // Given — Hacker News stories without a readable target page keep a null here, and the
+      // client is expected to cope with that rather than with a placeholder pretending otherwise
+      when(trendingItemRepository.findTrendingNormalized(any(), isNull(), isNull(), any()))
+          .thenReturn(new PageImpl<>(java.util.List.of(item(1, "A"))));
+
+      // When
+      TrendingPageResponseDto result = trendingService.getTrending(null, null, "week", 1, 10);
+
+      // Then
+      assertThat(result.getItems().get(0).getImageUrl()).isNull();
+    }
+
+    @Test
     @DisplayName("should query across all categories when none is provided")
     void shouldQueryAllCategories_whenCategoryIsNull() {
       // Given

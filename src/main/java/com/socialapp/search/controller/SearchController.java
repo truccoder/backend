@@ -9,12 +9,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialapp.common.utils.Constants;
+import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.search.dto.BookDto;
+import com.socialapp.search.dto.MentionSuggestionDto;
 import com.socialapp.search.dto.PostDto;
 import com.socialapp.search.dto.SearchResponse;
 import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.UserDto;
-import com.socialapp.search.service.FriendshipQueryService;
+import com.socialapp.search.service.MentionSuggestService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.util.SecurityUtils;
@@ -39,15 +41,18 @@ import lombok.RequiredArgsConstructor;
 public class SearchController {
   private final SearchService searchService;
   private final SuggestService suggestService;
-  private final FriendshipQueryService friendshipQueryService;
+  private final FriendshipService friendshipService;
+  private final MentionSuggestService mentionSuggestService;
 
   @GetMapping
   public SearchResponse search(
       @RequestParam @NotBlank String q,
-      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE) @Positive
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SEARCH_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
           int size) {
     Integer currentUserId = SecurityUtils.getCurrentUserId();
-    List<Integer> friendIds = friendshipQueryService.getFriendIds(currentUserId);
+    List<Integer> friendIds = friendshipService.getFriendIds(currentUserId);
 
     List<UserDto> users =
         searchService.searchUsers(q, 1, size, currentUserId, friendIds).getItems();
@@ -80,5 +85,30 @@ public class SearchController {
       @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SUGGEST_LIMIT) @Positive @Max(20)
           int limit) {
     return suggestService.suggest(q, limit, SecurityUtils.getCurrentUserId());
+  }
+
+  /**
+   * The people list behind the {@code @} in a composer.
+   *
+   * <p>Beside {@link #suggest} rather than inside it, because a mention row is not a search hit:
+   * the client inserts the handle into text being typed instead of navigating to a profile, so the
+   * handle has to come back as its own non-null field, books have no business in the list, and
+   * friends have to be ranked first. See {@code MentionSuggestService} for why that ranking is
+   * affordable here and not in the search box.
+   *
+   * <p>{@code q} is optional, unlike on the two endpoints above. The moment a composer needs this
+   * list most is the keystroke right after the {@code @}, when nothing has been typed yet — and
+   * that call is answered with the caller's friends rather than with the start of the user table.
+   *
+   * <p>Signed-in only, like everything else in this controller, and for a sharper reason: this
+   * endpoint returns people by partial name with no query at all. Opened to guests it would be a
+   * user-directory dump with a blank cursor as the password.
+   */
+  @GetMapping("/mentions")
+  public List<MentionSuggestionDto> suggestMentions(
+      @RequestParam(required = false, defaultValue = "") String q,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_SUGGEST_LIMIT) @Positive @Max(20)
+          int limit) {
+    return mentionSuggestService.suggest(q, limit, SecurityUtils.getCurrentUserId());
   }
 }
