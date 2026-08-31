@@ -34,21 +34,23 @@ services:
   # This used to be `scripts/seed/load-minio-objects.sh`, run by hand. A mandatory step you have
   # to remember is a step somebody will forget, and every dev who forgot had a broken Library.
   #
-  # Keys now come from `docker/minio/seed-manifest.tsv`, written by generate_seed.py in the same
-  # run as the .sql files, rather than being grepped back out of the SQL. Grepping broke every
-  # time the SQL formatting changed - and the SQL formatting is decided by the generator, so the
-  # two sides could drift apart with nobody noticing.
+  # Keys now come from `src/main/resources/db/seed/seed-manifest.tsv`, written by generate_seed.py
+  # in the same run as the .sql files, rather than being grepped back out of the SQL. Grepping
+  # broke every time the SQL formatting changed - and the SQL formatting is decided by the
+  # generator, so the two sides could drift apart with nobody noticing.
   #
-  # The keys are read out of the SQL rather than copied, so editing the seed and running
-  # `docker compose up` keeps the two in step. Standard library only — no `pip install`, so this
-  # works offline.
+  # The manifest lives in resources (not `docker/minio/`) so it is bundled into the jar and
+  # `MinIOSeedObjectInitializer` can read it on production, where no compose file of this repo
+  # runs. This service is the DEV-ONLY path — prod does the same work in the app. Standard library
+  # only — no `pip install`, so this works offline.
   minio-seed-objects:
     image: python:3.12-alpine
     container_name: minio-seed-objects
     volumes:
       # Manifest thay cho viec grep key ra tu file .sql. Sinh cung mot luot voi cac file SQL boi
-      # scripts/seed/generate_seed.py, nen hai ben khong lech nhau duoc.
-      - ./docker/minio:/manifest:ro
+      # scripts/seed/generate_seed.py, nen hai ben khong lech nhau duoc. Nam trong resources de
+      # dong duoc vao jar cho duong production.
+      - ./src/main/resources/db/seed:/manifest:ro
       - ./docker/minio/generate-seed-objects.py:/generate-seed-objects.py:ro
       # Cache anh that. Lan `up` thu hai chay duoc offline va cho ra dung bo anh cu.
       - ./docker/minio/.cache:/cache

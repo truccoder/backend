@@ -17,6 +17,8 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.Result;
 import io.minio.SetBucketPolicyArgs;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.messages.Item;
 import lombok.RequiredArgsConstructor;
 
@@ -159,6 +161,37 @@ public class MinIOService {
     }
 
     return files;
+  }
+
+  /**
+   * Whether an object is already present in a bucket.
+   *
+   * <p>For idempotent seeding: {@code MinIOSeedObjectInitializer} runs on every boot and must not
+   * re-upload the ~1,100 seed objects that are already there. "Absent" is a normal answer, not a
+   * failure — MinIO signals it with an {@link ErrorResponseException} whose code is
+   * {@code NoSuchKey} (or a 404 on the HEAD), and that alone maps to {@code false}. Anything else
+   * — the bucket unreachable, credentials wrong, a 5xx — is a real storage failure and becomes a
+   * {@link StorageException} like every other method here.
+   */
+  public boolean objectExists(String bucketName, String objectName) {
+    try {
+      minioClient.statObject(
+          StatObjectArgs.builder().bucket(bucketName).object(objectName).build());
+      return true;
+    } catch (ErrorResponseException e) {
+      String code = e.errorResponse() == null ? null : e.errorResponse().code();
+      boolean notFound =
+          "NoSuchKey".equals(code)
+              || "NoSuchObject".equals(code)
+              || "NoSuchBucket".equals(code)
+              || (e.response() != null && e.response().code() == 404);
+      if (notFound) {
+        return false;
+      }
+      throw new StorageException("Could not stat " + objectName + " in " + bucketName, e);
+    } catch (Exception e) {
+      throw new StorageException("Could not stat " + objectName + " in " + bucketName, e);
+    }
   }
 
   /** Creates the bucket if it is not there yet. Safe to call repeatedly. */

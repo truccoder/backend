@@ -7,7 +7,7 @@
 
     src/main/resources/db/seed/V81…V90.sql   (V80 reset và V92 fixture viết tay)
     src/main/resources/db/seed/friend-graph.cypher
-    docker/minio/seed-manifest.tsv
+    src/main/resources/db/seed/seed-manifest.tsv
     scripts/seed/id-map.md
 
 TẤT ĐỊNH. random.Random(SEED) với hằng số cố định: chạy lại cho ra y hệt, `git diff` sạch nếu
@@ -64,7 +64,11 @@ MIGRATION_DIR = ROOT / "src" / "main" / "resources" / "db" / "migration"
 # Neo4jSeedInitializer đọc được ở mọi môi trường — kể cả production, nơi không có
 # docker-compose nào của repo này chạy.
 NEO4J_SEED = SEED_DIR / "friend-graph.cypher"
-MINIO_MANIFEST = ROOT / "docker" / "minio" / "seed-manifest.tsv"
+# Manifest ảnh nằm CÙNG CHỖ với friend-graph.cypher và các file SQL — trong resources, đóng vào
+# jar — nên MinIOSeedObjectInitializer đọc được trên production, nơi không có docker-compose nào
+# của repo này chạy. Máy dev vẫn dùng chính file này qua service minio-seed-objects (mount
+# src/main/resources/db/seed vào /manifest).
+MINIO_MANIFEST = SEED_DIR / "seed-manifest.tsv"
 ID_MAP = ROOT / "scripts" / "seed" / "id-map.md"
 
 # ── Dãy version ────────────────────────────────────────────────────────────────────────────────
@@ -479,9 +483,10 @@ def want_image(key, kind, url):
     if prefix not in BUCKET_OF_PREFIX:
         sys.exit(
             f"DỪNG — prefix {prefix!r} chưa có trong BUCKET_OF_PREFIX.\n"
-            "Thêm một loại ảnh mới là BỐN chỗ phải sửa cùng lúc: bảng này, thư mục prefix trong\n"
-            "docker/minio/generate-seed-objects.py, dòng `mc cp` của minio-init trong\n"
-            "docker-compose.yml, và bucket tương ứng phải được `mc anonymous set download`."
+            "Thêm một loại ảnh mới là NĂM chỗ phải sửa cùng lúc: bảng này; thư mục prefix trong\n"
+            "docker/minio/generate-seed-objects.py; dòng `mc cp` của minio-init trong\n"
+            "docker-compose.yml (bucket tương ứng phải được `mc anonymous set download`); và\n"
+            "BUCKET_OF_PREFIX + placeholder() trong MinIOSeedObjectInitializer.java (đường prod)."
         )
     MANIFEST[key] = (kind, url)
     return "${minioUrl}/" + BUCKET_OF_PREFIX[prefix] + "/" + key
@@ -1060,188 +1065,188 @@ TOPICS = [
 ]
 assert len(TOPICS) == 35, len(TOPICS)
 
-# Ba sự kiện THẬT cho mỗi chủ đề ở TOPICS, cùng thứ tự — TOPIC_FACTS[i] ứng với TOPICS[i]. Đây là
-# phần thay cho MEASURES/DETAILS cũ (số đo bịa "2.4s", "180ms" gắn khống vào bất kỳ chủ đề nào):
-# mỗi câu dưới đây là một sự kiện/con số/kỹ thuật có thật, xác minh qua tài liệu chính thức hoặc
-# case study công khai (Hibernate User Guide, tài liệu PostgreSQL, Stripe, web.dev/Telegraph,
-# Netflix engineering blog, MTEB, khảo sát lương IT Việt Nam 2026…). KHÔNG trích nguyên văn — diễn
-# đạt lại bằng lời của nhóm, giữ đúng sự kiện. Không đủ chỗ cho trích dẫn URL trong một câu seed,
-# nên nguồn nằm ở lịch sử research của phiên làm việc đã sinh ra bộ seed này, không lặp lại ở đây.
+# Ba sự kiện THẬT cho mỗi chủ đề ở TOPICS, cùng thứ tự — TOPIC_FACTS[i] ứng với TOPICS[i]. Bản này
+# (2026-09-01) sinh bằng cách thật sự đọc trực tiếp tài liệu/bài viết công khai qua công cụ tìm
+# kiếm trong phiên làm việc, không viết lại từ trí nhớ — nguồn gồm tài liệu chính thức (PostgreSQL,
+# Hibernate, React, WCAG, Terraform, Kubernetes, AWS…) và case study/blog kỹ thuật đã xuất bản
+# (Stripe, Netflix, Cloudflare, Telegraph/web.dev, Google SRE…). KHÔNG trích nguyên văn — diễn đạt
+# lại bằng lời của nhóm, giữ đúng sự kiện. Không đủ chỗ cho trích dẫn URL trong một câu seed, nên
+# nguồn nằm ở lịch sử research của phiên làm việc đã sinh ra bộ seed này, không lặp lại ở đây.
 TOPIC_FACTS = [
     [  # 0. tối ưu truy vấn N+1
-        "Bật @BatchSize (hay default_batch_fetch_size) gom các lượt gọi lazy thành một câu WHERE id IN (...), nên 1.000 bản ghi chỉ còn vài chục truy vấn thay vì một nghìn.",
-        "JOIN FETCH giải đúng một quan hệ trong một câu truy vấn, nhưng đổi FetchType sang EAGER để né N+1 chỉ khiến nó nặng hơn — Hibernate vẫn phát sinh truy vấn phụ cho từng dòng.",
-        "Subselect fetching gom toàn bộ collection của một lượt cha vào đúng một câu truy vấn phụ duy nhất, thay vì một câu riêng cho mỗi cha.",
+        "JOIN FETCH chỉ tự động chèn được khi viết tường minh trong JPQL hay Criteria API — Hibernate không tự ý thêm nó vào một câu truy vấn đã định nghĩa sẵn, nên quên viết là N+1 vẫn xảy ra dù entity đã khai batch size.",
+        "Đặt hibernate.default_batch_fetch_size ở cấu hình toàn cục áp batch fetching cho mọi quan hệ lazy trong ứng dụng, không cần gắn @BatchSize thủ công ở từng entity riêng lẻ.",
+        "Batch fetching nên đóng vai trò lưới an toàn cho những chỗ lỡ quên JOIN FETCH, chứ không phải phương án chính — JOIN FETCH vẫn rẻ hơn vì gom được mọi thứ trong đúng một lượt truy vấn.",
     ],
     [  # 1. chọn TTL cho cache
-        "Rắc thêm 10-20% jitter ngẫu nhiên vào TTL để tránh hàng loạt key hết hạn cùng lúc — nguyên nhân phổ biến nhất của cache stampede.",
-        "Một khoá mutex ngắn hạn cho đúng một request đi tái tạo cache khi miss, các request còn lại chờ hoặc nhận bản cũ, thay vì để tất cả cùng dội xuống database.",
-        "Stale-while-revalidate trả ngay giá trị đã hết hạn cho người dùng trong lúc một tiến trình nền âm thầm làm mới, nên không request nào phải chờ origin.",
+        "Cache stampede — còn gọi là hiệu ứng dogpile hay thundering herd — xảy ra khi nhiều request cùng phát hiện một key hết hạn ở đúng cùng thời điểm và cùng lúc dội xuống nguồn dữ liệu để tái tạo lại nó.",
+        "Cloudflare vận hành stale-while-revalidate theo kiểu bất đồng bộ: tiến trình làm mới cache bắt đầu ngay lúc hết hạn chứ không đợi tới lượt truy cập kế tiếp, nên người dùng đầu tiên sau khi hết hạn nhận ngay bản cũ mà không phải chờ vòng round-trip nào tới origin.",
+        "TTL Jitter được xem là biện pháp nền tảng nên áp dụng ở mọi hệ thống cache vì gần như miễn phí về độ phức tạp, còn cơ chế khoá tái tạo hay hàng đợi làm mới đòi thêm logic điều phối phức tạp hơn hẳn.",
     ],
     [  # 2. đánh index đúng thứ tự cột
-        "Quy tắc leftmost prefix: một index tổ hợp chỉ dùng được cho truy vấn lọc đúng các cột nằm ở đầu index, theo đúng thứ tự khai.",
-        "Cột dùng so sánh khoảng (>, <, BETWEEN) phải đặt sau cùng trong index tổ hợp — index không dùng được cho cột đứng sau một điều kiện khoảng.",
-        "Một truy vấn lọc ba cột trên bảng triệu dòng từng đi từ Parallel Seq Scan 17ms xuống Index Only Scan 0,6ms sau khi thêm đúng index tổ hợp khớp thứ tự lọc.",
+        "Một index nhiều cột chỉ thật sự phát huy hiệu quả khi truy vấn ràng buộc đúng các cột nằm ở đầu index — PostgreSQL vẫn dùng được index cho một tập con cột, nhưng hiệu quả giảm hẳn nếu không chạm tới cột dẫn đầu.",
+        "Quy tắc leftmost prefix xác định chính xác cách Postgres dùng index tổ hợp: mọi ràng buộc bằng trên các cột đầu, cộng thêm đúng một ràng buộc khoảng trên cột kế tiếp chưa có ràng buộc bằng, là phần được dùng để giới hạn vùng quét.",
+        "Đặt cột hay xuất hiện trong mệnh đề WHERE lên đầu danh sách cột của index, còn cột ít dùng để lọc hơn xếp sau — thứ tự khai báo trong CREATE INDEX quyết định trực tiếp cấu trúc B-tree và những truy vấn nào tận dụng được nó.",
     ],
     [  # 3. chuyển sang virtual threads
-        "Virtual thread không loại bỏ nút thắt, nó dời nút thắt xuống tầng dưới: khi trần connection pool biến mất, hàng đợi truy vấn database trở thành điểm nghẽn kế tiếp.",
-        "ThreadLocal dùng sai với virtual thread gây rò rỉ bộ nhớ âm thầm — virtual thread không được gộp lại (pool) như platform thread nên state cũ không bao giờ được dọn.",
-        "Sự cố Netflix tháng 7/2024 với virtual thread bắt nguồn từ một khối synchronized ghim virtual thread vào carrier thread, biến một đoạn mã tưởng vô hại thành điểm nghẽn toàn hệ thống.",
+        "Trước JEP 491 ở Java 24, một lệnh block bên trong khối synchronized khiến virtual thread bị ghim cứng vào carrier thread vì JVM gắn quyền sở hữu monitor với carrier thread chứ không phải với virtual thread, nên không thể tráo carrier giữa chừng.",
+        "Trong sự cố sản xuất tháng 7/2024, Netflix ghi nhận việc ghim làm cạn kiệt toàn bộ carrier thread khiến ứng dụng trông như vẫn sống — vẫn nhận kết nối, dashboard vẫn xanh — nhưng không xử lý được việc gì.",
+        "JEP 491 đã sửa lỗi ghim do synchronized kể từ Java 24; cùng một đoạn mã từng làm treo hệ thống ở Netflix chạy trên JDK 24 trở lên không còn gây deadlock nữa.",
     ],
     [  # 4. tách monolith thành service
-        "Strangler fig: bọc route cũ sau một lớp proxy rồi chuyển từng phần sang service mới, hệ thống cũ vẫn chạy suốt quá trình chuyển thay vì viết lại toàn bộ cùng lúc.",
-        "Ranh giới service nên theo bounded context của nghiệp vụ, không theo lớp kỹ thuật — tách riêng 'service database' hay 'service UI' là dấu hiệu sai hướng.",
-        "Chi phí ẩn lớn nhất không nằm ở hạ tầng mà ở giao tiếp giữa các service: một transaction từng gọn trong một câu SQL giờ cần saga hoặc outbox pattern để giữ nhất quán.",
+        "Strangler Fig — đặt tên và mô tả lần đầu bởi Martin Fowler năm 2004 — ví việc thay thế hệ thống cũ như cách cây đa bóp cổ leo quấn quanh một cây chủ và dần thay thế nó, thay vì chặt bỏ cây chủ ngay từ đầu.",
+        "Cách tiếp cận này trích dần từng tính năng ra khỏi khối monolith và dựng một ứng dụng mới bao quanh hệ thống cũ, để người dùng chuyển sang phần vừa tách một cách từ từ thay vì một lần cắt toàn bộ.",
+        "Giá trị chính của strangler fig nằm ở việc giảm rủi ro khi thay thế hệ thống lớn trong lúc vẫn giao được giá trị nghiệp vụ nhanh, đổi lại là phải duy trì đồng thời cả lớp định tuyến cũ và mới suốt quá trình chuyển.",
     ],
     [  # 5. thiết kế API phân trang
-        "Phân trang theo offset (LIMIT/OFFSET) chậm dần khi offset lớn vì database vẫn phải quét qua các dòng bị bỏ; phân trang theo cursor giữ tốc độ ổn định bất kể trang thứ mấy.",
-        "Cursor phải mã hoá đủ thông tin sắp xếp — không chỉ id — để tránh trùng hoặc bỏ sót dòng khi nhiều bản ghi có cùng giá trị sắp xếp.",
-        "Trả kèm hasMore thay vì tổng số trang: COUNT(*) trên bảng lớn tốn kém và thường không cần thiết cho một danh sách cuộn vô hạn.",
+        "Stripe dùng cursor dạng starting_after/ending_before trỏ thẳng vào id của một đối tượng đã có trong danh sách, và hai tham số này loại trừ nhau — không dùng được đồng thời trong cùng một lượt gọi.",
+        "Giới hạn limit trong API phân trang của Stripe chỉ nhận giá trị từ 1 đến 100 mỗi trang, và tài liệu khuyến cáo luôn dựa vào cờ has_more thay vì tự đếm để biết còn dữ liệu hay không.",
+        "Với endpoint tìm kiếm, Stripe lại dùng một dạng con trỏ khác — tham số page nhận giá trị next_page trả về từ lượt gọi trước, tách bạch hẳn với cơ chế starting_after dùng cho list thông thường.",
     ],
     [  # 6. xử lý idempotency cho webhook
-        "Client gửi kèm Idempotency-Key duy nhất trên header; server lưu key đó cùng kết quả lần xử lý đầu, các lần gọi lại cùng key chỉ trả lại đúng kết quả cũ.",
-        "Webhook luôn giao theo kiểu 'ít nhất một lần' — chắc chắn có lúc nhận trùng sự kiện, nên mọi payload đứng đắn đều mang kèm một event id duy nhất để nhận diện.",
-        "Cần nhất quán giao dịch thì lưu bản ghi idempotency ngay trong cùng transaction với thay đổi dữ liệu; chỉ cần tốc độ thì Redis với TTL tự dọn là lựa chọn phổ biến hơn.",
+        "Stripe cam kết chỉ giao webhook theo kiểu ít-nhất-một-lần, không bao giờ đúng-một-lần — cùng một sự kiện đến hai hay ba lần được xem là hành vi bình thường, không phải lỗi.",
+        "Mỗi sự kiện của Stripe giữ nguyên event id qua mọi lần gửi lại, và nếu endpoint trả về mã khác 2xx hoặc time out, Stripe sẽ thử gửi lại theo cơ chế exponential backoff kéo dài tới ba ngày.",
+        "Idempotency-Key ở tầng API request và event id ở tầng webhook là hai cơ chế khác nhau dù cùng mục đích chống trùng: request gửi lên Stripe dùng Idempotency-Key tự đặt, còn sự kiện Stripe gửi xuống dùng chính event id làm khoá khử trùng.",
     ],
     [  # 7. chuẩn hoá log có traceId
-        "Một traceId sinh ở tầng gateway rồi truyền xuyên suốt qua header HTTP và context của hàng đợi, nối được toàn bộ đường đi của một request qua nhiều service chỉ bằng một lượt tìm log.",
-        "Không có traceId, một sự cố tail latency chỉ hiện ra như 'p99 tăng' trên dashboard — không nói được request nào chậm, đi qua service nào, chết ở bước nào.",
-        "MDC (Mapped Diagnostic Context) của SLF4J gắn traceId vào mọi dòng log trong cùng luồng xử lý mà không cần truyền tay qua từng hàm.",
+        "Chuẩn W3C Trace Context định nghĩa header traceparent theo đúng khuôn: phiên bản, traceId, id của span cha, và cờ trạng thái lấy mẫu, cho phép nhiều hệ thống giám sát khác nhau hiểu chung một ngữ cảnh vết.",
+        "traceId giữ nguyên suốt một request xuyên nhiều service trong khi spanId đổi ở mỗi chặng — đúng cơ chế cho phép nối lại toàn bộ hành trình của một request chỉ từ một traceId duy nhất.",
+        "Micrometer Tracing ghi traceId và spanId thẳng vào MDC của SLF4J trong suốt vòng đời một span, nên mọi dòng log sinh ra trong khoảng đó tự mang theo hai giá trị này mà không cần code nào truyền tay.",
     ],
     [  # 8. đo p99 thay vì trung bình
-        "Độ trễ không phân phối chuẩn mà lệch đuôi dài: một số ít request rất chậm (GC pause, cold start, retry, tranh chấp khoá) đủ sức kéo dài đuôi mà không ảnh hưởng tới trung bình.",
-        "p50 200ms và p99 3 giây là chuyện bình thường trên cùng một hệ thống — con số trung bình không kể được câu chuyện đó.",
-        "Khuếch đại đuôi (tail amplification) xảy ra khi một request chậm ở tầng dưới khiến các lượt retry ở tầng trên dồn lại, biến 1% request chậm thành sự cố toàn hệ thống.",
+        "Trong một ví dụ được sách Site Reliability Engineering của Google trích lại, độ trễ trung bình một hệ thống có thể chỉ 80ms trong khi p99 lên tới 2,4 giây — một con số trung bình duy nhất không kể được câu chuyện đó.",
+        "Với hệ thống phục vụ mười triệu request mỗi ngày, một p99 ở mức 1.200ms nghĩa là một trăm nghìn lượt trải nghiệm chậm mỗi ngày, ẩn hoàn toàn phía sau một chỉ số trung bình vẫn trông khoẻ mạnh.",
+        "Percentile không cộng gộp được theo phép trung bình đơn giản: nếu vùng A có p99 200ms và vùng B có p99 800ms thì p99 toàn cục không phải là 500ms — đây là lỗi thường gặp khi gộp báo cáo độ trễ từ nhiều vùng.",
     ],
     [  # 9. giảm thời gian build CI
-        "Cache node_modules theo hash của lockfile đưa một bước cài đặt phụ thuộc từ 6-12 phút xuống còn 15-30 giây khi cache trúng.",
-        "Tách một job chạy tuần tự trên 14 máy thành ba job song song từng đưa build time từ 24 phút xuống còn 8 phút, không đổi logic build.",
-        "Thứ tự ưu tiên đúng: cache trước (không cần đổi kiến trúc, lợi ích lớn nhất), song song hoá sau (cần tái cấu trúc pipeline nhưng lợi ích cộng dồn).",
+        "Một dự án mã nguồn mở ghi nhận giảm được một nửa thời gian build sau khi áp dụng chiến lược cache phụ thuộc đúng cách trong CI, không cần đổi logic build.",
+        "Một phép đo thực tế cho thấy bước cài npm install giảm từ ba phút xuống còn khoảng bốn mươi giây — gần năm lần — chỉ nhờ cache đúng theo hash của lockfile.",
+        "Cache lớp layer khi build Docker image trong CI từng đưa thời gian build từ khoảng năm phút xuống còn một phút trong một phép đo thực tế, cho thấy cache tầng layer cũng đáng giá không kém cache phụ thuộc gói.",
     ],
     [  # 10. viết test không phụ thuộc thứ tự
-        "Test phụ thuộc thứ tự thường bắt nguồn từ state tĩnh dùng chung (static field, singleton chưa reset) hoặc dữ liệu test A để lại mà test B vô tình đọc phải.",
-        "Chạy test với thứ tự ngẫu nhiên mỗi lần là cách nhanh nhất lộ ra test nào đang ngầm phụ thuộc thứ tự chạy trước đó.",
-        "Mỗi test nên tự dựng dữ liệu của mình rồi tự dọn sau khi chạy, thay vì tin vào thứ tự chạy trước đó để lại đúng trạng thái cần.",
+        "Test phụ thuộc thứ tự thường bắt nguồn từ việc một test để lại dữ liệu, cấu hình hay phiên làm việc mà test chạy sau đó vô tình đọc phải — một khảo sát ghi nhận phần lớn trường hợp được khắc phục chỉ bằng cách dọn sạch trạng thái dùng chung giữa các lượt chạy.",
+        "JUnit khuyến nghị mọi trạng thái cần thiết cho một test nên được dựng tường minh trong @BeforeEach hoặc ngay trong thân test, thay vì ngầm định dựa vào trạng thái mà test chạy trước để lại.",
+        "Chỉ khi thật sự cần một thứ tự cố định — như test khói cho migration hay luồng happy-path đầu-cuối — mới nên khai báo tường minh bằng @TestMethodOrder, còn lại nên để thứ tự chạy ngẫu nhiên để lộ sớm phụ thuộc ẩn.",
     ],
     [  # 11. mock ít đi, dùng testcontainers
-        "Mock database không bắt được lỗi migration, connection pool hay timeout thật — những thứ chỉ hiện ra khi chạy trên một instance database thật.",
-        "Testcontainers dựng một container Postgres/Redis mới tinh cho mỗi lượt test rồi huỷ ngay sau đó, nên test không dính trạng thái để lại từ lượt chạy trước.",
-        "Chi phí thật của việc bảo trì mock là độ trôi (drift): schema hay logic nghiệp vụ đổi mà mock không đổi theo, lỗi lọt qua ngay chỗ lẽ ra test phải bắt được.",
+        "Một hệ thống test qua được với H2 vẫn có thể giấu kín lỗi cú pháp SQL đặc thù của Postgres cho tới tận lúc triển khai — H2 và HSQL chạy nhanh nhưng không hành xử giống hệt database production.",
+        "Testcontainers dựng container thật cho từng lượt test rồi huỷ ngay sau đó, nên mỗi test được cô lập hoàn toàn và không dính trạng thái còn sót từ những lượt chạy trước — khác hẳn cách mock hay service giả lập chia sẻ trạng thái ngầm.",
+        "Những vấn đề tích hợp thật sự — như connection pool, chạy migration, hay timeout kết nối — chỉ lộ ra khi test chạy trên đúng loại hệ thống mà production dùng, điều mock không bao giờ mô phỏng được.",
     ],
     [  # 12. dựng design token dùng chung
-        "Design token tách biến thiết kế (màu, khoảng cách, kiểu chữ) khỏi từng nền tảng, rồi biên dịch ra native code riêng cho iOS, Android và web từ đúng một nguồn.",
-        "Airbnb xây một hệ ngôn ngữ thiết kế dùng chung thay vì ba hệ riêng cho ba nền tảng, đổi lại là một nguồn sự thật duy nhất cho mọi token.",
-        "Đổi một token màu ở đúng một chỗ và mọi nền tảng cập nhật theo, thay vì phải tìm-và-thay từng giá trị hex rải rác trong code.",
+        "Style Dictionary biên dịch một bộ token định nghĩa một lần thành CSS custom properties, hằng số màu Swift và tài nguyên XML Android — mỗi nền tảng đọc đúng định dạng của nó từ cùng một nguồn.",
+        "Từ phiên bản 4, Style Dictionary hỗ trợ thẳng định dạng chuẩn DTCG (Design Tokens Community Group), nên file token xuất từ Figma hay Tokens Studio nạp thẳng vào pipeline build mà không cần chuyển đổi tay.",
+        "Đổi một giá trị token rồi chạy lại pipeline build là đủ để giá trị mới lan ra mọi nền tảng đang tiêu thụ token đó, thay vì phải sửa từng file cấu hình riêng của iOS, Android và web.",
     ],
     [  # 13. giảm layout shift
-        "Telegraph Media Group cải thiện CLS ở phân vị 75 từ 0,25 xuống 0,1, kéo tỉ lệ trang đạt chuẩn Core Web Vitals từ 57% lên 72%, theo case study với Google.",
-        "Đặt trước kích thước (width/height hoặc aspect-ratio) cho ảnh và khối quảng cáo là cách rẻ nhất để trình duyệt chừa đúng chỗ trước khi nội dung tải xong.",
-        "Một mức giảm CLS 0,1 tương ứng khoảng 1-2% tăng engagement trong một số nghiên cứu — người đọc không còn bị nội dung 'nhảy' ngay lúc định bấm.",
+        "Telegraph Media Group giảm CLS ở phân vị 75 từ 0,25 xuống 0,1 chỉ trong vài tháng, đưa tỷ lệ trang đạt chuẩn Core Web Vitals từ 57% lên 72%.",
+        "Nguyên nhân chính gây layout shift ở họ là các khối nhúng giữa bài viết — tweet, video, widget theo dõi số liệu — không có kích thước cố định trước khi tải xong.",
+        "Giải pháp là chuẩn hoá kích thước ô quảng cáo theo đúng các cỡ phổ biến và chừa sẵn chỗ hiển thị, cộng với sửa lại cách tải ảnh, tiêu đề và video nhúng.",
     ],
     [  # 14. làm form truy cập được bằng bàn phím
-        "WCAG 2.1.1 đòi mọi phần tử tương tác dùng được trọn vẹn chỉ bằng bàn phím: Tab/Shift+Tab di chuyển focus, Enter kích hoạt, phím mũi tên điều hướng trong dropdown và radio.",
-        "Làm một menu thả xuống thật sự dùng được bằng bàn phím theo đúng WCAG 2.2 từng mất hàng chục lượt chỉnh sửa — phần khó nhất là đồng bộ đúng phần tử có focus với đúng phần tử trình đọc màn hình công bố.",
-        "Thứ tự Tab phải theo đúng thứ tự đọc hợp lý trên giao diện, không theo thứ tự khai trong DOM nếu CSS đã sắp xếp lại vị trí hiển thị.",
+        "WCAG 2.4.3 (mức A) yêu cầu thứ tự focus khi duyệt tuần tự bằng bàn phím phải giữ đúng ý nghĩa và cách vận hành của trang, không được nhảy lộn xộn.",
+        "Thứ tự tab chuẩn phải khớp với thứ tự đọc hợp lý trên giao diện, và không dùng giá trị tabindex dương vì nó phá vỡ trật tự tự nhiên của DOM.",
+        "Trên một form đăng nhập, sau ô cuối cùng, focus phải đi tiếp xuống phần nội dung logic kế tiếp của trang chứ không được nhảy ngược lên đầu trang.",
     ],
     [  # 15. chia bundle theo route
-        "Code splitting theo route chỉ tải phần JavaScript cần cho trang đang xem, thay vì gộp toàn bộ ứng dụng vào một bundle duy nhất tải ngay từ lần đầu.",
-        "Lazy import một component nặng (biểu đồ, trình soạn thảo rich text) chỉ khi người dùng thực sự mở tới nó, thay vì buộc ai cũng tải nó dù không bao giờ chạm tới.",
-        "Phân tích bundle bằng công cụ visualizer thường lộ ra một thư viện ngoài dự tính chiếm phần lớn dung lượng — kiểu import cả một thư viện ngày tháng chỉ để dùng một hàm format.",
+        "React.lazy() kết hợp Suspense là cơ chế chính thức để dừng gửi kèm mã chưa cần dùng ngay trong lần tải đầu tiên.",
+        "Điểm yếu chính của lazy loading theo route là độ trễ ở lần điều hướng đầu: người dùng bấm link, Suspense hiện fallback, trình duyệt tải chunk, chunk chạy xong component mới hiện ra.",
+        "Muốn code splitting hoạt động, điểm vào của ứng dụng không được import tĩnh các component định tách riêng — import tĩnh sẽ kéo hết chúng trở lại đúng một bundle.",
     ],
     [  # 16. quản lý state không cần thư viện
-        "State của server (dữ liệu fetch), state URL và state UI cục bộ nên xử lý bằng cách khác nhau — không có một công cụ nào hợp cho mọi loại state.",
-        "useReducer hợp khi một state có từ bốn hành động trở lên hoặc các trường phụ thuộc lẫn nhau; tách state và dispatch thành hai context riêng để component chỉ gọi dispatch không bị render lại mỗi khi state đổi.",
-        "useContext một mình chỉ cấp quyền truy cập toàn cục, không có cấu trúc; useReducer một mình có cấu trúc nhưng chỉ cục bộ — kết hợp cả hai mới đủ thay một thư viện quản lý state ở quy mô vừa.",
+        "useReducer hợp khi một state có nhiều giá trị phụ thuộc lẫn nhau hoặc cần một mô hình cập nhật kiểu Redux thu nhỏ mà không phải cài thêm thư viện.",
+        "Ghép useReducer với useContext cho phép một component gọi dispatch mà không tự render lại mỗi khi state đổi, miễn tách state và dispatch thành hai context riêng.",
+        "Giới hạn của cách này là context làm mọi consumer render lại khi giá trị đổi dù component chỉ đọc một phần nhỏ, nên ứng dụng có nhiều state dùng chung thường phải chuyển sang một store ngoài.",
     ],
     [  # 17. đồng bộ dữ liệu khi mất mạng
-        "CRDT cho phép nhiều thiết bị ghi độc lập rồi hợp nhất về cùng một kết quả mà không cần máy chủ trọng tài, miễn phép hợp là giao hoán và không phụ thuộc thứ tự.",
-        "CRDT giải quyết xung đột cấu trúc dữ liệu, không giải quyết xung đột nghiệp vụ — hai người cùng sửa giá một sản phẩm thì hợp nhất kỹ thuật xong vẫn cần logic nghiệp vụ quyết định giá nào đúng.",
-        "PowerSync, Realm Sync và replication kiểu CouchDB là các nền tảng offline-first đang chạy production thật, dùng CRDT hoặc conflict resolution theo revision.",
+        "CRDT cho phép nhiều thiết bị sửa dữ liệu độc lập khi mất mạng rồi tự hợp nhất về cùng một trạng thái lúc đồng bộ lại, không cần máy chủ đứng ra phân xử.",
+        "Automerge tập trung vào cấu trúc dữ liệu kiểu JSON và vừa có bản viết lại bằng Rust, xử lý được tài liệu lớn hơn hẳn so với bản JavaScript thuần trước đó.",
+        "PowerSync tự thân không đi kèm mô hình CRDT — mặc định xử lý xung đột theo kiểu ghi sau thắng, nên muốn hợp nhất theo kiểu CRDT thật sự phải ghép thêm một thư viện như Yjs.",
     ],
     [  # 18. giảm kích thước app
-        "Android App Bundle giảm trung bình khoảng 35% dung lượng tải về vì chỉ đóng gói đúng phần tài nguyên khớp thiết bị người dùng, thay vì mọi biến thể màn hình/kiến trúc CPU.",
-        "R8/ProGuard loại bỏ code không dùng tới từ các SDK bên thứ ba; một số dự án thực tế giảm được 60-70% kích thước APK chỉ bằng shrinking và minification, không đổi tính năng.",
-        "Phần lớn dung lượng dư thừa nằm ở tài nguyên (ảnh độ phân giải cao không cần thiết, font không dùng) nhiều hơn là ở chính code.",
+        "Trung bình Android App Bundle giảm khoảng 20% kích thước app so với đóng gói APK truyền thống, vì mỗi thiết bị chỉ tải đúng phần tài nguyên khớp cấu hình của nó.",
+        "LinkedIn từng ghi nhận giảm 23% kích thước app còn Twitter giảm tới 35% sau khi chuyển sang Android App Bundle, cao hơn hẳn mức trung bình toàn hệ sinh thái.",
+        "Theo nghiên cứu của Google, cứ tăng 6MB dung lượng APK phân phối thì tỷ lệ cài đặt giảm khoảng 1%, nên kích thước app ảnh hưởng trực tiếp tới số lượt cài chứ không chỉ là chuyện kỹ thuật.",
     ],
     [  # 19. bảo mật token trên thiết bị
-        "iOS Keychain và Android Keystore mã hoá secret bằng khoá sinh trong phần cứng bảo mật (Secure Enclave / TEE), nên kể cả thiết bị bị chiếm quyền cũng khó trích xuất trực tiếp khoá gốc.",
-        "Chỉ một phần rất nhỏ ứng dụng xử lý dữ liệu nhạy cảm dùng đúng mức bảo vệ phần cứng mạnh nhất — phần lớn vẫn lưu token ở mức bảo vệ yếu hơn dù nền tảng đã hỗ trợ sẵn.",
-        "Trên thiết bị đã jailbreak/root, mọi lớp bảo vệ của hệ thống keychain coi như mất tác dụng — không nên tin tuyệt đối vào lưu trữ phía client cho secret có giá trị cao.",
+        "iOS Keychain và Android Keystore đều dựa vào phần cứng bảo mật riêng — Secure Enclave trên iOS, Hardware Security Module trên Android — để giữ khoá mã hoá tách biệt khỏi hệ điều hành chính.",
+        "Trên Android, khoá sinh qua Keystore được gắn với đúng phần cứng của thiết bị đó, và bản thân khoá không bao giờ rời khỏi vùng an toàn kể cả khi ứng dụng đang đọc dữ liệu đã giải mã.",
+        "Khuyến nghị bảo mật phổ biến là dùng Keychain/Keystore thay vì lưu trữ thường, đặt lịch xoay vòng token định kỳ, và luôn kiểm thử hành vi ứng dụng trên thiết bị đã jailbreak hoặc root.",
     ],
     [  # 20. rà soát phụ thuộc bên thứ ba
-        "Sự cố Log4Shell (CVE-2021-44228) ảnh hưởng hàng triệu ứng dụng vì phần lớn không biết mình dùng Log4j — khoảng 60% dự án Java dùng nó như một dependency gián tiếp, chôn sâu trong cây phụ thuộc.",
-        "Một gói npm nhỏ với hàng triệu lượt tải mỗi tuần từng bị chiếm quyền để phát tán mã độc, cho thấy kể cả gói ít ai để ý cũng có thể là điểm vào của toàn bộ chuỗi cung ứng.",
-        "Dependabot và các công cụ tương tự không chỉ báo lỗ hổng ở dependency trực tiếp mà còn dò tới tận dependency gián tiếp, tự tạo PR nâng phiên bản gốc để kéo theo bản vá.",
+        "Log4Shell (CVE-2021-44228) nguy hiểm trên diện rộng vì Log4j nằm sâu bên trong hàng loạt framework Apache khác như Struts2, Solr và Druid, kéo theo vô số ứng dụng bên thứ ba dùng lại các framework đó.",
+        "Phần lớn tổ chức bị ảnh hưởng không biết mình đang chạy Log4j vì nó tồn tại như một dependency gián tiếp, chôn sâu vài lớp trong cây phụ thuộc chứ không khai trực tiếp.",
+        "Mức độ nghiêm trọng của lỗ hổng khiến CISA phải ra hướng dẫn khẩn cấp riêng, nhấn mạnh việc phải rà cả dependency gián tiếp chứ không chỉ dependency khai trực tiếp trong file quản lý gói.",
     ],
     [  # 21. dựng pipeline triển khai xanh-lam
-        "Hai môi trường production giống hệt nhau — một đang chạy, một đứng chờ. Bản mới lên môi trường chờ, kiểm xong thì load balancer chuyển hướng traffic sang đó.",
-        "Rollback chỉ là trỏ lại load balancer về môi trường cũ, không phải deploy lại — đây là lý do rollback kiểu này gần như tức thì so với các chiến lược khác.",
-        "Đổi lại tốc độ rollback, chi phí là gấp đôi hạ tầng trong lúc chuyển đổi vì cả hai môi trường đều phải chạy đồng thời.",
+        "Theo tài liệu AWS, môi trường xanh giữ bản đang chạy thật còn môi trường lam chạy bản mới; load balancer chỉ chuyển traffic sang lam sau khi bản mới đã được kiểm xong.",
+        "Rollback trong mô hình này chỉ là trỏ listener của load balancer về lại target group xanh, không cần triển khai lại gì — AWS mô tả đây là rollback gần như tức thời, tính bằng giây thay vì phút.",
+        "Với Amazon ECS, nếu phát hiện lỗi ngay trong lúc triển khai, hệ thống có thể tự động định tuyến traffic quay lại bản dịch vụ chính mà không cần ai can thiệp tay.",
     ],
     [  # 22. đặt resource limit cho pod
-        "Exit code 137 trong kubectl describe pod gần như luôn là OOMKilled — kernel Linux giết tiến trình khi vượt giới hạn bộ nhớ đã khai.",
-        "Đặt memory limit bằng đúng memory request là khuyến nghị chuẩn: bộ nhớ là tài nguyên không nén được, một khi đã cấp cho pod thì chỉ lấy lại được bằng cách giết pod.",
-        "Pod ở nhóm Guaranteed (request bằng limit cho cả CPU lẫn RAM) bị evict sau cùng khi node thiếu tài nguyên; pod không khai request/limit bị evict đầu tiên.",
+        "Khi một container vượt quá memory limit đã khai, kernel Linux buộc phải kill tiến trình đó và Kubernetes ghi nhận lại bằng trạng thái OOMKilled kèm exit code 137.",
+        "Request là mức tài nguyên tối thiểu được đảm bảo và dùng để lập lịch — Kubernetes sẽ không đặt pod vào node nào không đủ đáp ứng đúng con số request đó.",
+        "Một cách đặt số phổ biến là để memory request bằng mức dùng ổn định ở phân vị 95, còn limit cao hơn request khoảng 1,5-2 lần để chịu được các đợt tăng tải hoặc áp lực từ garbage collector.",
     ],
     [  # 23. chuyển state Terraform lên remote
-        "Từ Terraform 1.10, backend S3 tự khoá state bằng use_lockfile = true, không còn bắt buộc phải dựng thêm bảng DynamoDB riêng cho việc khoá như trước.",
-        "Di trú state không downtime: bật đồng thời use_lockfile và dynamodb_table trong một giai đoạn chuyển tiếp, đợi mọi máy lên Terraform 1.11 trở lên rồi mới bỏ dynamodb_table.",
-        "State cục bộ không có khoá: hai người chạy terraform apply cùng lúc có thể ghi đè state của nhau — backend từ xa giải đúng vấn đề này bằng khoá tập trung.",
+        "Từ Terraform 1.10, backend S3 hỗ trợ khoá state ngay trong chính S3 qua tuỳ chọn use_lockfile, không còn bắt buộc phải dựng thêm một bảng DynamoDB riêng chỉ để khoá.",
+        "Tham số dynamodb_table để khoá theo kiểu cũ vẫn hoạt động nhưng đã bị đánh dấu deprecated từ Terraform 1.11 và sẽ bị gỡ ở một bản sau.",
+        "Khuyến nghị chuẩn là tách state theo từng môi trường và từng thành phần hạ tầng thay vì gộp toàn bộ vào một file state duy nhất, để giảm rủi ro một lần apply ảnh hưởng nhầm sang tài nguyên không liên quan.",
     ],
     [  # 24. giảm hoá đơn cloud
-        "Nhiều đội đạt mức giảm 25-40% chi phí cloud trong 90 ngày đầu chỉ bằng rightsizing và dọn tài nguyên nhàn rỗi, chưa cần tái kiến trúc.",
-        "Phần lớn khoản tiết kiệm của một chương trình FinOps có cấu trúc thường đến ngay trong tháng thứ hai, từ rightsizing và tắt tài nguyên không dùng.",
-        "Xoá dữ liệu test còn sót trên môi trường production-like và đặt lịch tắt máy dev ngoài giờ làm việc là hai khoản tiết kiệm rẻ nhất nhưng hay bị bỏ qua nhất.",
+        "Chuyển tải sang gói cam kết trước (savings plan/reserved instance) và dọn sạch tài nguyên nhàn rỗi thường cắt được 20-40% hoá đơn cloud mà không cần đổi kiến trúc.",
+        "Môi trường test/dev bị quên chạy 24/7 là một trong những khoản lãng phí lớn nhất trên hoá đơn cloud — tắt ngoài giờ làm việc có thể cắt tới hai phần ba chi phí của riêng nhóm tài nguyên đó.",
+        "FinOps đặt việc nhìn thấy rõ khoản nào đang tốn tiền lên trước việc cắt giảm — một đội không biết dịch vụ nào ngốn ngân sách thì đổi loại instance kiểu gì cũng khó tối ưu đúng chỗ.",
     ],
     [  # 25. đưa mô hình từ notebook lên production
-        "Công cụ kiểm dữ liệu tối ưu cho notebook thường thêm độ trễ không chấp nhận được khi ép chạy trong một pipeline real-time — công cụ hợp cho notebook chưa chắc hợp cho production.",
-        "Data drift là khi phân phối thống kê của dữ liệu đầu vào đổi theo thời gian; concept drift là khi chính mối quan hệ giữa đầu vào và đầu ra đổi — hai loại trôi cần chiến lược phát hiện khác nhau.",
-        "Drift ở tầng bề mặt (trung bình, phương sai) đôi khi không đổi trong khi phân phối thật đã lệch hẳn — chỉ theo dõi thống kê tổng quát dễ bỏ sót loại trôi này.",
+        "Notebook được dựng để thử nghiệm chứ không phải để chạy production — nó xử lý phụ thuộc, mở rộng quy mô và quản lý phiên bản đều kém.",
+        "Đánh số phiên bản cho từng lần huấn luyện và lưu lại đầy đủ metadata — siêu tham số, ảnh chụp dữ liệu huấn luyện, chỉ số đánh giá — là điều kiện để biết được model đang chạy production sinh ra từ đâu.",
+        "Một model chạy tốt trên máy phát triển vẫn có thể chậm hẳn khi đưa vào production vì chưa tối ưu độ trễ, nên kiểm tra trên dữ liệu thật ở môi trường staging là bước bắt buộc trước khi bung toàn bộ.",
     ],
     [  # 26. làm sạch dữ liệu đầu vào
-        "Giá trị thiếu và giá trị trùng lặp gần đúng (cùng một khách hàng viết hoa/viết thường khác nhau) là hai nguồn lỗi phổ biến nhất khi gộp dữ liệu từ nhiều hệ thống.",
-        "Kiểm tra tính hợp lệ nên chạy ngay ở điểm nạp dữ liệu, không phải đợi tới lúc mô hình huấn luyện xong mới phát hiện dữ liệu bẩn.",
-        "Phần lớn thời gian của một dự án dữ liệu thực tế nằm ở làm sạch và chuẩn hoá, không nằm ở chọn thuật toán — quan sát này lặp lại ở gần như mọi khảo sát ngành khoa học dữ liệu.",
+        "Con số 'khoa học dữ liệu tốn 80% thời gian dọn dữ liệu' bắt nguồn từ một bài báo năm 2014 trích lời chuyên gia chứ không phải một khảo sát chính thức, dù nhiều khảo sát sau đó vẫn xác nhận dọn dữ liệu chiếm phần lớn thời gian.",
+        "Một khảo sát về công cụ dữ liệu ghi nhận khoảng 45% thời gian của người làm dữ liệu dành cho chuẩn bị dữ liệu, riêng phần làm sạch chiếm khoảng một phần tư.",
+        "Một khảo sát khác ghi nhận con số thấp hơn hẳn, chỉ khoảng 15%, khi định nghĩa làm sạch tách riêng khỏi thu thập và gán nhãn — cho thấy con số phụ thuộc nhiều vào việc tính bước nào là 'làm sạch'.",
     ],
     [  # 27. chọn giữa batch và streaming
-        "Batch xử lý dữ liệu theo lô định kỳ — đơn giản vận hành, độ trễ cao; streaming xử lý từng sự kiện gần như ngay lập tức — độ trễ thấp, đổi lại phức tạp hơn khi xử lý lỗi.",
-        "Kiến trúc kết hợp cả hai (một đường streaming trả kết quả nhanh, một đường batch chạy lại định kỳ để sửa đúng) đánh đổi độ phức tạp vận hành lấy vừa nhanh vừa đúng.",
-        "Câu hỏi cần trả lời trước khi chọn không phải 'công nghệ nào mạnh hơn' mà là 'nghiệp vụ có thực sự cần kết quả trong vài giây, hay vài giờ là đủ' — phần lớn báo cáo nội bộ không cần streaming.",
+        "Batch xử lý được khối lượng dữ liệu lớn với thông lượng cao nhưng độ trễ tính bằng phút tới giờ; streaming ưu tiên độ trễ mili giây tới giây nhưng đổi lại phải chạy hạ tầng liên tục 24/7.",
+        "Một job batch lỗi có thể chạy lại toàn bộ mà không lo mất nhất quán; một pipeline streaming lỗi cần checkpoint và khôi phục đúng trạng thái, nên gỡ lỗi khó hơn hẳn.",
+        "Nếu độ trễ vài phút tới vài giờ vẫn chấp nhận được, batch cho cùng kết quả với chi phí vận hành thấp hơn và ít phức tạp hơn streaming.",
     ],
     [  # 28. đánh giá chất lượng embedding
-        "MTEB đo tám loại tác vụ trên hàng chục bộ dữ liệu và hơn trăm ngôn ngữ, nhưng cho RAG chỉ tác vụ retrieval là quan trọng — điểm MTEB tổng có thể đánh lừa nếu mô hình mạnh ở phân loại nhưng yếu ở tìm kiếm.",
-        "NDCG@10 là chỉ số nên dùng chính cho retrieval: nó đo cả việc có tìm đúng tài liệu hay không lẫn tài liệu đó đứng ở vị trí nào trong kết quả trả về.",
-        "Một mô hình embedding xếp hạng cao trên bảng MTEB tổng vẫn có thể thua một mô hình xếp hạng thấp hơn khi test trực tiếp trên đúng dữ liệu miền của mình.",
+        "MTEB đánh giá embedding trên hơn 50 bộ dữ liệu thuộc 8 nhóm tác vụ khác nhau — phân loại, gom cụm, truy hồi, đo tương đồng ngữ nghĩa — trải trên hơn 100 ngôn ngữ.",
+        "Nhiều model embedding từng được huấn luyện trên dữ liệu trùng với chính bộ MTEB dùng để chấm điểm, khiến thứ hạng trên bảng xếp hạng không phản ánh đúng khả năng tổng quát hoá.",
+        "Phần đánh giá truy hồi của MTEB dùng nhãn liên quan kiểu nhị phân đúng/sai, trong khi truy hồi thực tế có nhiều mức độ liên quan — một tài liệu có thể liên quan một phần chứ không chỉ đúng hoặc sai hẳn.",
     ],
     [  # 29. viết prompt ổn định qua nhiều lần chạy
-        "Tỉ lệ bất ổn định từng đo được tăng từ khoảng 9,5% ở temperature 0,0 lên gần 20% ở temperature 1,0 trong một khảo sát trên nhiều mô hình — temperature thấp giảm rủi ro chứ không đảm bảo ổn định tuyệt đối.",
-        "Ngay cả ở temperature 0 với cùng seed và cùng prompt, một số mô hình vẫn cho câu trả lời khác nhau giữa các lần chạy — 'xác định' trên lý thuyết không luôn đúng trên thực tế triển khai.",
-        "Gần một phần tư câu hỏi trong một khảo sát trên nhiều họ mô hình từng đổi hẳn kết quả chỉ vì đổi seed ngẫu nhiên, dù prompt và nhiệt độ giữ nguyên.",
+        "Đặt temperature về 0 khiến model luôn chọn token có xác suất cao nhất, cho kết quả gần như xác định — cách phổ biến nhất để tăng tính lặp lại của output.",
+        "Dù đặt temperature 0 và cố định seed, nhiều LLM production vẫn cho ra kết quả khác nhau giữa các lần gọi giống hệt nhau — xác định trên giấy không đồng nghĩa xác định trong thực tế vận hành.",
+        "Một số nhà cung cấp API cho phép truyền tham số seed cùng với giữ nguyên mọi tham số khác như prompt và temperature để tăng khả năng lặp lại kết quả, dù không đảm bảo tuyệt đối.",
     ],
     [  # 30. phỏng vấn không hỏi thuật toán
-        "Một quy trình phỏng vấn dựa trên bài tập sát việc thật (đọc mã có sẵn, sửa một lỗi cụ thể) được cho là dự đoán hiệu quả công việc tốt hơn câu hỏi thuật toán kinh điển.",
-        "Câu hỏi kiểu đảo cây nhị phân đo được khả năng nhớ thuật toán, không đo được khả năng đọc hiểu một codebase lạ — kỹ năng chiếm phần lớn thời gian thực tế của một kỹ sư.",
-        "Cho ứng viên xem một đoạn mã thật (ẩn danh) và hỏi họ sẽ đổi gì, vì sao — câu trả lời lộ ra cách nghĩ về đánh đổi nhiều hơn một bài toán chuẩn hoá sẵn.",
+        "Một danh sách công khai từng tổng hợp hơn 900 công ty không dùng bài kiểm tra thuật toán trên bảng trắng khi phỏng vấn kỹ sư.",
+        "Một hướng thay thế phổ biến là bài tập mang về nhà — ứng viên làm trong môi trường quen thuộc, gần với công việc thật hơn một bài toán thuật toán viết tay trong 45 phút.",
+        "Pair programming trong buổi phỏng vấn cho thấy cách ứng viên suy nghĩ và trao đổi khi giải quyết vấn đề, thay vì chỉ xem kết quả cuối cùng có chạy được hay không.",
     ],
     [  # 31. nhận review mà không tự ái
-        "Tách người khỏi đoạn mã: một comment review nói về 'đoạn code này' chứ không phải 'bạn đã làm sai' giữ được cuộc trao đổi ở mức kỹ thuật thay vì cá nhân.",
-        "Review là để bắt lỗi trước khi code chạy trên production, không phải để đánh giá năng lực người viết — nhớ điều đó giúp cả hai phía bớt phòng thủ.",
-        "Hỏi lại 'bạn nghĩ sao về cách này' thay vì khẳng định 'cách này sai' mở ra một cuộc thảo luận thay vì một phán quyết.",
+        "Nguyên tắc thường được nhắc trong hướng dẫn code review: người review đang đánh giá đoạn mã, không đánh giá người viết ra nó.",
+        "Mục tiêu của một lượt phản hồi là cải thiện đoạn mã chứ không phải bảo vệ nó — giữ tâm thế đó giúp tách được góp ý hữu ích khỏi cảm giác bị chỉ trích.",
+        "Khi phản hồi không rõ ràng, hỏi lại ví dụ cụ thể thay vì tự đoán ý là cách tránh hiểu lầm phổ biến nhất giữa người review và người được review.",
     ],
     [  # 32. dẫn dắt một đội bốn người
-        "Với một đội bốn người, đồng bộ hằng ngày 15 phút là đủ — vấn đề thường không phải thiếu họp mà là họp sai người, sai lúc.",
-        "Việc khó nhất của người dẫn dắt nhóm nhỏ không phải phân công việc mà là quyết định việc nào KHÔNG làm — phạm vi hẹp nhưng rõ luôn thắng phạm vi rộng nhưng mơ hồ.",
-        "Tin tưởng đội tự quyết ở việc nhỏ, chỉ can thiệp ở quyết định khó đảo ngược — can thiệp vào mọi thứ làm chậm cả đội và không ai học được gì.",
+        "Với một đội nhỏ, biết rõ điểm mạnh, điểm yếu và động lực của từng người quan trọng hơn quy trình quản lý hình thức.",
+        "Vai trò chính của người dẫn dắt là dọn đường: xử lý các bên liên quan khó tính, làm rõ ưu tiên đang đổi liên tục, và chặn bớt gián đoạn để đội tập trung code, thiết kế, giải quyết vấn đề.",
+        "Nhiều tech lead vẫn trực tiếp code cùng đội thay vì chỉ giao việc — vừa giữ được cảm giác về hệ thống, vừa là cách mentor tự nhiên nhất.",
     ],
     [  # 33. viết tài liệu mà người ta chịu đọc
-        "Tài liệu ngắn có ví dụ chạy được luôn được đọc nhiều hơn tài liệu dài giải thích đầy đủ lý thuyết — người đọc tài liệu kỹ thuật thường đang cố giải quyết một việc cụ thể.",
-        "Đặt câu trả lời ở ngay đầu, giải thích ở dưới — hầu hết người đọc chỉ cần dòng đầu tiên, phần còn lại là cho ai cần đào sâu.",
-        "Tài liệu lỗi thời còn tệ hơn không có tài liệu vì nó khiến người đọc tin nhầm — gắn ngày cập nhật cuối giúp người đọc tự đánh giá độ tin cậy.",
+        "Một trang tài liệu chỉ nên giải quyết đúng một việc — cấu trúc theo kiểu người đọc lướt qua tìm câu trả lời, không đọc từ đầu tới cuối như một bài luận.",
+        "Người viết tài liệu kỹ thuật thường mắc lỗi giả định người đọc đã biết trước quá nhiều — viết như thể người đọc hoàn toàn mới giúp tài liệu dùng được rộng hơn.",
+        "Một ví dụ cụ thể kèm ảnh chụp màn hình thường làm rõ một khái niệm nhanh hơn nhiều đoạn văn giải thích.",
     ],
     [  # 34. ước lượng công việc sát hơn
-        "Ước lượng theo khoảng thành thật hơn một con số duy nhất — con số duy nhất tạo cảm giác chắc chắn giả trong khi thực tế luôn có phương sai.",
-        "Phần việc hay bị bỏ sót khi ước lượng không phải code mà là review, test và xử lý case biên — cộng thêm một hệ số cho những phần này thường chính xác hơn cố đoán đúng ngay từ đầu.",
-        "So sánh ước lượng cũ với thời gian thực tế đã làm, định kỳ, là cách duy nhất cải thiện độ chính xác ước lượng theo thời gian.",
+        "Hình nón bất định (cone of uncertainty) được Barry Boehm quan sát từ đầu thập niên 1980, sau này Steve McConnell đặt tên và phổ biến trong ước lượng phần mềm — sai số ước lượng ở đầu dự án rất lớn và chỉ thu hẹp dần khi công việc gần xong.",
+        "Planning poker không cố thắng hình nón bất định — nó chấp nhận ước lượng đầu kỳ vốn không chính xác, đổi lấy một con số tương đối nhanh, rồi ước lượng lại khi công việc rõ ràng hơn.",
+        "Độ bất định trong ước lượng phần mềm đến từ nhiều nguồn cộng dồn — phạm vi tính năng chưa chốt, rủi ro kiến trúc, biến động nhân sự — không chỉ từ việc đội ước lượng dở.",
     ],
 ]
 assert len(TOPIC_FACTS) == len(TOPICS), (len(TOPIC_FACTS), len(TOPICS))
@@ -2674,13 +2679,94 @@ CATEGORY_HINTS = [
                  "software", "system")),
 ]
 
+# Một blurb THẬT cho mỗi quyển, cùng thứ tự với CATALOG ở book_catalog.py — BOOK_BLURBS[i] ứng với
+# CATALOG[i], không còn là 6 câu mẫu lặp vòng như bản cũ. Sinh ngày 2026-09-01 bằng cách tra mô tả
+# thật của từng sách qua Open Library (isbn → works.description, và toàn bộ ấn bản khác của cùng
+# work khi ấn bản khớp ISBN không có description), rồi paraphrase lại — KHÔNG dịch nguyên văn. Với
+# sách không có mô tả công khai tìm được (khoảng một phần tư danh mục, chủ yếu sách tự xuất bản hoặc
+# nằm sau paywall của nhà xuất bản), blurb viết từ các sự kiện có thể kiểm chứng khác về quyển sách
+# đó — chủ đề, vai trò của tác giả, nhà xuất bản, định dạng — chứ không bịa nội dung/cốt truyện.
 BOOK_BLURBS = [
-    "Bản dịch và chú giải của cộng đồng, kèm ghi chú thực hành rút từ dự án thật.",
-    "Tài liệu tổng hợp dùng cho nhóm đọc hằng tuần; mỗi chương có phần bài tập tự kiểm.",
-    "Ghi chép và tóm tắt theo từng chương, dành cho người đã có nền tảng cơ bản.",
-    "Bản đọc cùng chú thích tiếng Việt, tập trung vào phần áp dụng được ngay.",
-    "Tóm lược các ý chính kèm ví dụ đặt lại theo bối cảnh dự án trong nước.",
-    "Tài liệu nội bộ chia sẻ lại cho cộng đồng, có bổ sung phần câu hỏi thường gặp.",
+    "Trình bày các nguyên tắc và thói quen viết mã dễ đọc, dễ bảo trì, kèm loạt bài tập làm sạch dần một đoạn mã lộn xộn thành mã mạch lạc.",  # 0 Clean Code
+    "Sách nền tảng để viết Go rõ ràng và đúng thói quen ngôn ngữ, dẫn dắt từ cú pháp cơ bản tới các chủ đề nâng cao như reflection và liên kết với thư viện C.",  # 1 The Go Programming Language
+    "Bàn về cách tổ chức kiến trúc để tách biệt quy tắc nghiệp vụ cốt lõi khỏi các chi tiết kỹ thuật dễ đổi như framework hay cơ sở dữ liệu.",  # 2 Clean Architecture
+    "Tập hợp các khuyến nghị thực dụng, mỗi mục là một bài học ngắn về cách dùng đúng các đặc tính của nền tảng Java, từ collection tới lambda và stream.",  # 3 Effective Java
+    "Giới thiệu danh mục các kỹ thuật tái cấu trúc mã cùng những dấu hiệu code smell cần nhận ra, nhấn mạnh vai trò của bộ test tự động khi thay đổi thiết kế.",  # 4 Refactoring
+    "Tổng hợp các thói quen thực dụng của một lập trình viên chuyên nghiệp, từ quản lý độ phức tạp, giữ các thành phần độc lập, đến tự động hoá kiểm thử.",  # 5 The Pragmatic Programmer
+    "Bộ catalog kinh điển gồm 23 mẫu thiết kế hướng đối tượng, chia theo nhóm khởi tạo, cấu trúc và hành vi, đề cao việc ưu tiên compose hơn kế thừa.",  # 6 Design Patterns
+    "Rút từ kinh nghiệm quản lý dự án hệ điều hành OS/360 của IBM, nổi tiếng với luận điểm thêm người vào một dự án đang trễ tiến độ thường khiến nó trễ hơn.",  # 7 The Mythical Man-Month
+    "Giáo trình thuật toán được dùng rộng rãi nhất trong các trường đại học, trình bày chặt chẽ từ cấu trúc dữ liệu cơ bản tới các thuật toán đồ thị và tối ưu phức tạp.",  # 8 Introduction to Algorithms
+    "Đi từ nền tảng toán học của học sâu — đại số tuyến tính, xác suất — tới các kiến trúc mạng nơ-ron dùng trong công nghiệp như mạng tích chập và mô hình chuỗi.",  # 9 Deep Learning
+    "Đề xuất vòng lặp Xây dựng - Đo lường - Học hỏi để khởi nghiệp thử nghiệm nhanh giả định thay vì đặt cược lớn vào một kế hoạch chưa kiểm chứng.",  # 10 The Lean Startup
+    "Đề xuất xây dựng một ngôn ngữ chung giữa chuyên gia nghiệp vụ và lập trình viên, rồi liên tục tinh chỉnh mô hình miền song song với việc tái cấu trúc mã.",  # 11 Domain-Driven Design
+    "Trình bày phương pháp Extreme Programming cho các đội nhỏ: lập trình cặp đôi, viết test trước, sở hữu mã chung và lập kế hoạch theo tuần để thích nghi với yêu cầu hay đổi.",  # 12 Extreme programming explained
+    "Dạy Ruby qua 52 bài tập buộc người học tự gõ lại từng đoạn mã, tự sửa lỗi và quan sát chương trình chạy, dành cho người chưa từng lập trình.",  # 13 Learn Ruby the Hard Way
+    "Đúc kết nguyên tắc thiết kế điều hướng web sao cho trực quan tới mức người dùng không phải dừng lại suy nghĩ, kèm hướng dẫn tự tổ chức kiểm thử khả dụng.",  # 14 Don't Make Me Think, Revisited: A Common Sense Approach to Web Usability
+    "Giải thích các mẫu thiết kế hướng đối tượng qua ví dụ đời thường và hình minh hoạ, phù hợp cho người mới tiếp cận trước khi đọc bộ catalog gốc của Gang of Four.",  # 15 Head First design patterns
+    "Lọc ra tập con đáng tin cậy và dễ đọc của JavaScript, cho rằng phần lớn rắc rối của ngôn ngữ đến từ việc nó được phát triển và phát hành quá vội.",  # 16 JavaScript: The Good Parts
+    "Giải thích cơ chế hoạt động bên trong của các bộ máy biểu thức chính quy khác nhau, giúp viết được regex vừa đúng vừa hiệu quả thay vì chỉ đúng cú pháp.",  # 17 Mastering Regular Expressions
+    "Tài liệu tham khảo toàn diện về ngôn ngữ JavaScript lẫn các API phía trình duyệt, được xem là cuốn sách gối đầu giường của giới lập trình JavaScript từ năm 1996.",  # 18 JavaScript
+    "Tổng hợp kỹ thuật xây dựng phần mềm ở mức chi tiết — đặt tên biến, cấu trúc điều khiển, gỡ lỗi — kèm danh sách kiểm tra thực dụng cho từng giai đoạn viết mã.",  # 19 Code complete
+    "Nhìn hệ thống học máy như một quy trình lặp toàn diện, từ chọn đặc trưng, huấn luyện lại mô hình đến giám sát và phát hiện lệch dữ liệu khi đã lên production.",  # 20 Designing Machine Learning Systems
+    "Cập nhật các mẫu thiết kế cổ điển sang bối cảnh JavaScript và React hiện đại, thêm cả các mẫu về hiệu năng như chia nhỏ mã và render phía máy chủ.",  # 21 Learning JavaScript Design Pattern
+    "So sánh có hệ thống các lựa chọn lưu trữ và xử lý dữ liệu — từ cơ sở dữ liệu quan hệ, NoSQL đến hệ xử lý luồng — dưới góc nhìn đánh đổi giữa nhất quán, độ tin cậy và khả năng mở rộng.",  # 22 Designing Data-Intensive Applications: The Big Ideas Behind Reliable, Scalable, and Maintainable Systems
+    "Hướng dẫn dựng và vận hành cụm Hadoop, từ hệ tệp phân tán HDFS, mô hình MapReduce đến các dự án vệ tinh như Parquet hay Spark trong hệ sinh thái.",  # 23 Hadoop
+    "Khuyến khích viết Python theo đúng phong cách ngôn ngữ thay vì bê nguyên thói quen từ ngôn ngữ khác, đi từ cấu trúc dữ liệu tới lập trình bất đồng bộ và metaprogramming.",  # 24 Fluent Python
+    "Đặt khả năng triển khai độc lập của từng service làm mục tiêu trung tâm, bàn cách tách dần một hệ thống nguyên khối theo ranh giới nghiệp vụ thay vì theo tầng kỹ thuật.",  # 25 Building Microservices: Designing Fine-Grained Systems
+    "Giới thiệu nhanh các tính năng nâng cao của PostgreSQL cho người quen hệ quản trị khác, từ quản trị vai trò, sao lưu đến viết hàm và tinh chỉnh truy vấn.",  # 26 PostgreSQL: Up and Running: A Practical Guide to the Advanced Open Source Database
+    "Đúc kết các mẫu lặp lại được cho hệ phân tán — sidecar, adapter, ambassador — như một ngôn ngữ chung để kỹ sư mô tả và tái sử dụng thiết kế thay vì làm lại từ đầu.",  # 27 Designing Distributed Systems: Patterns and Paradigms for Scalable, Reliable Services
+    "Dạy học máy bằng ví dụ cụ thể và hai bộ công cụ Scikit-Learn cùng TensorFlow, đi từ hồi quy tuyến tính đơn giản tới mạng nơ-ron sâu và học tăng cường.",  # 28 Hands-On Machine Learning with Scikit-Learn, Keras, and TensorFlow
+    "Hướng dẫn dùng Kafka để xử lý luồng dữ liệu thời gian thực, từ viết producer/consumer, đảm bảo giao dữ liệu tin cậy đến vận hành và giám sát cụm trong production.",  # 29 Kafka
+    "Nhấn mạnh việc học đúng thói quen ngôn ngữ Go thay vì chỉ học cú pháp, tránh mang khuôn mẫu từ ngôn ngữ khác vào và làm sai lệch tinh thần thiết kế của Go.",  # 30 Learning Go: An Idiomatic Approach to Real-World Go Programming
+    "Đúc kết kinh nghiệm giữ một codebase khổng lồ bền vững qua thời gian tại Google, xoay quanh cách thời gian và quy mô ảnh hưởng tới lựa chọn thực hành kỹ thuật.",  # 31 Software Engineering at Google
+    "Dẫn dắt người đọc từ cú pháp JavaScript cơ bản tới việc tự xây các chương trình hoàn chỉnh như game nền tảng hay ngôn ngữ lập trình mini, áp dụng cả trên trình duyệt lẫn Node.js.",  # 32 Eloquent JavaScript
+    "Dạy Python cho người chưa từng lập trình bằng cách tự động hoá việc vặt hằng ngày — dọn file, đọc bảng tính, gửi email nhắc việc — thay vì các bài toán thuật toán trừu tượng.",  # 33 Automate the Boring Stuff with Python
+    "Hướng dẫn triển khai tìm kiếm với Apache Solr, từ tìm theo từ khoá cơ bản tới lọc theo facet, gợi ý truy vấn và mở rộng hệ thống cho hàng tỉ tài liệu.",  # 34 Solr in Action
+    "Giải thích thuật toán tìm kiếm, sắp xếp và đồ thị bằng hình vẽ trực quan thay vì chứng minh toán học dài dòng, kèm ví dụ mã Python ngắn gọn.",  # 35 Grokking Algorithms
+    "Bắt đầu từ khái niệm container cơ bản rồi dẫn vào cách triển khai ứng dụng phân tán trên Kubernetes, cập nhật phiên bản mới mà không gây gián đoạn dịch vụ.",  # 36 Kubernetes in Action
+    "Dựng từng bước một ứng dụng web có kết nối cơ sở dữ liệu bằng Spring, bao quát từ REST, bảo mật tới lập trình reactive và tích hợp container.",  # 37 Spring in Action
+    "Tài liệu chính thức của cộng đồng Rust, giải thích các khái niệm cốt lõi như ownership, xử lý lỗi và concurrency an toàn thông qua các dự án nhỏ đi kèm mỗi chương.",  # 38 Rust Programming Language, 2nd Edition
+    "Hệ thống hoá các mẫu và 'mùi' thường gặp khi viết test tự động bằng các framework họ xUnit, kèm hướng dẫn tái cấu trúc để test dễ hiểu và bền vững hơn theo thời gian.",  # 39 xUnit Test Patterns
+    "Dẫn người mới bắt đầu với Rust ở phía backend bằng cách dựng từ đầu một API gửi bản tin qua email, đi kèm kiểm thử, xử lý lỗi và một pipeline CI/CD hoàn chỉnh.",  # 40 Zero To Production In Rust
+    "Giáo trình nhập môn lập trình hướng đối tượng, dùng môi trường BlueJ để minh hoạ khái niệm Java ngay từ những bài học đầu tiên.",  # 41 Objects first with Java
+    "Do một trong những người đồng sáng lập dự án Kubernetes viết cùng đồng nghiệp ở Google, sách gom lại các thực hành vận hành cụm Kubernetes an toàn và ổn định trong môi trường sản xuất.",  # 42 Kubernetes Best Practices
+    "Hướng dẫn xây dựng dịch vụ giao tiếp qua gRPC trên nhiều ngôn ngữ lập trình, từ thiết kế API bằng Protocol Buffers tới triển khai microservice thực tế.",  # 43 GRPC
+    "Ấn bản mới bổ sung các chương kiểm thử đơn vị để tăng độ tin cậy, thêm một dự án api-gateway và dùng Lombok để giảm code lặp, cùng phiên bản Spring Boot, Java và Kubernetes được cập nhật mới nhất.",  # 44 Back-end Java
+    "Trình bày Helm — trình quản lý gói chuẩn của hệ sinh thái Kubernetes — từ cách cài đặt ứng dụng đóng gói sẵn tới tự viết chart riêng và quản lý vòng đời triển khai.",  # 45 Learning Helm
+    "Dẫn dắt người đọc từ việc dựng cụm Kubernetes đầu tiên tới triển khai container, mở rộng quy mô và cập nhật ứng dụng mà không gây gián đoạn dịch vụ.",  # 46 Kubernetes in Action, Second Edition
+    "Trình bày các mẫu thiết kế (design pattern) áp dụng cho React nhằm xây dựng ứng dụng web theo module, dễ bảo trì và hiệu năng tốt.",  # 47 React17 design patterns and best practices
+    "Sách hướng dẫn xây dựng ứng dụng di động đa nền tảng bằng React Native theo hướng làm dự án thực tế, do đội ngũ tác giả từng phát triển ứng dụng production viết.",  # 48 Fullstack React Native
+    "Tổng hợp hàng chục quy tắc thực hành cụ thể để dùng TypeScript hiệu quả hơn, viết theo phong cách liệt kê từng mục ngắn gọn quen thuộc của dòng sách 'Effective'.",  # 49 Effective TypeScript
+    "Hướng dẫn dùng TypeScript để phát triển ứng dụng JavaScript quy mô lớn, từ hệ thống kiểu tới cách tổ chức mã nguồn cho dự án dài hạn.",  # 50 Pro TypeScript: Application-Scale JavaScript Development
+    "Một cuốn trong loạt sách hướng dẫn từng bước dùng Android Studio, phiên bản này tập trung vào phát triển ứng dụng Android bằng Kotlin.",  # 51 Android Studio 3.4 Development Essentials - Kotlin Edition
+    "Giáo trình lập trình Kotlin theo hướng thực hành, dẫn người học từ cú pháp cơ bản tới xây dựng ứng dụng hoàn chỉnh.",  # 52 Kotlin Programming
+    "Hướng dẫn phát triển ứng dụng Android hiện đại bằng Kotlin, bao quát từ kiến trúc ứng dụng tới các API nền tảng mới.",  # 53 Pro Android with Kotlin
+    "Sách dạng cookbook gồm nhiều công thức lập trình iOS bằng Swift, mỗi công thức giải quyết một tác vụ cụ thể trong phát triển ứng dụng.",  # 54 IOS 9 Swift Programming Cookbook
+    "Giáo trình nhập môn kiểm thử xâm nhập theo hướng thực hành, dẫn người đọc dựng phòng lab riêng rồi tự tay khai thác các lỗ hổng phổ biến.",  # 55 Penetration Testing
+    "Xây nền tảng Linux cho người mới học bảo mật, kèm theo MySQL, PostgreSQL và viết script Python qua các bài tập thực hành.",  # 56 Linux Basics for Hackers
+    "Sách nhập môn dùng Kali Linux cho kiểm thử xâm nhập, giới thiệu các công cụ và quy trình cơ bản của một bài kiểm thử bảo mật.",  # 57 Hacking with Kali Linux
+    "Giáo trình bao quát toàn bộ quy trình kiểm thử xâm nhập có đạo đức, từ trinh sát, quét lỗ hổng tới khai thác và viết báo cáo.",  # 58 Ethical Hacking and Penetration Testing Guide
+    "Sách nhập môn dùng các công cụ có sẵn trong Kali Linux để kiểm tra bảo mật cơ bản cho hệ thống của chính mình.",  # 59 Basic security testing with Kali Linux
+    "Giải thích chín thuật toán nền tảng đứng sau các công nghệ quen thuộc — từ xếp hạng kết quả tìm kiếm, mã hoá khoá công khai đến nén dữ liệu — cho người đọc không cần nền tảng toán chuyên sâu.",  # 60 Nine algorithms that changed the future
+    "Đội SRE của Google chia sẻ cách họ vận hành các hệ thống phần mềm quy mô lớn qua toàn bộ vòng đời, từ xây dựng, triển khai tới giám sát và bảo trì.",  # 61 Site Reliability Engineering
+    "Tổng hợp các nguyên tắc và thực hành kỹ thuật độ tin cậy trong vận hành hệ thống ở quy mô lớn.",  # 62 Site Reliability Engineering  Handbook
+    "Hướng dẫn đầy đủ về Git từ cơ bản tới nâng cao, tập trung vào quy trình làm việc phân tán và cách tuỳ biến Git cho nhu cầu riêng của từng đội.",  # 63 Pro Git
+    "Bộ bài tập cấu trúc dữ liệu và giải thuật kèm lời giải bằng Java, quen thuộc với nhiều người ôn phỏng vấn lập trình ở Ấn Độ.",  # 64 Data Structures and Algorithms Made Easy in Java
+    "Đúc kết hơn hai mươi năm nghiên cứu của Altshuller về TRIZ, sách trình bày ARIZ — thuật toán giải quyết vấn đề sáng chế có hệ thống — qua các ví dụ thực tế, được nhiều người xem là tác phẩm quan trọng nhất của ông.",  # 65 The Innovation Algorithm
+    "Hơn bốn mươi kiến trúc sư phần mềm góp mỗi người một bài học ngắn, từ cách giao tiếp với các bên liên quan tới cách đơn giản hoá hệ thống phức tạp.",  # 66 97 things every software architect should know
+    "Người đồng sáng tạo ra Scrum trình bày lại phương pháp này và cách nó giúp các đội rút ngắn đáng kể thời gian hoàn thành công việc.",  # 67 Scrum
+    "Đề xuất cách tổ chức retrospective đều đặn trong suốt dự án thay vì chỉ một lần lúc kết thúc, giúp đội phát hiện sớm vấn đề về cả kỹ thuật lẫn con người.",  # 68 Agile retrospectives
+    "Dẫn người đọc từ những lệnh terminal cơ bản tới viết script Bash hoàn chỉnh, qua các chủ đề như xử lý văn bản, quản trị hệ thống và duyệt tệp.",  # 69 The Linux Command Line
+    "Cẩm nang quản trị hệ thống Unix/Linux được xem là tài liệu tham khảo chuẩn, bao quát từ cấu hình mạng tới vận hành hạ tầng internet quy mô lớn.",  # 70 UNIX and Linux System Administration Handbook (5th Edition)
+    "Hướng dẫn doanh nghiệp nhỏ tiếp cận phần mềm mã nguồn mở miễn phí bản quyền, từ cài đặt, cấu hình tới cách khai thác cộng đồng đứng sau các phần mềm đó.",  # 71 Pro Linux system administration
+    "Giới thiệu cách cấu hình, biên dịch và tinh chỉnh nhân Linux, viết bởi một trong những người bảo trì lâu năm của dự án kernel.",  # 72 Linux Kernel in a Nutshell
+    "Hướng dẫn dùng Python để tự động hoá các tác vụ quản trị hệ thống Unix và Linux, từ xử lý tệp, mạng đến quản lý tiến trình.",  # 73 Python for Unix and Linux System Administration
+    "Tài liệu tham khảo toàn diện về quản trị hệ thống Linux, bao quát từ cài đặt, cấu hình mạng tới quản lý người dùng và dịch vụ.",  # 74 Special edition using Linux system administration
+    "Tập trung vào các kỹ thuật bảo mật và làm cứng (hardening) cho hệ thống Linux, từ quản lý quyền tới giám sát xâm nhập.",  # 75 Linux system security
+    "Cẩm nang quản trị Linux được giới chuyên môn đánh giá là tài liệu tham khảo hàng đầu, bao quát lưu trữ, mạng, hosting web và quản lý cấu hình.",  # 76 Linux administration handbook
+    "Giáo trình UNIX/Linux dùng cho cả người mới lẫn lập trình viên, với gần một nghìn bài tập và câu hỏi tự kiểm để củng cố kiến thức.",  # 77 Your UNIX/LINUX
+    "Tài liệu tham khảo đầy đủ để lên kế hoạch, cài đặt, cấu hình, bảo trì và khai thác Red Hat Linux ở mức tối đa.",  # 78 Red Hat Linux 8 unleashed
+    "Dẫn người đọc từ những bước đầu tới khả năng vận hành PostgreSQL ở mức chuyên nghiệp, bao quát thiết kế lược đồ, truy vấn và quản trị.",  # 79 Beginning databases with PostgreSQL
 ]
 
 
@@ -2724,7 +2810,7 @@ def build_books(rng, people, posts):
             "author_id": uploader,
             "post_id": book_post_ids[i] if i < len(book_post_ids) else None,
             "category": category,
-            "description": f"{title} — {writer}. {BOOK_BLURBS[i % len(BOOK_BLURBS)]}",
+            "description": f"{title} — {writer}. {BOOK_BLURBS[i]}",
             "file_key": file_key, "preview_key": preview_key, "cover_key": cover_key,
             "format": fmt,
             "size": rng.randint(400_000, 9_000_000),
@@ -3296,57 +3382,60 @@ SELECT setval('socialapp.q_vault_notes_id',
 PROJECT_ID_FIRST = 4001
 PROJECT_COUNT = 50
 
+# Mỗi ý tưởng gắn một chi tiết THẬT tìm được ngày 2026-09-01 từ một sản phẩm/công cụ/bài viết kỹ
+# thuật công khai cùng thể loại — không nêu tên hay link nguồn trong câu, chỉ giữ lại sự kiện đã
+# paraphrase, theo đúng quy ước không trích nguyên văn dùng xuyên suốt file này.
 PROJECT_IDEAS = [
-    ("Nền tảng chia sẻ kiến thức nội bộ", "Nơi các đội ghi lại quyết định kỹ thuật và tra cứu lại được sau vài năm."),
-    ("Thư viện component tiếng Việt", "Bộ component có sẵn phần chữ và định dạng ngày giờ theo thói quen trong nước."),
-    ("Bộ công cụ theo dõi chi phí hạ tầng", "Gom hoá đơn từ nhiều nhà cung cấp về một bảng, cảnh báo khi vượt ngưỡng."),
-    ("Hệ thống gợi ý bài viết", "Xếp hạng nội dung theo hành vi đọc thật thay vì theo thời gian đăng."),
-    ("Ứng dụng ghi chú offline-first", "Ghi được khi mất mạng, đồng bộ lại khi có mạng mà không mất dữ liệu."),
-    ("Công cụ quét cấu hình bảo mật", "Rà cấu hình hạ tầng và báo những chỗ lệch khỏi chuẩn tối thiểu."),
-    ("Khung kiểm thử tự động dùng chung", "Bộ khung để các đội viết test tích hợp mà không dựng lại hạ tầng."),
-    ("Bảng điều khiển sức khoẻ dịch vụ", "Một màn hình cho biết dịch vụ nào đang hỏng và hỏng từ lúc nào."),
-    ("Bộ sinh tài liệu API từ mã nguồn", "Đọc mã nguồn và sinh tài liệu, để tài liệu không lệch khỏi thực tế."),
-    ("Ứng dụng quản lý mục tiêu cá nhân", "Theo dõi mục tiêu học tập theo tuần, nhắc nhẹ chứ không ép."),
-    ("Cổng đăng nhập dùng chung cho nội bộ", "Một chỗ quản lý tài khoản cho toàn bộ công cụ nội bộ."),
-    ("Hệ thống hàng đợi việc nền", "Xử lý việc chạy lâu mà không giữ kết nối của người dùng."),
-    ("Trình phân tích log tập trung", "Gom log từ nhiều dịch vụ, tìm theo mã theo dõi xuyên suốt một request."),
-    ("Ứng dụng học từ vựng kỹ thuật", "Học thuật ngữ chuyên ngành bằng cách lặp lại ngắt quãng."),
-    ("Bộ chuyển đổi dữ liệu giữa các hệ", "Đọc từ một nguồn, ghi ra nhiều định dạng, có kiểm tra tính toàn vẹn."),
-    ("Trình quản lý bí mật cho môi trường dev", "Giữ khoá API và chuỗi kết nối ngoài mã nguồn, cấp theo từng máy."),
-    ("Bảng xếp hàng review pull request", "Cho thấy PR nào đang chờ lâu nhất và ai đang là nút cổ chai."),
-    ("Công cụ dựng dữ liệu mẫu cho test", "Sinh dữ liệu giả nhất quán để test tích hợp chạy lại cho kết quả như nhau."),
-    ("Hệ thống nhắc gia hạn tên miền và chứng chỉ", "Theo dõi hạn của domain và SSL, báo trước vài tuần thay vì để hết hạn."),
-    ("Trình so sánh chi phí giữa các vùng cloud", "Ước lượng hoá đơn khi đặt dịch vụ ở vùng khác nhau trước khi triển khai."),
-    ("Ứng dụng chấm công cho nhóm làm từ xa", "Ghi giờ làm theo tự khai, tổng hợp theo tuần, không chụp màn hình."),
-    ("Bộ lọc thư ứng tuyển theo tiêu chí", "Đọc thư ứng tuyển, gắn nhãn theo kỹ năng và mức phù hợp."),
-    ("Trình theo dõi lỗ hổng trong phụ thuộc", "Quét file khoá gói và đối chiếu với cơ sở dữ liệu lỗ hổng công khai."),
-    ("Cổng tra cứu tài liệu kỹ thuật nội bộ", "Gom wiki, slide và ghi chú họp về một chỗ, tìm được bằng một ô tìm kiếm."),
-    ("Ứng dụng lên lịch đăng bài kỹ thuật", "Xếp hàng bài viết và đăng theo giờ đặt trước trên nhiều kênh."),
-    ("Bộ đo thời gian phản hồi API định kỳ", "Gọi thử các endpoint quan trọng mỗi phút và vẽ biểu đồ độ trễ."),
-    ("Trình chuyển đổi định dạng ảnh hàng loạt", "Đổi kích thước và định dạng cả thư mục ảnh, giữ nguyên cấu trúc."),
-    ("Hệ thống bình chọn chủ đề buổi chia sẻ", "Cho cả nhóm đề xuất và bình chọn nội dung meetup tháng tới."),
-    ("Ứng dụng ghi lại quyết định kiến trúc", "Mỗi quyết định một trang ngắn: bối cảnh, lựa chọn, hệ quả."),
-    ("Trình dò link hỏng trong tài liệu", "Quét toàn bộ trang tài liệu và liệt kê link trả về lỗi."),
-    ("Bộ công cụ ẩn danh dữ liệu trước khi chia sẻ", "Thay tên, email và số điện thoại bằng giá trị giả nhưng vẫn hợp lệ."),
-    ("Ứng dụng theo dõi thói quen đọc sách kỹ thuật", "Ghi số trang đọc mỗi ngày, nhắc nhẹ khi bỏ quá lâu."),
-    ("Trình gom thông báo từ nhiều dịch vụ", "Kéo cảnh báo từ CI, giám sát và issue tracker về một luồng."),
-    ("Hệ thống đặt phòng họp theo lịch chung", "Xem phòng nào trống theo khung giờ, đặt nhanh không cần email qua lại."),
-    ("Bộ sinh changelog từ lịch sử commit", "Nhóm commit theo nhãn và dựng ghi chú phát hành cho mỗi phiên bản."),
-    ("Ứng dụng khảo sát ẩn danh cho đội", "Hỏi nhanh vài câu mỗi tuần, chỉ hiện kết quả tổng hợp."),
-    ("Trình theo dõi ngân sách dự án cá nhân", "Ghi thu chi cho từng dự án phụ, cảnh báo khi vượt hạn mức tháng."),
-    ("Bộ kiểm tra cấu hình trước khi triển khai", "Chạy một loạt kiểm tra nhanh và chặn triển khai nếu thiếu biến môi trường."),
-    ("Kho lưu và chia sẻ truy vấn SQL hay dùng", "Đặt tên, gắn thẻ và chia sẻ câu truy vấn cho cả đội tra cứu lại."),
-    ("Ứng dụng nhắc uống nước và nghỉ mắt", "Nhắc theo khoảng thời gian tự đặt, tạm dừng khi đang họp."),
-    ("Trình phân tích thời gian chạy test theo file", "Chỉ ra file test nào chậm nhất để tách hoặc chạy song song."),
-    ("Bộ công cụ đồng bộ dấu trang giữa trình duyệt", "Giữ danh sách link kỹ thuật giống nhau trên nhiều máy."),
-    ("Hệ thống ghi nhận đóng góp mã nguồn mở nội bộ", "Đếm PR, review và issue để ghi nhận trong đánh giá cuối kỳ."),
-    ("Ứng dụng lập kế hoạch học theo lộ trình", "Chia mục tiêu lớn thành các bước tuần, đánh dấu khi hoàn thành."),
-    ("Trình theo dõi phiên bản thư viện đang dùng", "Liệt kê gói nào đã cũ mấy phiên bản và mức độ rủi ro khi nâng."),
-    ("Bộ dựng trang trạng thái công khai", "Hiện tình trạng từng dịch vụ và lịch sử sự cố cho người dùng ngoài."),
-    ("Hệ thống chấm điểm chất lượng dữ liệu", "Chạy các quy tắc kiểm tra trên bảng và cho điểm theo tỉ lệ hợp lệ."),
-    ("Ứng dụng ghi chú cuộc họp có gắn việc", "Tách phần việc ra khỏi biên bản và giao cho người phụ trách."),
-    ("Trình mô phỏng tải cho API nội bộ", "Bắn lượng yêu cầu tăng dần và ghi lại điểm bắt đầu chậm."),
-    ("Bộ công cụ dọn nhánh Git đã gộp", "Tìm nhánh đã merge từ lâu và xoá sau khi xác nhận."),
+    ("Nền tảng chia sẻ kiến thức nội bộ", "Nơi các đội ghi lại quyết định kỹ thuật và tra cứu lại được sau vài năm — cổng kiến thức nội bộ kiểu này từng giúp một hãng phát nhạc lớn giảm hẳn thời gian loay hoay tìm cách làm đúng thay vì viết mã, đổi lại chu kỳ phát triển của đội rút ngắn rõ rệt."),
+    ("Thư viện component tiếng Việt", "Bộ component có sẵn phần chữ và định dạng ngày giờ theo thói quen trong nước — cùng một chuỗi ngày viết theo kiểu Mỹ và kiểu châu Âu có thể đọc ra hai ngày khác nhau, nên định dạng nên luôn qua một lớp chuẩn hoá dùng chung thay vì gõ tay ở từng nơi."),
+    ("Bộ công cụ theo dõi chi phí hạ tầng", "Gom hoá đơn từ nhiều nhà cung cấp về một bảng, cảnh báo khi vượt ngưỡng — phần lớn lãng phí hạ tầng chỉ lộ ra khi hoá đơn cuối tháng về tay, và cấp phát tài nguyên dư thừa vẫn là nguyên nhân phổ biến nhất khiến chi phí vượt dự toán."),
+    ("Hệ thống gợi ý bài viết", "Xếp hạng nội dung theo hành vi đọc thật thay vì theo thời gian đăng — các hệ gợi ý lớn thường dựa vào tín hiệu ngầm như thời gian đọc thực tế và lượt tìm lại một nội dung, chứ không hỏi thẳng người dùng thích gì."),
+    ("Ứng dụng ghi chú offline-first", "Ghi được khi mất mạng, đồng bộ lại khi có mạng mà không mất dữ liệu — cơ chế hợp nhất kiểu CRDT cho phép nhiều thiết bị sửa cùng lúc, ngoại tuyến, rồi tự hội tụ về đúng một kết quả mà không cần máy chủ phân xử."),
+    ("Công cụ quét cấu hình bảo mật", "Rà cấu hình hạ tầng và báo những chỗ lệch khỏi chuẩn tối thiểu — các công cụ dạng này thường đối chiếu quyền truy cập, cấu hình lưu trữ và mã hoá với một bộ chuẩn công khai như CIS, không dò theo cảm tính của người kiểm tra."),
+    ("Khung kiểm thử tự động dùng chung", "Bộ khung để các đội viết test tích hợp mà không dựng lại hạ tầng — dựng một instance cơ sở dữ liệu thật riêng cho mỗi lượt chạy rồi huỷ ngay sau đó tránh được kiểu lỗi ngẫu nhiên do trạng thái cũ để lại từ lượt chạy trước."),
+    ("Bảng điều khiển sức khoẻ dịch vụ", "Một màn hình cho biết dịch vụ nào đang hỏng và hỏng từ lúc nào — bảng nội bộ dạng này thường có thêm liên kết runbook và tên người trực ca ngay cạnh mỗi cảnh báo, để người xử lý sự cố không phải hỏi lại ai đang phụ trách."),
+    ("Bộ sinh tài liệu API từ mã nguồn", "Đọc mã nguồn và sinh tài liệu, để tài liệu không lệch khỏi thực tế — tài liệu viết tay và mã nguồn thường trôi dần theo hai hướng khác nhau theo thời gian, và phần lớn lỗi tích hợp giữa hai hệ thống nằm đúng ở khoảng lệch đó."),
+    ("Ứng dụng quản lý mục tiêu cá nhân", "Theo dõi mục tiêu học tập theo tuần, nhắc nhẹ chứ không ép — một tổng hợp trên hàng trăm nghiên cứu cho thấy việc tự ghi lại tiến độ đều đặn thật sự nâng khả năng đạt mục tiêu, và hiệu quả càng rõ khi tiến độ được ghi công khai thay vì chỉ giữ trong đầu."),
+    ("Cổng đăng nhập dùng chung cho nội bộ", "Một chỗ quản lý tài khoản cho toàn bộ công cụ nội bộ — đăng nhập một lần cho mọi ứng dụng giúp việc thu hồi quyền khi ai đó nghỉ việc diễn ra ngay lập tức ở mọi nơi, thay vì phải tắt từng tài khoản rời rạc theo tay."),
+    ("Hệ thống hàng đợi việc nền", "Xử lý việc chạy lâu mà không giữ kết nối của người dùng — hàng đợi việc nền hầu như luôn giao việc theo kiểu 'ít nhất một lần', nên một việc chạy trùng do thử lại là chuyện bình thường hệ thống phải tự chịu được, không phải trường hợp hiếm gặp."),
+    ("Trình phân tích log tập trung", "Gom log từ nhiều dịch vụ, tìm theo mã theo dõi xuyên suốt một request — mã này thường được gán ngay ở dịch vụ nhận request đầu tiên rồi truyền qua header sang các dịch vụ phía sau, nối lại thành một hành trình duy nhất khi tra log."),
+    ("Ứng dụng học từ vựng kỹ thuật", "Học thuật ngữ chuyên ngành bằng cách lặp lại ngắt quãng — thí nghiệm quên lãng kinh điển từng đo được trí nhớ rơi rất nhanh trong giờ đầu sau khi học, và mỗi lần ôn đúng lúc sắp quên làm đường cong quên đó phẳng dần theo thời gian."),
+    ("Bộ chuyển đổi dữ liệu giữa các hệ", "Đọc từ một nguồn, ghi ra nhiều định dạng, có kiểm tra tính toàn vẹn — nhiều công cụ chuyển dữ liệu mã nguồn mở ra đời chính vì các bộ kết nối tự phát thiếu một chuẩn giao thức chung, mỗi người viết một kiểu khiến ghép nối giữa hai hệ rất dễ vỡ."),
+    ("Trình quản lý bí mật cho môi trường dev", "Giữ khoá API và chuỗi kết nối ngoài mã nguồn, cấp theo từng máy — bí mật nằm trong file cấu hình hay biến môi trường vẫn là nguyên nhân phổ biến nhất của các sự cố lộ thông tin đăng nhập, nên tập trung chúng vào một nơi có nhật ký truy cập là hướng đi được khuyến nghị."),
+    ("Bảng xếp hàng review pull request", "Cho thấy PR nào đang chờ lâu nhất và ai đang là nút cổ chai — khảo sát trên hàng trăm nghìn pull request từng chỉ ra phần lớn thời gian một PR tồn tại là nằm chờ chứ không phải đang được đọc, và khoảng chờ trước khi ai đó bắt đầu xem là nguyên nhân trễ tiến độ lớn nhất."),
+    ("Công cụ dựng dữ liệu mẫu cho test", "Sinh dữ liệu giả nhất quán để test tích hợp chạy lại cho kết quả như nhau — dữ liệu giả kiểu này lấy mẫu từ những tập giá trị có thật để trông hợp lý, nhưng không gắn với bất kỳ cá nhân thật nào nên an toàn để dùng đi dùng lại nhiều lần."),
+    ("Hệ thống nhắc gia hạn tên miền và chứng chỉ", "Theo dõi hạn của domain và SSL, báo trước vài tuần thay vì để hết hạn — một chứng chỉ hết hạn không ai để ý từng khiến hàng chục triệu thuê bao di động mất sóng cả ngày, và một nền tảng họp trực tuyến lớn cũng từng sập vài giờ vì đúng lý do y hệt."),
+    ("Trình so sánh chi phí giữa các vùng cloud", "Ước lượng hoá đơn khi đặt dịch vụ ở vùng khác nhau trước khi triển khai — đưa ước tính chi phí vào ngay lúc lên kế hoạch hạ tầng, trước khi bấm triển khai, là cách các đội hạ tầng thường dùng để tránh phát hiện chi phí vượt dự toán khi đã quá muộn."),
+    ("Ứng dụng chấm công cho nhóm làm từ xa", "Ghi giờ làm theo tự khai, tổng hợp theo tuần, không chụp màn hình — nghiên cứu về làm việc từ xa cho thấy mức năng suất người ta tự báo cáo và mức đo được khách quan không phải lúc nào cũng khớp nhau, và cách quản lý minh bạch về việc theo dõi ảnh hưởng tới hiệu suất nhiều hơn chính việc theo dõi."),
+    ("Bộ lọc thư ứng tuyển theo tiêu chí", "Đọc thư ứng tuyển, gắn nhãn theo kỹ năng và mức phù hợp — phần lớn doanh nghiệp lớn đã dùng hệ thống lọc theo từ khoá kiểu này, nhưng lọc quá máy móc đúng theo từ khoá cũng là lý do không ít ứng viên giỏi bị loại oan trước khi hồ sơ tới tay người tuyển dụng."),
+    ("Trình theo dõi lỗ hổng trong phụ thuộc", "Quét file khoá gói và đối chiếu với cơ sở dữ liệu lỗ hổng công khai — mã nguồn của bên thứ ba thường chiếm phần lớn một ứng dụng hiện đại, nên các công cụ quét dạng này đối chiếu trực tiếp với cơ sở dữ liệu cảnh báo bảo mật công khai thay vì tự đoán rủi ro."),
+    ("Cổng tra cứu tài liệu kỹ thuật nội bộ", "Gom wiki, slide và ghi chú họp về một chỗ, tìm được bằng một ô tìm kiếm — nhiều đội kỹ thuật ghi nhận phần lớn thời gian tra cứu bị tốn vì tài liệu nằm rải trên nhiều công cụ khác nhau, chứ không phải vì thiếu tài liệu; gom về một chỗ tìm được ngay giải quyết đúng chỗ đó."),
+    ("Ứng dụng lên lịch đăng bài kỹ thuật", "Xếp hàng bài viết và đăng theo giờ đặt trước trên nhiều kênh — các công cụ lên lịch đăng bài thành công thường thắng nhờ quy trình gọn: xếp hàng, xem trước, đăng đúng giờ, không cần thêm bước rườm rà nào giữa lúc viết và lúc đăng."),
+    ("Bộ đo thời gian phản hồi API định kỳ", "Gọi thử các endpoint quan trọng theo chu kỳ 30-60 giây từ nhiều điểm khác nhau để tránh báo sai do lỗi mạng cục bộ, và vẽ biểu đồ độ trễ theo thời gian."),
+    ("Trình chuyển đổi định dạng ảnh hàng loạt", "Đổi kích thước và định dạng cả thư mục ảnh cùng lúc, ghi ra thư mục riêng thay vì đè lên bản gốc, và giữ nguyên cấu trúc thư mục con."),
+    ("Hệ thống bình chọn chủ đề buổi chia sẻ", "Cho cả nhóm đề xuất chủ đề rồi bình chọn thay vì để một người quyết — cách chọn qua khảo sát nhanh kiểu này là lý do các buổi chia sẻ nội bộ giữ được người tham gia lâu dài."),
+    ("Ứng dụng ghi lại quyết định kiến trúc", "Mỗi quyết định một trang ngắn theo đúng bốn phần của mẫu ghi chép quyết định kiến trúc phổ biến từ hơn một thập kỷ trước: trạng thái, bối cảnh, lựa chọn, hệ quả — lưu thẳng trong repo để sửa và xem lại lịch sử như mọi file mã nguồn khác."),
+    ("Trình dò link hỏng trong tài liệu", "Quét toàn bộ trang tài liệu định kỳ và liệt kê link trả về lỗi 404 hoặc timeout — link hỏng trong tài liệu kỹ thuật thường chỉ lộ ra khi có người đọc bấm phải, lúc đó nó đã sai từ rất lâu trước đó."),
+    ("Bộ công cụ ẩn danh dữ liệu trước khi chia sẻ", "Thay tên, email và số điện thoại bằng giá trị giả nhưng vẫn đúng định dạng gốc — kỹ thuật che dữ liệu giữ nguyên định dạng, để dữ liệu giả vẫn dùng thử được cho ứng dụng mà không lộ thông tin thật."),
+    ("Ứng dụng theo dõi thói quen đọc sách kỹ thuật", "Ghi số trang đọc theo tuần thay vì chuỗi ngày liên tục — người theo chuỗi ngày cứng nhắc có xu hướng bỏ cuộc hẳn khi lỡ một ngày, còn cách tính theo tổng số ngày đọc trong tuần giữ được người đọc lâu hơn."),
+    ("Trình gom thông báo từ nhiều dịch vụ", "Kéo cảnh báo từ CI, giám sát và issue tracker về một luồng, gộp các cảnh báo trùng cùng một sự cố — tương quan đúng cách có thể cắt bớt phần lớn lượng nhiễu so với nhận từng cảnh báo riêng lẻ."),
+    ("Hệ thống đặt phòng họp theo lịch chung", "Xem phòng nào trống theo khung giờ và khoá slot ngay khi đặt — phần lớn tình trạng trùng lịch phòng họp không đến từ việc con người quên, mà từ nhiều hệ thống lịch tách rời không đồng bộ theo thời gian thực với nhau."),
+    ("Bộ sinh changelog từ lịch sử commit", "Nhóm commit theo đúng loại (fix, feat, thay đổi phá vỡ tương thích) theo một quy ước đặt tên commit chuẩn, rồi dựng ghi chú phát hành tự động cho mỗi phiên bản thay vì ngồi gõ tay từng dòng."),
+    ("Ứng dụng khảo sát ẩn danh cho đội", "Hỏi một đến ba câu mỗi tuần, chỉ hiện kết quả khi đã gộp đủ số người trả lời tối thiểu — dưới ngưỡng đó thì không hiển thị, để không ai đoán ra từng câu trả lời là của ai."),
+    ("Trình theo dõi ngân sách dự án cá nhân", "Ghi thu chi cho từng dự án phụ theo kiểu phong bì ngân sách số hoá — mỗi dự án một phong bì riêng, cảnh báo ngay khi phong bì đó sắp cạn trong tháng thay vì gộp chung một con số tổng."),
+    ("Bộ kiểm tra cấu hình trước khi triển khai", "Chạy kiểm tra theo kiểu chặn sớm: xác nhận đủ mọi biến môi trường bắt buộc trước khi ứng dụng nhận traffic, để thiếu một biến báo lỗi rõ ràng ngay lúc khởi động thay vì rơi vào lỗi khó hiểu giữa chừng một request thật."),
+    ("Kho lưu và chia sẻ truy vấn SQL hay dùng", "Đặt tên, gắn thẻ và chia sẻ câu truy vấn cho cả đội tra cứu lại — một câu truy vấn hay dùng thường gói sẵn kiến thức về cách lọc và nối bảng đúng cách, chia sẻ lại là cách rẻ nhất để kiến thức đó không chỉ nằm trong đầu một người."),
+    ("Ứng dụng nhắc uống nước và nghỉ mắt", "Nhắc nghỉ mắt theo quy tắc: cứ khoảng 20 phút nhìn màn hình thì nhìn ra xa vài mét trong 20 giây — một thử nghiệm ngẫu nhiên có đối chứng từng ghi nhận cách này giảm rõ rệt điểm mỏi mắt, và tạm dừng nhắc khi đang họp."),
+    ("Trình phân tích thời gian chạy test theo file", "Chỉ ra file test nào chậm nhất dựa trên thời gian chạy thực tế của các lần trước, để chia việc đều giữa các worker song song thay vì chia đều theo số lượng file — hai cách chia cho kết quả rất khác nhau khi thời gian chạy giữa các file lệch nhau nhiều."),
+    ("Bộ công cụ đồng bộ dấu trang giữa trình duyệt", "Giữ danh sách link kỹ thuật giống nhau trên nhiều máy và nhiều trình duyệt khác nhau, đồng bộ qua kho lưu trữ tự chọn thay vì qua máy chủ của một bên thứ ba thu thập dữ liệu."),
+    ("Hệ thống ghi nhận đóng góp mã nguồn mở nội bộ", "Đếm PR, review và issue để ghi nhận trong đánh giá cuối kỳ — nhiều tổ chức theo dõi thêm cả số người trở thành maintainer chính thức của một dự án ngoài, vì con số đó nói lên vai trò dẫn dắt chứ không chỉ số lượng đóng góp."),
+    ("Ứng dụng lập kế hoạch học theo lộ trình", "Chia mục tiêu lớn thành các bước theo tuần, đánh dấu khi hoàn thành — vài tuần đầu thường là giai đoạn quyết định một thói quen học có được giữ hay bị bỏ, nên các bước đầu lộ trình đáng được thiết kế dễ hoàn thành hơn phần sau."),
+    ("Trình theo dõi phiên bản thư viện đang dùng", "Liệt kê gói nào đã cũ mấy phiên bản và mức độ rủi ro khi nâng — ngay cả các công cụ tạo PR nâng cấp tự động cũng thường thiếu tín hiệu tương thích rõ ràng, nên với bản nâng cấp lớn đội ngũ vẫn có xu hướng tự tay kiểm tra thay vì gộp luôn PR tự động."),
+    ("Bộ dựng trang trạng thái công khai", "Hiện tình trạng từng dịch vụ và lịch sử sự cố cho người dùng ngoài, mỗi sự cố ghi rõ thời điểm, mức ảnh hưởng, thời gian kéo dài và cách đã xử lý — một trang trạng thái làm tốt phần này thường cắt giảm đáng kể lượng yêu cầu hỗ trợ hỏi hệ thống có đang lỗi không."),
+    ("Hệ thống chấm điểm chất lượng dữ liệu", "Chạy các quy tắc kiểm tra trên bảng theo từng chiều chất lượng riêng — đầy đủ, nhất quán, không trùng lặp, đúng định dạng — rồi cho điểm theo tỉ lệ hợp lệ của từng chiều thay vì gộp chung một con số duy nhất."),
+    ("Ứng dụng ghi chú cuộc họp có gắn việc", "Tách phần việc ra khỏi biên bản ngay trong lúc họp và giao rõ người phụ trách kèm hạn — việc không gắn tên người cụ thể là dạng việc gần như chắc chắn bị quên ngay sau cuộc họp."),
+    ("Trình mô phỏng tải cho API nội bộ", "Bắn lượng yêu cầu tăng dần theo từng bậc, giữ mỗi bậc vài phút để quan sát độ trễ và tỉ lệ lỗi trước khi tăng tiếp, rồi ghi lại đúng điểm hệ thống bắt đầu xuống cấp thay vì dừng ở một mức tải cố định đoán trước."),
+    ("Bộ công cụ dọn nhánh Git đã gộp", "Tìm nhánh đã merge từ lâu và xoá sau khi xác nhận — thực hành phổ biến là xoá ngay sau khi merge chứ không đợi dọn hàng loạt, vì nhánh đã vào nhánh chính thì không còn lý do gì để giữ lại."),
 ]
 
 POSITION_TITLES = {
@@ -3558,151 +3647,151 @@ SELECT setval(pg_get_serial_sequence('socialapp.t_project_applications', 'id'),
 # THỨ TỰ CÁC NÚT TRONG MỖI LỘ TRÌNH LÀ HỢP ĐỒNG, KHÔNG PHẢI THẨM MỸ: id nút được cấp tuần tự theo
 # đúng thứ tự duyệt danh sách này, và V90 tính điểm uy tín theo `user_id:node_id`. Đảo hai dòng
 # trong cùng một lộ trình là đổi id của cả hai. Thêm/bớt nút thì được, đảo chỗ thì không.
+#
+# Ngày 2026-09-01, mô tả từng nút được bổ sung một sự kiện THẬT tra từ tài liệu chính thức/chuẩn kỹ
+# thuật ứng với đúng công nghệ của nút đó (paraphrase, không trích nguyên văn) — vẫn giữ đúng quy
+# tắc ở trên: KHÔNG một chữ nào tham chiếu hay phái sinh từ roadmap.sh, chỉ thêm sự kiện độc lập.
+# Tên nút và tên nút cha (phần tử thứ ba của tuple) không đổi trong lượt này.
 
 ROADMAPS = [
     ("Backend cho người mới", "BACKEND",
      "Từ một endpoint chạy được tới một dịch vụ chịu được tải thật.", [
-        ("Giao thức HTTP", "Phương thức, mã trạng thái, header. Phân biệt 401 và 403."),
-        ("Một ngôn ngữ máy chủ", "Chọn một và đi sâu: Java, Go, Python hay Node đều được."),
-        ("Cơ sở dữ liệu quan hệ", "Bảng, khoá, ràng buộc. Viết được truy vấn có JOIN mà không đoán."),
-        ("Thiết kế API", "Đặt tên tài nguyên, phân trang, xử lý lỗi nhất quán.", "Giao thức HTTP"),
-        ("ORM và cái giá của nó", "Hiểu N+1 sinh ra từ đâu, và vì sao fetch join không phải liều thuốc chung.", "Cơ sở dữ liệu quan hệ"),
-        ("Giao dịch", "Bốn tính chất ACID, mức cô lập, và chuyện gọi nội bộ làm mất giao dịch.", "Cơ sở dữ liệu quan hệ"),
-        ("Đánh index", "Thứ tự cột, tiền tố trái, partial index. Đọc được query plan.", "Cơ sở dữ liệu quan hệ"),
-        ("Caching", "Chọn TTL, xử lý cache stampede, và vấn đề khó nhất: vô hiệu hoá cache."),
-        ("Hàng đợi và việc nền", "Tách việc chạy lâu khỏi request. Idempotency khi phải thử lại."),
-        ("Ghi log và đo đạc", "Mã theo dõi xuyên suốt, đo p99 thay vì trung bình."),
-        ("Kiểm thử", "Test tích hợp trên đúng cơ sở dữ liệu mà production dùng."),
-        ("Triển khai", "Biến môi trường, migration, và cách quay lui khi hỏng."),
+        ("Giao thức HTTP", "Phương thức, mã trạng thái, header. 401 là chưa xác thực được ai gửi request, 403 là biết rồi nhưng không đủ quyền — hai lỗi hay bị đánh đồng."),
+        ("Một ngôn ngữ máy chủ", "Chọn một và đi sâu: Java, Go, Python hay Node đều được — khảo sát nhà phát triển thường niên vẫn xếp cả bốn vào nhóm ngôn ngữ dùng nhiều nhất, không có lựa chọn sai."),
+        ("Cơ sở dữ liệu quan hệ", "Bảng, khoá, ràng buộc. Viết được truy vấn có JOIN mà không đoán — và biết vì sao khoá ngoại luôn cần một index trên cột bị tham chiếu."),
+        ("Thiết kế API", "Đặt tên tài nguyên, xử lý lỗi nhất quán, và phân trang kiểu cursor — trỏ tới bản ghi cuối thay vì đếm OFFSET, để không lặp hay bỏ sót dòng khi dữ liệu đang đổi.", "Giao thức HTTP"),
+        ("ORM và cái giá của nó", "Hiểu N+1 sinh ra từ đâu, và vì sao JOIN FETCH gộp cha con vào một câu SQL cũng có giá riêng: tập kết quả phình to khi collection lớn, không phải liều thuốc chung.", "Cơ sở dữ liệu quan hệ"),
+        ("Giao dịch", "Bốn tính chất ACID, mức cô lập từ Read Committed mặc định tới Serializable nghiêm ngặt nhất, và chuyện gọi nội bộ làm mất giao dịch.", "Cơ sở dữ liệu quan hệ"),
+        ("Đánh index", "Thứ tự cột, tiền tố trái, partial index. Đọc được query plan — biết index tổ hợp chỉ thu hẹp vùng quét tới cột đầu tiên có điều kiện khoảng, cột sau đó chỉ lọc thêm.", "Cơ sở dữ liệu quan hệ"),
+        ("Caching", "Chọn TTL, xử lý cache stampede bằng stale-while-revalidate — trả ngay bản cũ trong lúc âm thầm làm mới nền — và vấn đề khó nhất: vô hiệu hoá cache."),
+        ("Hàng đợi và việc nền", "Tách việc chạy lâu khỏi request. Hàng đợi tiêu chuẩn chỉ cam kết giao ít nhất một lần — đôi khi giao trùng — nên phần xử lý luôn phải tự idempotent."),
+        ("Ghi log và đo đạc", "Mã theo dõi xuyên suốt lan truyền qua header HTTP theo chuẩn W3C Trace Context, đo p99 thay vì trung bình."),
+        ("Kiểm thử", "Test tích hợp trên đúng cơ sở dữ liệu mà production dùng — dựng bằng container thật cho mỗi lượt chạy rồi huỷ ngay, không dính trạng thái cũ."),
+        ("Triển khai", "Biến môi trường tách khỏi mã nguồn theo nguyên tắc 12-factor để cùng một bản build chạy mọi môi trường, cộng migration và cách quay lui khi hỏng."),
      ]),
     ("Frontend hiện đại", "FRONTEND",
      "Từ HTML tĩnh tới giao diện chịu được dữ liệu thật và người dùng thật.", [
-        ("HTML ngữ nghĩa", "Dùng đúng thẻ. Đây cũng là bước đầu của khả năng truy cập."),
-        ("CSS bố cục", "Flexbox và Grid. Hiểu vì sao layout shift làm người đọc mất chỗ."),
-        ("JavaScript nền tảng", "Bất đồng bộ, closure, module. Trước khi học framework."),
-        ("TypeScript", "Kiểu là tài liệu chạy được. Bắt lỗi trước khi người dùng bắt.", "JavaScript nền tảng"),
-        ("Một framework", "React, Vue hay Svelte. Hiểu vòng đời render của nó.", "JavaScript nền tảng"),
-        ("Quản lý trạng thái", "Phân biệt trạng thái máy chủ và trạng thái giao diện.", "Một framework"),
-        ("Gọi dữ liệu", "Trạng thái tải, lỗi, rỗng. Ba trạng thái hay bị quên nhất.", "Một framework"),
-        ("Khả năng truy cập", "Dùng được bằng bàn phím, đọc được bằng trình đọc màn hình.", "HTML ngữ nghĩa"),
-        ("Hiệu năng web", "Chia gói theo route, tải ảnh đúng kích thước, đo bằng số thật."),
-        ("Kiểm thử giao diện", "Test theo hành vi người dùng, không theo chi tiết cài đặt.", "Một framework"),
-        ("Dựng và đóng gói", "Hiểu công cụ đang làm gì với mã của bạn."),
+        ("HTML ngữ nghĩa", "Dùng đúng thẻ để trình đọc màn hình tạo được landmark điều hướng theo vùng — đây cũng là bước đầu của khả năng truy cập."),
+        ("CSS bố cục", "Flexbox và Grid. Đặt trước kích thước hoặc aspect-ratio để trình duyệt chừa đúng chỗ, hiểu vì sao thiếu nó gây layout shift làm người đọc mất chỗ."),
+        ("JavaScript nền tảng", "Bất đồng bộ, closure, module. Promise chạy trong microtask queue, luôn được xử lý hết trước khi event loop chuyển sang setTimeout dù cùng đặt độ trễ 0 — trước khi học framework."),
+        ("TypeScript", "Kiểu là tài liệu chạy được, bắt lỗi lúc biên dịch trước khi người dùng bắt — nhưng type bị xoá sạch khỏi JavaScript sinh ra, nên an toàn kiểu dừng lại ở biên dịch, không kéo tới runtime.", "JavaScript nền tảng"),
+        ("Một framework", "React, Vue hay Svelte. Hiểu vòng đời hai pha của nó: dựng cây so sánh trước, rồi mới ghi thật vào DOM đúng phần đã đổi.", "JavaScript nền tảng"),
+        ("Quản lý trạng thái", "Phân biệt trạng thái máy chủ — có thể đổi mà app không hay, vì một người khác vừa sửa — với trạng thái giao diện luôn đồng bộ với app.", "Một framework"),
+        ("Gọi dữ liệu", "Trạng thái tải, lỗi, rỗng — thư viện quản lý trạng thái máy chủ tách rõ ba trạng thái này thay vì gộp vào một cờ loading duy nhất. Đây là ba trạng thái hay bị quên nhất.", "Một framework"),
+        ("Khả năng truy cập", "Dùng được bằng bàn phím theo đúng thứ tự Tab có nghĩa (WCAG Focus Order), đọc được bằng trình đọc màn hình.", "HTML ngữ nghĩa"),
+        ("Hiệu năng web", "Chia gói theo route để chỉ gửi đúng phần JavaScript của trang đang xem, tải ảnh đúng kích thước, đo bằng số thật."),
+        ("Kiểm thử giao diện", "Test theo hành vi người dùng — tìm phần tử qua label, role, text như người dùng thật thấy — không theo chi tiết cài đặt bên trong, nên đổi cấu trúc component không làm test vỡ.", "Một framework"),
+        ("Dựng và đóng gói", "Hiểu công cụ đang làm gì với mã của bạn: phục vụ qua module gốc để hot reload tức thì lúc code, rồi mới gộp và nén lại khi build production."),
      ]),
     ("DevOps thực dụng", "DEVOPS",
      "Đưa phần mềm ra môi trường thật và giữ nó sống.", [
-        ("Dòng lệnh Linux", "Tệp, tiến trình, quyền. Đọc được log mà không cần giao diện."),
-        ("Quản lý phiên bản", "Nhánh, gộp, và cách viết lịch sử mà người sau đọc được."),
-        ("Container", "Image khác container. Mỗi chỉ thị là một lớp."),
-        ("Tích hợp liên tục", "Chạy test tự động. CI đỏ là tín hiệu, không phải phiền toái.", "Quản lý phiên bản"),
-        ("Triển khai liên tục", "Ra bản mới thường xuyên và nhỏ, để quay lui rẻ.", "Tích hợp liên tục"),
-        ("Hạ tầng dưới dạng mã", "Mô tả hạ tầng bằng tệp, không bằng thao tác tay."),
-        ("Điều phối container", "Khi nào cần và khi nào chưa cần Kubernetes.", "Container"),
-        ("Giám sát", "Chỉ số, log, vết. Biết dịch vụ hỏng trước khi người dùng báo."),
-        ("Cảnh báo", "Cảnh báo phải hành động được, nếu không nó sẽ bị tắt tiếng.", "Giám sát"),
-        ("Sao lưu và khôi phục", "Bản sao lưu chưa từng khôi phục thử thì chưa phải bản sao lưu."),
-        ("Chi phí", "Đọc hoá đơn, tìm chỗ trả tiền cho thứ không ai dùng."),
+        ("Dòng lệnh Linux", "Tệp, tiến trình, quyền chia ba nhóm chủ sở hữu/nhóm/người khác với ba bit đọc-ghi-thực thi mỗi nhóm. Đọc được log mà không cần giao diện."),
+        ("Quản lý phiên bản", "Nhánh, gộp — fast-forward khi nhánh đích chưa đổi gì thêm, ba-way merge khi hai lịch sử đã phân nhánh — và cách viết lịch sử mà người sau đọc được."),
+        ("Container", "Image khác container: container chỉ thêm đúng một lớp ghi được lên trên các lớp chỉ đọc của image, nên nhiều container cùng image vẫn dùng chung phần lớn dữ liệu."),
+        ("Tích hợp liên tục", "Chạy test tự động. Build đỏ không phải vấn đề — theo đúng thực hành CI, không sửa ngay mới là vấn đề, vì nhánh chính hỏng chặn mọi người khác.", "Quản lý phiên bản"),
+        ("Triển khai liên tục", "Ra bản mới thường xuyên và nhỏ. Feature flag tách deploy khỏi release — code nằm sẵn ở trạng thái tắt, bật dần rồi tắt lại tức thì nếu hỏng, không cần rollback.", "Tích hợp liên tục"),
+        ("Hạ tầng dưới dạng mã", "Mô tả hạ tầng bằng tệp khai báo trạng thái đích mong muốn — không phải từng bước thao tác tay — và để công cụ tự tính kế hoạch đạt tới đó."),
+        ("Điều phối container", "Khi nào cần và khi nào chưa cần Kubernetes: vài container một máy thì chưa cần, nhưng hàng chục container trải nhiều máy đòi tự phục hồi và tự co giãn thì có.", "Container"),
+        ("Giám sát", "Chỉ số, log, vết. Công cụ giám sát kiểu pull chủ động ghé lấy số liệu theo chu kỳ, không chờ dịch vụ tự đẩy lên. Biết dịch vụ hỏng trước khi người dùng báo."),
+        ("Cảnh báo", "Cảnh báo phải có một hành động rõ ràng người trực làm ngay được — sách SRE gọi cảnh báo không hành động được là nhiễu — nếu không nó sẽ bị tắt tiếng.", "Giám sát"),
+        ("Sao lưu và khôi phục", "Quy tắc 3-2-1: ba bản sao, hai loại lưu trữ khác nhau, một bản ở nơi khác — nhưng bản sao lưu chưa từng khôi phục thử thì chưa phải bản sao lưu."),
+        ("Chi phí", "Đọc hoá đơn, tìm chỗ trả tiền cho thứ không ai dùng — phần lớn nằm ở tài nguyên đã ngừng dùng nhưng quên xoá, như ổ đĩa rời hay IP tĩnh không gắn máy nào."),
      ]),
     ("Dữ liệu và học máy", "DATA_ML",
      "Từ tệp CSV tới mô hình chạy trong sản xuất.", [
-        ("Python cho dữ liệu", "Thao tác bảng dữ liệu thành thạo trước khi nói tới mô hình."),
-        ("Thống kê nền tảng", "Phân phối, tương quan, và vì sao tương quan không phải nhân quả."),
-        ("Làm sạch dữ liệu", "Phần lớn thời gian nằm ở đây, không phải ở chỗ chọn thuật toán.", "Python cho dữ liệu"),
-        ("Trực quan hoá", "Biểu đồ để hiểu, không phải để trang trí báo cáo.", "Python cho dữ liệu"),
-        ("Học có giám sát", "Hồi quy và phân loại. Hiểu rò rỉ dữ liệu.", "Thống kê nền tảng"),
-        ("Đánh giá mô hình", "Chọn chỉ số hợp bài toán. Độ chính xác thường là chỉ số tệ.", "Học có giám sát"),
-        ("Kỹ thuật đặc trưng", "Đặc trưng tốt thắng mô hình phức tạp, gần như luôn luôn.", "Làm sạch dữ liệu"),
-        ("Đường ống dữ liệu", "Từ notebook sang quy trình chạy lại được."),
-        ("Đưa mô hình lên sản xuất", "Phiên bản, theo dõi trôi dữ liệu, và cách quay lui.", "Đường ống dữ liệu"),
-        ("Đạo đức dữ liệu", "Thiên lệch trong dữ liệu thành thiên lệch trong quyết định."),
+        ("Python cho dữ liệu", "Thao tác bảng dữ liệu bằng DataFrame hai chiều — lọc, gộp nhóm, join ngay trên đó — thành thạo trước khi nói tới mô hình."),
+        ("Thống kê nền tảng", "Phân phối, tương quan, và vì sao tương quan không phải nhân quả — hai đại lượng có thể chỉ cùng chịu một biến ẩn thứ ba, không cái nào gây ra cái nào."),
+        ("Làm sạch dữ liệu", "Phần lớn thời gian nằm ở đây — nhiều khảo sát ngành liên tục cho thấy trên một phần ba thời gian người làm dữ liệu dành để dọn dữ liệu — không phải ở chỗ chọn thuật toán.", "Python cho dữ liệu"),
+        ("Trực quan hoá", "Biểu đồ để hiểu, không phải để trang trí báo cáo — phần trang trí không mang thông tin từng bị gọi thẳng là 'rác trực quan' vì nó chỉ làm khó đọc thêm.", "Python cho dữ liệu"),
+        ("Học có giám sát", "Hồi quy và phân loại. Hiểu rò rỉ dữ liệu — xảy ra khi thông tin từ tập test lọt vào lúc huấn luyện, nên bước biến đổi dữ liệu luôn phải fit trên tập train rồi mới áp dụng sang tập test.", "Thống kê nền tảng"),
+        ("Đánh giá mô hình", "Chọn chỉ số hợp bài toán. Độ chính xác thường là chỉ số tệ — trên dữ liệu lệch lớp, một mô hình đoán bừa toàn lớp đông nhất vẫn đạt độ chính xác rất cao.", "Học có giám sát"),
+        ("Kỹ thuật đặc trưng", "Đặc trưng tốt — biến đổi từ dữ liệu thô thành dạng mô hình học được — thắng mô hình phức tạp, gần như luôn luôn.", "Làm sạch dữ liệu"),
+        ("Đường ống dữ liệu", "Từ notebook sang quy trình chạy lại được — đúng cùng một đoạn mã chạy ở cả môi trường thử lẫn production, không viết lại hai lần."),
+        ("Đưa mô hình lên sản xuất", "Phiên bản, theo dõi trôi dữ liệu — khi phân phối dữ liệu thật lệch dần khỏi lúc huấn luyện, mô hình mất độ chính xác dù code không đổi — và cách quay lui.", "Đường ống dữ liệu"),
+        ("Đạo đức dữ liệu", "Thiên lệch có sẵn trong dữ liệu huấn luyện thường bị mô hình khuếch đại thêm, chứ không chỉ phản ánh trung lập, rồi thành thiên lệch trong quyết định."),
      ]),
     ("An toàn ứng dụng", "SECURITY",
      "Nghĩ như người tấn công để viết mã như người phòng thủ.", [
-        ("Mô hình hoá mối đe doạ", "Ai muốn gì, và họ vào bằng đường nào."),
-        ("Xác thực", "Mật khẩu băm đúng cách, phiên hết hạn, và chống dò."),
-        ("Phân quyền", "Kiểm ở máy chủ. Ẩn nút trên giao diện không phải phân quyền.", "Xác thực"),
-        ("Mười rủi ro phổ biến", "Danh sách OWASP, đọc lại hằng năm vì nó đổi."),
-        ("Chèn mã", "SQL, lệnh hệ thống, mẫu. Luôn dùng tham số hoá.", "Mười rủi ro phổ biến"),
-        ("Bí mật và khoá", "Không nằm trong repo. Xoay vòng được khi lộ."),
-        ("Phụ thuộc bên thứ ba", "Chuỗi cung ứng là đường vào mà ít người canh."),
-        ("Ghi nhật ký an toàn", "Ghi đủ để điều tra, không ghi thứ làm rò rỉ."),
-        ("Xử lý sự cố", "Biết trước sẽ gọi ai và làm gì, trước khi cần đến."),
+        ("Mô hình hoá mối đe doạ", "Ai muốn gì, và họ vào bằng đường nào — mô hình STRIDE chia mối đe doạ thành sáu nhóm để rà từng phần hệ thống theo đúng khung đó."),
+        ("Xác thực", "Mật khẩu băm bằng thuật toán cố tình chậm như bcrypt hay Argon2id kèm salt riêng từng mật khẩu, phiên hết hạn, và chống dò."),
+        ("Phân quyền", "Kiểm ở máy chủ, không tin id hay quyền mà client tự gửi lên. Ẩn nút trên giao diện không phải phân quyền — đây vẫn là nhóm lỗi phổ biến nhất theo OWASP nhiều năm liền.", "Xác thực"),
+        ("Mười rủi ro phổ biến", "Danh sách OWASP xếp kiểm soát truy cập, lỗi mật mã và chèn mã ở nhóm đầu, có cả mục về toàn vẹn phần mềm và chuỗi cung ứng — đọc lại hằng năm vì nó đổi."),
+        ("Chèn mã", "SQL, lệnh hệ thống, mẫu. Câu lệnh tham số hoá khai báo trọn SQL trước, giá trị người dùng chỉ truyền vào sau như dữ liệu — cơ sở dữ liệu không lẫn nó với mã lệnh.", "Mười rủi ro phổ biến"),
+        ("Bí mật và khoá", "Không nằm trong repo, đi qua công cụ quản lý bí mật tập trung có mã hoá và nhật ký ai lấy khoá nào lúc nào. Xoay vòng được khi lộ."),
+        ("Phụ thuộc bên thứ ba", "Chuỗi cung ứng là đường vào mà ít người canh — một cửa hậu từng bị cài thẳng vào một thư viện nén dùng rộng rãi trong Linux qua nhiều năm gây dựng danh tính giả để chiếm quyền maintainer, chỉ lộ ra vì một kỹ sư tình cờ để ý CPU dùng bất thường."),
+        ("Ghi nhật ký an toàn", "Ghi đủ để điều tra — đăng nhập thất bại, hành vi có quyền cao — nhưng không bao giờ ghi thẳng mật khẩu, khoá mã hay số thẻ thanh toán vào log."),
+        ("Xử lý sự cố", "Biết trước sẽ gọi ai và làm gì — quy trình chuẩn chia bốn giai đoạn, và giai đoạn chuẩn bị luôn nằm trước khi có bất kỳ sự cố nào — trước khi cần đến."),
      ]),
     ("Kiểm thử và chất lượng", "QA",
      "Xây lưới an toàn để đội dám thay đổi mã.", [
-        ("Kim tự tháp kiểm thử", "Nhiều test nhỏ, ít test lớn. Ngược lại thì chậm và giòn."),
-        ("Test đơn vị", "Nhanh, độc lập, không phụ thuộc thứ tự chạy.", "Kim tự tháp kiểm thử"),
-        ("Test tích hợp", "Chạy trên đúng cơ sở dữ liệu mà production dùng.", "Kim tự tháp kiểm thử"),
-        ("Test đầu cuối", "Ít thôi, và bám hành vi người dùng.", "Kim tự tháp kiểm thử"),
-        ("Dữ liệu kiểm thử", "Dựng và dọn sạch sẽ. Dữ liệu rớt lại làm test đỏ ngẫu nhiên.", "Test tích hợp"),
-        ("Test giòn", "Nguyên nhân thường là chờ theo thời gian thay vì chờ theo điều kiện.", "Test đầu cuối"),
-        ("Độ phủ", "Hữu ích như tín hiệu, tai hại như mục tiêu."),
-        ("Kiểm thử hiệu năng", "Đo dưới tải giống thật, không phải trên máy cá nhân."),
-        ("Văn hoá chất lượng", "Chất lượng là việc của cả đội, không của riêng một vai."),
+        ("Kim tự tháp kiểm thử", "Nhiều test nhỏ chạy nhanh ở tầng đáy, rất ít test chạy qua giao diện ở tầng đỉnh vì chúng chậm và dễ vỡ. Ngược lại thì chậm và giòn."),
+        ("Test đơn vị", "Nhanh, độc lập, không phụ thuộc thứ tự chạy — chiếm phần lớn nhất trong tổng số test vì chi phí chạy và bảo trì rẻ nhất.", "Kim tự tháp kiểm thử"),
+        ("Test tích hợp", "Chạy trên đúng cơ sở dữ liệu mà production dùng — dựng bằng container thật cho mỗi lượt rồi huỷ ngay, không dính trạng thái để lại từ lượt trước.", "Kim tự tháp kiểm thử"),
+        ("Test đầu cuối", "Ít thôi vì đây là tầng chậm và dễ vỡ nhất trong ba tầng, và bám hành vi người dùng thay vì chi tiết bên trong.", "Kim tự tháp kiểm thử"),
+        ("Dữ liệu kiểm thử", "Dựng và dọn sạch sẽ — mỗi lượt test chạy trong một môi trường cô lập riêng, không dùng chung với lượt trước. Dữ liệu rớt lại làm test đỏ ngẫu nhiên.", "Test tích hợp"),
+        ("Test giòn", "Nguyên nhân thường là chờ theo thời gian thay vì chờ theo điều kiện, hoặc phụ thuộc vào dịch vụ bên ngoài — cách xử lý phổ biến là tự động chạy lại rồi cách ly khỏi luồng CI quan trọng để không chặn cả đội.", "Test đầu cuối"),
+        ("Độ phủ", "Hữu ích như tín hiệu, tai hại như mục tiêu — đặt hẳn một phần trăm làm chỉ tiêu khiến người viết test đối phó cho đủ số, thay vì hỏi liệu mình có dám refactor tự tin không."),
+        ("Kiểm thử hiệu năng", "Đo dưới tải giống thật — tăng dần, đột biến, kéo dài — để phát hiện điểm nghẽn trước khi vi phạm SLO ngoài production, không phải trên máy cá nhân."),
+        ("Văn hoá chất lượng", "Chất lượng là việc của cả đội ngay từ lúc thiết kế, không dồn hết trách nhiệm cho một vai kiểm thử ở cuối."),
      ]),
     ("Kỹ sư Mobile", "MOBILE",
      "Ứng dụng chạy tốt cả khi mạng chập chờn và pin sắp hết.", [
-        ("Nền tảng và vòng đời", "Màn hình bị huỷ và dựng lại bất cứ lúc nào."),
-        ("Giao diện khai báo", "Compose hoặc SwiftUI. Trạng thái quyết định giao diện.", "Nền tảng và vòng đời"),
+        ("Nền tảng và vòng đời", "Màn hình bị huỷ và dựng lại bất cứ lúc nào — hệ điều hành gọi onSaveInstanceState trước khi dừng một activity, nhưng khi tiến trình bị hệ thống giết hẳn thì không một hàm vòng đời nào được gọi nữa, chỉ còn lại đúng phần dữ liệu đã lưu trước đó."),
+        ("Giao diện khai báo", "Compose hoặc SwiftUI. Trạng thái quyết định giao diện — nâng state lên component cha (state hoisting) giữ đúng một nguồn sự thật, và mỗi lần state đổi hệ thống chỉ recompose lại đúng phần giao diện đang đọc state đó, không vẽ lại toàn màn hình.", "Nền tảng và vòng đời"),
         ("Lưu trữ cục bộ", "Dữ liệu phải còn khi đóng ứng dụng."),
-        ("Offline-first", "Ghi trước, đồng bộ sau, và giải quyết xung đột.", "Lưu trữ cục bộ"),
-        ("Gọi mạng", "Thử lại có giới hạn, và đừng thử lại thứ không idempotent."),
+        ("Offline-first", "Ghi trước, đồng bộ sau, và giải quyết xung đột — cách đơn giản nhất là để bản ghi mới nhất thắng, cách bền hơn là dùng CRDT để hợp nhất thay đổi từ nhiều thiết bị mà không cần một máy chủ trọng tài phân xử.", "Lưu trữ cục bộ"),
+        ("Gọi mạng", "Thử lại có giới hạn, và đừng thử lại thứ không idempotent — nên rắc thêm độ trễ ngẫu nhiên (jitter) vào khoảng chờ giữa các lần thử lại, nếu không toàn bộ client sẽ đồng loạt gọi lại cùng lúc và làm nghẽn chính máy chủ đang hồi phục."),
         ("Hiệu năng", "Cuộn mượt quan trọng hơn mọi hiệu ứng."),
-        ("Kích thước gói cài", "Người dùng bỏ tải khi ứng dụng quá nặng."),
-        ("Phát hành", "Kênh thử nghiệm, phát hành theo tỉ lệ, và cờ tính năng."),
+        ("Kích thước gói cài", "Người dùng bỏ tải khi ứng dụng quá nặng — App Thinning trên iOS chỉ gửi đúng phần tài nguyên khớp với model máy đang cài thay vì một gói chung cho mọi thiết bị, có thể giảm dung lượng tải về tới 20-40%."),
+        ("Phát hành", "Kênh thử nghiệm, phát hành theo tỉ lệ, và cờ tính năng — một bản cập nhật thường lên trước cho một phần nhỏ người dùng rồi tăng dần theo từng mốc phần trăm, và có thể dừng ngay lập tức nếu phát hiện lỗi trước khi lỡ chạm tới toàn bộ người dùng."),
      ]),
-    # OTHER, không phải "FULLSTACK": LearningCategory CỐ Ý không có giá trị đó (xem javadoc của
-    # enum — một cuốn sách hay một lộ trình nói về front hoặc về back, còn "fullstack" chỉ tạo một
-    # tab không ai biết trong đó có gì). PrimaryRole thì CÓ FULLSTACK, và hai enum này trùng tên
-    # bảy giá trị đầu nên rất dễ mượn nhầm của nhau. Mượn nhầm ở đây làm GET /v1/api/roadmaps trả
-    # 500 cho mọi người, vì Hibernate đọc cả trang lộ trình trong một lượt.
     ("Fullstack cân bằng", "OTHER",
      "Đủ sâu ở hai đầu để không phải chờ người khác.", [
-        ("Nền tảng web", "Trình duyệt làm gì với một request."),
-        ("Một ngôn ngữ hai đầu", "Giảm chi phí chuyển ngữ cảnh trong ngày làm việc."),
-        ("Ranh giới máy chủ và máy khách", "Cái gì tính ở đâu, và vì sao.", "Nền tảng web"),
+        ("Nền tảng web", "Trình duyệt làm gì với một request — từ tra DNS ra địa chỉ IP, bắt tay ba bước TCP, gửi request HTTP, tới lúc nhận response và bắt đầu dựng trang, mỗi bước đều có thể là nơi một request chậm đi mà không do lỗi ở tầng ứng dụng."),
+        ("Một ngôn ngữ hai đầu", "Giảm chi phí chuyển ngữ cảnh trong ngày làm việc — dùng chung JavaScript/TypeScript ở cả client và server cho phép chia sẻ thẳng một bộ type hay một hàm validate giữa hai đầu, thay vì viết và giữ đồng bộ hai bản riêng biệt."),
+        ("Ranh giới máy chủ và máy khách", "Cái gì tính ở đâu, và vì sao — gọi đồng bộ giữa các phần giữ logic đơn giản nhưng kéo theo rủi ro lỗi dây chuyền khi một phía chậm, còn tách bất đồng bộ qua hàng đợi thì bền hơn nhưng cộng thêm độ trễ ở cả hai chiều.", "Nền tảng web"),
         ("Thiết kế dữ liệu", "Lược đồ quyết định phần lớn độ khó về sau."),
-        ("Xác thực đầu cuối", "Từ ô đăng nhập tới phân quyền ở tầng dịch vụ.", "Ranh giới máy chủ và máy khách"),
-        ("Trải nghiệm lập trình viên", "Chạy được toàn bộ hệ thống bằng một lệnh."),
-        ("Triển khai một mình", "Biết đủ hạ tầng để tự đưa sản phẩm ra."),
+        ("Xác thực đầu cuối", "Từ ô đăng nhập tới phân quyền ở tầng dịch vụ — OAuth 2.0 chỉ trả lời được ứng dụng được phép làm gì, còn biết chính xác ai đang đăng nhập cần thêm lớp OpenID Connect nằm trên nó, hai chuẩn tách biệt nhưng gần như luôn dùng cùng nhau trong thực tế.", "Ranh giới máy chủ và máy khách"),
+        ("Trải nghiệm lập trình viên", "Chạy được toàn bộ hệ thống bằng một lệnh — một lệnh compose dựng đủ web, API, database quen thuộc có thể rút thời gian dựng máy cho người mới từ vài giờ cài đặt thủ công xuống còn vài phút."),
+        ("Triển khai một mình", "Biết đủ hạ tầng để tự đưa sản phẩm ra — các nền tảng PaaS như Render hay Fly.io cho một người tự deploy thẳng từ git push mà không phải tự quản lý máy chủ, đánh đổi lại là ít quyền tinh chỉnh hạ tầng hơn so với tự dựng."),
      ]),
     ("Nền tảng khoa học máy tính", "OTHER",
      "Những thứ không đổi khi framework đổi.", [
         ("Cấu trúc dữ liệu", "Mảng, bảng băm, cây, đồ thị. Biết chọn cái nào."),
-        ("Độ phức tạp", "Ước lượng được trước khi đo.", "Cấu trúc dữ liệu"),
-        ("Giải thuật cơ bản", "Sắp xếp, tìm kiếm, duyệt đồ thị.", "Cấu trúc dữ liệu"),
-        ("Hệ điều hành", "Tiến trình, luồng, bộ nhớ, tệp."),
-        ("Mạng máy tính", "Vì sao một request chậm mà CPU vẫn rảnh."),
-        ("Hệ phân tán", "Đánh đổi giữa nhất quán và sẵn sàng.", "Mạng máy tính"),
+        ("Độ phức tạp", "Ước lượng được trước khi đo — ký hiệu Big O mô tả tốc độ tăng của thời gian chạy theo kích thước dữ liệu đầu vào, bỏ qua hằng số, nên so sánh được hai thuật toán mà không cần chạy thử cả hai.", "Cấu trúc dữ liệu"),
+        ("Giải thuật cơ bản", "Sắp xếp, tìm kiếm, duyệt đồ thị — thuật toán sắp xếp mặc định của Python và của Java từ bản 7 trở đi không phải quicksort thuần mà là Timsort, một thuật toán lai giữa merge sort và insertion sort được thiết kế riêng để tận dụng các đoạn đã có thứ tự sẵn trong dữ liệu thật.", "Cấu trúc dữ liệu"),
+        ("Hệ điều hành", "Tiến trình, luồng, bộ nhớ, tệp — mỗi tiến trình có một vùng địa chỉ bộ nhớ riêng nên một tiến trình lỗi không thể ghi đè bộ nhớ của tiến trình khác, còn các luồng trong cùng một tiến trình dùng chung vùng địa chỉ đó nên giao tiếp nhanh hơn nhưng cũng dễ giẫm lên nhau hơn."),
+        ("Mạng máy tính", "Vì sao một request chậm mà CPU vẫn rảnh — trong lúc chờ phản hồi từ mạng, CPU không có gì để làm nên chuyển sang trạng thái rảnh; một request chờ 100ms lẽ ra trong quãng đó CPU có thể thực thi tới hàng trăm triệu lệnh nếu không phải chờ."),
+        ("Hệ phân tán", "Đánh đổi giữa nhất quán và sẵn sàng — định lý CAP nói rằng khi xảy ra chia cắt mạng, một hệ phân tán chỉ có thể giữ nhất quán dữ liệu hoặc tiếp tục phục vụ request, không thể giữ cả hai cùng lúc.", "Mạng máy tính"),
      ]),
     ("Phát triển sự nghiệp", "CAREER",
      "Kỹ năng quyết định bạn đi được bao xa, không phải bao nhanh.", [
         ("Viết rõ ràng", "Tài liệu và tin nhắn là công cụ làm việc chính của kỹ sư."),
-        ("Nhận và cho phản hồi", "Tách con người khỏi đoạn mã."),
-        ("Ước lượng", "Nói được mức không chắc chắn thay vì một con số giả vờ chắc."),
-        ("Làm việc nhóm", "Đồng bộ ít, tin nhau nhiều.", "Nhận và cho phản hồi"),
-        ("Phỏng vấn", "Cả hai phía đều đang đánh giá lẫn nhau."),
-        ("Dẫn dắt kỹ thuật", "Ra quyết định và chịu trách nhiệm về nó.", "Làm việc nhóm"),
-        ("Học liên tục", "Chọn thứ đáng học, bỏ qua thứ đang ồn ào."),
+        ("Nhận và cho phản hồi", "Tách con người khỏi đoạn mã — nguyên tắc cốt lõi của mô hình Radical Candor là phê bình hành vi hay công việc cụ thể, không phê bình con người, trong lúc vẫn thể hiện rõ mình quan tâm tới người nhận phản hồi."),
+        ("Ước lượng", "Nói được mức không chắc chắn thay vì một con số giả vờ chắc — ở giai đoạn mới hình thành ý tưởng, một ước lượng có thể sai lệch tới bốn lần theo cả hai hướng, và độ không chắc chắn đó chỉ thu hẹp đáng kể sau khi đã làm rõ được khoảng 20-30% khối lượng công việc."),
+        ("Làm việc nhóm", "Đồng bộ ít, tin nhau nhiều — một nghiên cứu kéo dài hai năm trên 180 đội của Google từng kết luận yếu tố phân biệt rõ nhất một đội hiệu quả không phải là ai giỏi nhất trong đội, mà là mức độ an toàn tâm lý: người trong đội dám nói sai, dám hỏi, mà không sợ bị đánh giá.", "Nhận và cho phản hồi"),
+        ("Phỏng vấn", "Cả hai phía đều đang đánh giá lẫn nhau — ứng viên chủ động hỏi ngược lại về đội và cách làm việc không chỉ để lấy thông tin mà bản thân việc đặt câu hỏi tốt cũng là một tín hiệu nhà tuyển dụng thường để ý."),
+        ("Dẫn dắt kỹ thuật", "Ra quyết định và chịu trách nhiệm về nó — ghi lại quyết định theo mẫu do Michael Nygard đề xuất năm 2011 (bối cảnh, quyết định, hệ quả) giúp người dẫn dắt để lại một dấu vết lý do rõ ràng thay vì chỉ để lại kết quả cuối cùng.", "Làm việc nhóm"),
+        ("Học liên tục", "Chọn thứ đáng học, bỏ qua thứ đang ồn ào — một kỹ sư dạng chữ T có một mảng chuyên sâu cộng với hiểu biết rộng ở nhiều mảng liên quan, nên khi một công nghệ chính mình theo đuổi hết thời vẫn còn nền để xoay sang hướng khác."),
      ]),
     ("Kiến trúc phần mềm", "BACKEND",
      "Ra quyết định lớn với ít thông tin, và ghi lại vì sao.", [
-        ("Ghép lỏng và gắn kết", "Hai chỉ số cũ mà vẫn đúng."),
-        ("Kiến trúc phân tầng", "Đơn giản, đủ dùng cho phần lớn hệ thống.", "Ghép lỏng và gắn kết"),
-        ("Thiết kế theo miền", "Ngôn ngữ chung giữa kỹ sư và người dùng."),
-        ("Khi nào tách dịch vụ", "Câu trả lời thường là chưa.", "Kiến trúc phân tầng"),
-        ("Giao tiếp giữa dịch vụ", "Đồng bộ hay bất đồng bộ, và cái giá của mỗi lựa chọn.", "Khi nào tách dịch vụ"),
-        ("Ghi lại quyết định", "Một trang cho mỗi quyết định lớn, kèm phương án đã loại."),
-        ("Tiến hoá hệ thống", "Đổi dần, không viết lại."),
+        ("Ghép lỏng và gắn kết", "Hai chỉ số cũ mà vẫn đúng — coupling và cohesion do Larry Constantine đưa ra từ cuối thập niên 1960 và công bố rộng năm 1974, tới nay vẫn là nền cho hàng trăm nghiên cứu và nhiều thước đo chất lượng mã nguồn khác."),
+        ("Kiến trúc phân tầng", "Đơn giản, đủ dùng cho phần lớn hệ thống — tầng trình bày gọi tầng nghiệp vụ, tầng nghiệp vụ gọi tầng truy cập dữ liệu, mỗi tầng chỉ biết tầng ngay dưới mình nên đổi database về lý thuyết không đụng tới logic nghiệp vụ phía trên.", "Ghép lỏng và gắn kết"),
+        ("Thiết kế theo miền", "Ngôn ngữ chung giữa kỹ sư và người dùng — Eric Evans gọi đó là ngôn ngữ phổ dụng (ubiquitous language), dùng chung một từ vựng giữa người làm nghiệp vụ và người viết code trong đúng một ranh giới ngữ cảnh (bounded context) để tránh cùng một từ mang hai nghĩa khác nhau ở hai nơi."),
+        ("Khi nào tách dịch vụ", "Câu trả lời thường là chưa — Martin Fowler quan sát thấy các đội thành công thường bắt đầu từ một monolith rồi mới tách dần khi nó thực sự trở thành vấn đề, còn các đội tách microservices ngay từ đầu dự án phần nhiều gặp khó khăn.", "Kiến trúc phân tầng"),
+        ("Giao tiếp giữa dịch vụ", "Đồng bộ hay bất đồng bộ, và cái giá của mỗi lựa chọn — gọi đồng bộ dễ theo dõi nhưng một dịch vụ ở giữa chuỗi gọi bị chậm sẽ kéo chậm toàn bộ chuỗi, còn đưa qua hàng đợi bất đồng bộ chịu lỗi tốt hơn nhưng cộng thêm độ trễ qua hai lượt hàng đợi ở cả hai chiều.", "Khi nào tách dịch vụ"),
+        ("Ghi lại quyết định", "Một trang cho mỗi quyết định lớn, kèm phương án đã loại — mẫu ghi quyết định kiến trúc (ADR) Michael Nygard đề xuất năm 2011 chỉ gồm vài mục: bối cảnh, quyết định, hệ quả, đủ ngắn để thực sự được viết trong lúc làm việc."),
+        ("Tiến hoá hệ thống", "Đổi dần, không viết lại — kiến trúc tiến hoá dùng các 'hàm thích nghi' (fitness function) là những phép kiểm, chỉ số hay cơ chế giám sát chạy liên tục để xác nhận một đặc tính kiến trúc quan trọng vẫn được giữ đúng sau mỗi lần thay đổi."),
      ]),
     ("Sản phẩm cho kỹ sư", "OTHER",
      "Hiểu vì sao mình đang xây thứ này.", [
-        ("Phát hiện vấn đề", "Người dùng nói triệu chứng, không nói nguyên nhân."),
-        ("Nghiên cứu người dùng", "Quan sát nhiều hơn hỏi.", "Phát hiện vấn đề"),
-        ("Chỉ số", "Chọn chỉ số mà đội có thể tác động được."),
+        ("Phát hiện vấn đề", "Người dùng nói triệu chứng, không nói nguyên nhân — kỹ thuật 5 Whys của Toyota hỏi liên tiếp 'vì sao' cho tới khi chạm được nguyên nhân gốc mang tính hệ thống, thay vì dừng lại ở lớp triệu chứng đầu tiên rồi vá tạm."),
+        ("Nghiên cứu người dùng", "Quan sát nhiều hơn hỏi — nguyên tắc đầu tiên Nielsen Norman Group nhấn mạnh là đừng thiết kế theo lời người dùng tự nói mình muốn gì, vì lời kể lại về hành vi tương lai vốn không đáng tin bằng việc quan sát trực tiếp họ thao tác.", "Phát hiện vấn đề"),
+        ("Chỉ số", "Chọn chỉ số mà đội có thể tác động được — một North Star Metric tốt vừa phản ánh đúng giá trị cốt lõi sản phẩm mang lại cho người dùng, vừa phải là thứ đội ngũ thực sự có thể tác động qua các cải tiến của mình, không phải một con số chỉ nhìn lại quá khứ."),
         ("Phạm vi", "Cắt phạm vi là kỹ năng, không phải thất bại."),
-        ("Thử nghiệm", "Bản nhỏ nhất trả lời được câu hỏi.", "Phạm vi"),
-        ("Tăng trưởng", "Giữ chân trước, mở rộng sau.", "Chỉ số"),
+        ("Thử nghiệm", "Bản nhỏ nhất trả lời được câu hỏi — vòng lặp build-measure-learn của Eric Ries dùng một sản phẩm khả dụng tối thiểu (MVP) để thu về lượng kiểm chứng thực tế lớn nhất với công sức bỏ ra ít nhất, rồi rút ngắn vòng lặp đó càng nhanh càng tốt.", "Phạm vi"),
+        ("Tăng trưởng", "Giữ chân trước, mở rộng sau — mô hình 'thùng rò' ví người dùng mới đổ vào như nước đổ vào một thùng thủng đáy: đổ thêm bao nhiêu ở trên mà đáy vẫn rò thì tăng trưởng ròng vẫn phẳng, nên vá tỉ lệ giữ chân luôn phải đi trước khi đổ thêm ngân sách thu hút người dùng mới.", "Chỉ số"),
      ]),
 ]
 
@@ -4413,10 +4502,11 @@ def write_chat_plan(rng, people, edges, blocks):
 def write_manifest():
     """Manifest ảnh: key ⇢ (loại, nguồn tải).
 
-    docker/minio/generate-seed-objects.py đọc file này thay vì tự grep key ra từ SQL. Grep SQL là
-    cách cũ và nó vỡ mỗi khi định dạng SQL đổi — mà định dạng SQL thì do generator quyết định, nên
-    hai bên có thể lệch nhau mà không ai biết. Manifest là hợp đồng giữa hai bên, ghi ra cùng một
-    lần chạy với chính các file SQL.
+    Cả hai bên tiêu thụ file này đều đọc manifest thay vì tự grep key ra từ SQL — máy dev qua
+    docker/minio/generate-seed-objects.py, production qua MinIOSeedObjectInitializer.java. Grep SQL
+    là cách cũ và nó vỡ mỗi khi định dạng SQL đổi — mà định dạng SQL thì do generator quyết định,
+    nên hai bên có thể lệch nhau mà không ai biết. Manifest là hợp đồng giữa hai bên, ghi ra cùng
+    một lần chạy với chính các file SQL, và nằm trong resources để đóng được vào jar.
 
     Cột `nguồn` để trống nghĩa là không có ảnh thật để tải (nội dung sách PDF/EPUB) — bên kia sẽ
     sinh file mẫu.

@@ -10,8 +10,12 @@ vì rơi về chữ viết tắt.
 ĐỌC MANIFEST, KHÔNG GREP SQL NỮA. Bản trước quét key bằng biểu thức chính quy trên chính file .sql.
 Cách đó vỡ mỗi khi định dạng SQL đổi — mà định dạng SQL do generator quyết định, nên hai bên lệch
 nhau được mà không ai biết. Nay `scripts/seed/generate_seed.py` xuất
-`docker/minio/seed-manifest.tsv` trong cùng một lần chạy với các file SQL, và đây là hợp đồng giữa
-hai bên. Manifest thiếu thì dừng ngay, không đoán.
+`src/main/resources/db/seed/seed-manifest.tsv` trong cùng một lần chạy với các file SQL, và đây là
+hợp đồng giữa hai bên. Manifest thiếu thì dừng ngay, không đoán.
+
+CHỈ CÓ Ở MÁY DEV. File này chạy trong docker-compose của repo backend. Production không chạy compose
+nào của repo này — bên đó `MinIOSeedObjectInitializer` (Java) làm đúng việc này lúc khởi động, đọc
+cùng manifest đã đóng vào jar. Sửa logic ở đây thì soi lại lớp Java kia.
 
 ẢNH THẬT, CÓ DỰ PHÒNG. Mỗi dòng manifest có thể kèm một URL nguồn (DiceBear, Pravatar, Picsum, bìa
 sách Open Library). Tải về được thì dùng ảnh thật; mất mạng, hết giờ hay 404 thì rơi về bộ sinh

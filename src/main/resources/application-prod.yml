@@ -11,6 +11,35 @@
 # rỗng mà không báo lỗi. logback-spring.xml cũng chọn appender theo đúng profile này, nên nếu nó
 # không được kích hoạt thì log cũng đã sai — xem docker/.env.example trong repo DATN-infra.
 
+# Backend chạy sau Caddy — Caddy terminate TLS rồi reverse_proxy sang cổng 8080 bằng HTTP thuần.
+# Không có dòng này thì với MỌI request: request.getScheme() = "http", request.isSecure() = false,
+# getServerName() = "backend", getServerPort() = 8080.
+#
+# Hôm nay chưa có chỗ nào trong code dựng URL từ các giá trị đó — mọi URL người dùng nhìn thấy
+# (link đặt lại mật khẩu, CORS, redirect URI OAuth, URL ảnh MinIO) đều đến từ ${PUBLIC_BASE_URL}
+# qua biến môi trường, không phải từ request đến. Nên đây là phòng thủ chiều sâu: springdoc suy
+# ra server URL, mọi sendRedirect / Spring Security requiresChannel thêm về sau, và ngữ nghĩa
+# "request này là HTTPS" đều cần scheme đúng.
+#
+# `framework` đăng ký ForwardedHeaderFilter của Spring; Caddy reverse_proxy mặc định đã gửi
+# X-Forwarded-Proto / -Host / -For. Filter này ẩn các header X-Forwarded-* khỏi filter phía sau
+# nhưng ghi đè getRemoteAddr() = entry trái nhất của X-Forwarded-For — trùng cách
+# GuestRateLimitFilter / AuthRateLimitFilter tự lấy IP, nên rate-limit theo IP client vẫn đúng
+# (xác nhận bằng test e2e sau khi cắt domain).
+server:
+  forward-headers-strategy: framework
+
+# Object seed (avatar, ảnh bìa, ảnh bài viết, file/bìa sách) mà db/seed trỏ tới nhưng SQL không
+# tạo được. Máy dev để docker-compose lo (minio-seed-objects + minio-init); production chạy compose
+# của repo DATN-infra, không có service đó — nên MinIOSeedObjectInitializer tự đọc
+# db/seed/seed-manifest.tsv trong jar, tải ảnh thật (hoặc sinh file mẫu) rồi nạp lên MinIO lúc
+# khởi động. Cùng logic đã đưa Neo4j/newsfeed seeding vào ứng dụng.
+#
+# Chạy nền, idempotent (object đã có thì bỏ qua). Env MINIO_SEED_OBJECTS_ON_START ghi đè được để
+# tắt khẩn cấp mà không cần build lại image.
+minio:
+  seed-objects-on-start: ${MINIO_SEED_OBJECTS_ON_START:true}
+
 spring:
   jpa:
     # Hibernate `show_sql` ghi thẳng ra System.out, KHÔNG đi qua logback, nên mức WARN của profile

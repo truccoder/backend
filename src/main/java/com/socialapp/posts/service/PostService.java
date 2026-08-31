@@ -37,6 +37,7 @@ import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
+import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
@@ -239,16 +240,28 @@ public class PostService {
     verifyAuthor(actorId, post);
     findUserOrThrow(actorId);
 
-    // An omitted field now means "leave alone", which splits tag validation in two.
-    //
-    // The privacy rule is an invariant of the stored post, so it is judged on the merged result:
-    // flipping an already-tagged post to PRIVATE without resending the tags must still fail.
-    //
-    // The placeholder/duplicate/limit rules describe how a tag list relates to the content it
-    // arrived with, so they only apply to a list the caller actually sent. Judging them on tags
-    // the caller never mentioned would make editing the caption of a tagged post impossible —
-    // the new text has no @[i] placeholders in it, and rejecting that edit is no better than the
-    // old behaviour of silently discarding the tags.
+    validateUpdateTags(request, post);
+    if (request.getQuizDetails() != null) {
+      validateQuizDetails(request.getQuizDetails());
+    }
+
+    mergeAndModerateUpdate(actorId, request, post);
+    applyUpdatedTags(request, post);
+    processHashtags(post);
+    saveUpdatedPost(actorId, postId, request, post);
+  }
+
+  // An omitted field now means "leave alone", which splits tag validation in two.
+  //
+  // The privacy rule is an invariant of the stored post, so it is judged on the merged result:
+  // flipping an already-tagged post to PRIVATE without resending the tags must still fail.
+  //
+  // The placeholder/duplicate/limit rules describe how a tag list relates to the content it
+  // arrived with, so they only apply to a list the caller actually sent. Judging them on tags
+  // the caller never mentioned would make editing the caption of a tagged post impossible —
+  // the new text has no @[i] placeholders in it, and rejecting that edit is no better than the
+  // old behaviour of silently discarding the tags.
+  private void validateUpdateTags(UpdatePostRequestDto request, PostEntity post) {
     PostVisibility effectiveVisibility =
         Objects.nonNull(request.getVisibility()) ? request.getVisibility() : post.getVisibility();
     List<Integer> effectiveTaggedUserIds =
@@ -256,29 +269,25 @@ public class PostService {
             ? request.getTaggedUserIds()
             : extractTaggedUserIds(post);
 
-    if (PostVisibility.PRIVATE.equals(effectiveVisibility)
-        && !CollectionUtils.isEmpty(effectiveTaggedUserIds)) {
-      throw new ValidationException("Private posts cannot tag other users");
-    }
+    rejectPrivateWithTags(effectiveVisibility, effectiveTaggedUserIds);
 
     if (Objects.nonNull(request.getTaggedUserIds())) {
       String effectiveContent =
           Objects.nonNull(request.getContent()) ? request.getContent() : post.getContent();
       validateTags(effectiveVisibility, request.getTaggedUserIds(), effectiveContent);
     }
+  }
 
-    if (request.getQuizDetails() != null) {
-      validateQuizDetails(request.getQuizDetails());
-    }
-
-    // Merge first, then moderate the result. An edit that leaves a field out means "keep it", so
-    // moderating the request alone re-checked only what the caller happened to resend — and when
-    // `content` was omitted that was nothing at all. The merge is the same one the tag rules above
-    // compute by hand; running it here means the engine judges the post as it will actually be
-    // stored, across every detail block (see PostEntity#moderatableText).
-    //
-    // Safe to do before the check because a rejection throws, and the surrounding @Transactional
-    // rolls the entity back with it.
+  // Merge first, then moderate the result. An edit that leaves a field out means "keep it", so
+  // moderating the request alone re-checked only what the caller happened to resend — and when
+  // `content` was omitted that was nothing at all. The merge is the same one the tag rules above
+  // compute by hand; running it here means the engine judges the post as it will actually be
+  // stored, across every detail block (see PostEntity#moderatableText).
+  //
+  // Safe to do before the check because a rejection throws, and the surrounding @Transactional
+  // rolls the entity back with it.
+  private void mergeAndModerateUpdate(
+      Integer actorId, UpdatePostRequestDto request, PostEntity post) {
     BeanUtils.copyProperties(request, post, nullPropertyNames(request));
     // Marks this as an author-driven edit, distinct from updatedAt — see PostEntity#editedAt.
     // Set unconditionally: even an edit moderation later rejects already changed the content the
@@ -291,16 +300,20 @@ public class PostService {
         throw new ContentViolationException(ruleResult.getViolations());
       }
     }
+  }
 
-    // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
-    // clearing it made "edit the caption" silently un-tag everybody.
+  // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
+  // clearing it made "edit the caption" silently un-tag everybody.
+  private void applyUpdatedTags(UpdatePostRequestDto request, PostEntity post) {
     if (Objects.nonNull(request.getTaggedUserIds())) {
       post.getTags().clear();
       postRepository.flush();
       setTags(post, request.getTaggedUserIds());
     }
-    processHashtags(post);
+  }
 
+  private void saveUpdatedPost(
+      Integer actorId, Integer postId, UpdatePostRequestDto request, PostEntity post) {
     if (moderationProperties.isEnabled()) {
       post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
       postRepository.save(post);
@@ -456,9 +469,7 @@ public class PostService {
 
   private void validateTags(
       PostVisibility visibility, List<Integer> taggedUserIds, String content) {
-    if (PostVisibility.PRIVATE.equals(visibility) && !CollectionUtils.isEmpty(taggedUserIds)) {
-      throw new ValidationException("Private posts cannot tag other users");
-    }
+    rejectPrivateWithTags(visibility, taggedUserIds);
 
     if (!Strings.hasText(content) && !CollectionUtils.isEmpty(taggedUserIds)) {
       throw new ValidationException("Content is required if want to tag users");
@@ -468,6 +479,17 @@ public class PostService {
       return;
     }
 
+    validateTagListShape(taggedUserIds);
+    validateTagPlaceholders(taggedUserIds, content);
+  }
+
+  private void rejectPrivateWithTags(PostVisibility visibility, List<Integer> taggedUserIds) {
+    if (PostVisibility.PRIVATE.equals(visibility) && !CollectionUtils.isEmpty(taggedUserIds)) {
+      throw new ValidationException("Private posts cannot tag other users");
+    }
+  }
+
+  private void validateTagListShape(List<Integer> taggedUserIds) {
     if (taggedUserIds.size() > MAX_TAGS) {
       throw new ValidationException("Cannot tag more than " + MAX_TAGS + " users");
     }
@@ -476,7 +498,9 @@ public class PostService {
     if (uniqueUsers.size() != taggedUserIds.size()) {
       throw new ValidationException("Duplicate users in tag list");
     }
+  }
 
+  private void validateTagPlaceholders(List<Integer> taggedUserIds, String content) {
     Set<Integer> placeholderIndices = new HashSet<>();
     Matcher matcher = TAG_PLACEHOLDER.matcher(content);
     while (matcher.find()) {
@@ -536,20 +560,28 @@ public class PostService {
   }
 
   private void validateEventDetails(CreatePostRequestDto request) {
-    if (request.getEventDetails() == null) {
+    EventDetails eventDetails = request.getEventDetails();
+    if (eventDetails == null) {
       throw new ValidationException("Event details are required for event posts");
     }
-    if (request.getEventDetails().getEventTitle() == null
-        || request.getEventDetails().getEventTitle().isBlank()) {
+    validateEventRequiredFields(eventDetails);
+    validateEventTimeRange(eventDetails);
+  }
+
+  private void validateEventRequiredFields(EventDetails eventDetails) {
+    if (eventDetails.getEventTitle() == null || eventDetails.getEventTitle().isBlank()) {
       throw new ValidationException("Event title is required");
     }
-    if (request.getEventDetails().getStartTime() == null) {
+    if (eventDetails.getStartTime() == null) {
       throw new ValidationException("Event start time is required");
     }
-    if (request.getEventDetails().getEndTime() == null) {
+    if (eventDetails.getEndTime() == null) {
       throw new ValidationException("Event end time is required");
     }
-    if (request.getEventDetails().getEndTime().isBefore(request.getEventDetails().getStartTime())) {
+  }
+
+  private void validateEventTimeRange(EventDetails eventDetails) {
+    if (eventDetails.getEndTime().isBefore(eventDetails.getStartTime())) {
       throw new ValidationException("Event end time must be after start time");
     }
   }
@@ -570,19 +602,28 @@ public class PostService {
     if (CollectionUtils.isEmpty(quizDetails.getQuestions())) {
       throw new ValidationException("Quiz must have at least one question");
     }
-    for (int i = 0; i < quizDetails.getQuestions().size(); i++) {
-      QuizQuestion q = quizDetails.getQuestions().get(i);
-      if (!Strings.hasText(q.getQuestion())) {
-        throw new ValidationException("Question text is required at index " + i);
-      }
-      if (CollectionUtils.isEmpty(q.getOptions()) || q.getOptions().size() < 2) {
-        throw new ValidationException("Question must have at least 2 options at index " + i);
-      }
-      if (q.getCorrectOptionIndex() == null
-          || q.getCorrectOptionIndex() < 0
-          || q.getCorrectOptionIndex() >= q.getOptions().size()) {
-        throw new ValidationException("Invalid correctOptionIndex at index " + i);
-      }
+    List<QuizQuestion> questions = quizDetails.getQuestions();
+    for (int i = 0; i < questions.size(); i++) {
+      validateQuizQuestion(questions.get(i), i);
+    }
+  }
+
+  private void validateQuizQuestion(QuizQuestion question, int index) {
+    if (!Strings.hasText(question.getQuestion())) {
+      throw new ValidationException("Question text is required at index " + index);
+    }
+    if (CollectionUtils.isEmpty(question.getOptions()) || question.getOptions().size() < 2) {
+      throw new ValidationException("Question must have at least 2 options at index " + index);
+    }
+    validateCorrectOptionIndex(question, index);
+  }
+
+  private void validateCorrectOptionIndex(QuizQuestion question, int index) {
+    Integer correctOptionIndex = question.getCorrectOptionIndex();
+    if (correctOptionIndex == null
+        || correctOptionIndex < 0
+        || correctOptionIndex >= question.getOptions().size()) {
+      throw new ValidationException("Invalid correctOptionIndex at index " + index);
     }
   }
 

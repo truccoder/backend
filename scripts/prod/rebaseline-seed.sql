@@ -105,6 +105,12 @@ COMMIT;
 --
 --   1. Đổi mật khẩu hai tài khoản ADMIN seed (9499, 9500) qua API — xem README mục "Tài khoản demo".
 --   2. Nạp các phần ngoài Flyway: Neo4j (NEO4J_SEED_ON_START), bảng tin
---      (POST /v1/api/admin/newsfeed/rebuild), và Stream chat (scripts/seed/seed-stream-chat.mjs
---      --reset). Xem README.
+--      (POST /v1/api/admin/newsfeed/rebuild), và Stream chat
+--      (MINIO_URL=<địa chỉ MinIO công khai> node scripts/seed/seed-stream-chat.mjs --reset —
+--      cần bật "permanent user deletion" trên app Stream trước). Xem README.
+--   3. Object MinIO (avatar / ảnh bìa / ảnh bài viết / file+bìa sách): TỰ ĐỘNG.
+--      MinIOSeedObjectInitializer chạy nền lúc backend khởi động (profile prod bật sẵn
+--      MINIO_SEED_OBJECTS_ON_START). Xem log dòng "minio.seed-objects-on-start: xong — tải lên …".
+--      Lần deploy đầu sau khi lên domain, chạy `docker compose ... restart backend` một lần để
+--      MinIOBucketInitializer đặt được policy public-read (Caddy chưa sẵn sàng ở lần chạy đầu).
 -- ---------------------------------------------------------------------------------------------

@@ -128,9 +128,10 @@ jobs:
         with:
           host: ${{ secrets.SERVER_IP }}
           username: ${{ secrets.SERVER_USER }}
-          # SSH thử khoá trước, không có khoá thì dùng mật khẩu. SERVER_SSH_KEY chưa tồn tại thì
-          # `key` nở ra chuỗi rỗng và bị bỏ qua — nên thêm secret đó là chuyển sang khoá xong,
-          # không phải sửa lại file này (quyết định 2026-08-21: tạm dùng mật khẩu).
+          # VPS 3.105.195.84 là EC2, password auth tắt mặc định — đăng nhập bằng file .pem. appleboy
+          # thử `key` trước rồi mới tới `password` (để lại làm dự phòng). Secret phải có: SERVER_IP,
+          # SERVER_USER (ubuntu / ec2-user — sai user thì EC2 trả "Please login as the user ubuntu"
+          # rồi ngắt với status 142), SERVER_SSH_KEY (nguyên nội dung .pem, cả dòng BEGIN/END).
           key: ${{ secrets.SERVER_SSH_KEY }}
           password: ${{ secrets.SERVER_PASSWORD }}
           script: |
@@ -179,13 +180,20 @@ jobs:
             # `up -d` trả về 0 chỉ nghĩa là Compose đã làm xong việc của nó. Backend cần khoảng một
             # phút cho Flyway, và một container khởi động rồi chết ngay vẫn để `up -d` thành công.
             #
+            # Trần chờ để ở 900s (180 × 5s), không phải 300s: một database CHƯA seed phải chạy toàn
+            # bộ V1→mới nhất KÈM bộ seed (V81–V92) qua Supabase pooler — mỗi statement một vòng
+            # mạng — mất 3–8 phút, và 300s đủ sát để rollback nhầm một bản tốt. Vòng lặp vẫn thoát
+            # NGAY khi container biến mất, nên trần cao hơn không phạt gì lúc backend chết thật; nó
+            # chỉ nới cho lần khởi động đầu vừa-chậm-vừa-lành. Các lần deploy sau chỉ validate
+            # checksum nên healthy trong ~1 phút.
+            #
             # Hỏi HEALTHCHECK của image (nhóm readiness = readinessState + db, xem Dockerfile) chứ
             # không tự curl từ máy chủ: backend không publish cổng nào, và Caddy chỉ định tuyến
             # /v1/* nên /actuator/health gọi từ ngoài sẽ rơi vào web-ui và trả 200 của một dịch vụ
             # khác — đúng loại kiểm tra luôn xanh.
             CID="$(docker compose -f docker-compose.prod.yml ps -q backend)"
             HEALTHY=""
-            for i in $(seq 1 60); do
+            for i in $(seq 1 180); do
               STATE="$(docker inspect -f '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo missing)"
               if [ "$STATE" = "healthy" ]; then
                 HEALTHY="yes"
@@ -213,8 +221,8 @@ jobs:
             # PREV_TAG là tag đã ghim ở lần deploy thành công gần nhất. Lần chạy ĐẦU TIÊN của
             # workflow này chưa có gì ghim nên nó rơi về "latest" — và "latest" chỉ có nghĩa nếu
             # lần build gần nhất từ main tạo ra nó. Từ lần thứ hai trở đi thì đây là mốc thật.
-            echo "::error::Backend không healthy sau 300s — quay lui về ${PREV_TAG}."
-            docker compose -f docker-compose.prod.yml logs --tail 60 backend
+            echo "::error::Backend không healthy sau 900s — quay lui về ${PREV_TAG}."
+            docker compose -f docker-compose.prod.yml logs --tail 120 backend
             grep -v '^BACKEND_IMAGE_TAG=' .env > .env.next || true
             echo "BACKEND_IMAGE_TAG=${PREV_TAG}" >> .env.next
             mv .env.next .env

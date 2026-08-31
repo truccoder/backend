@@ -14,37 +14,43 @@ khai đúng dòng này**, không hơn không kém.
 
 ## Bốn phần dữ liệu nằm ngoài Flyway
 
-Không còn bước gõ tay nào, và **hai trong bốn phần do chính ứng dụng lo** nên chúng đi theo ứng dụng
-tới mọi môi trường — kể cả production, nơi không có `docker-compose.yml` của repo này chạy.
+Không còn bước gõ tay nào, và **cả bốn phần do chính ứng dụng lo** nên chúng đi theo ứng dụng tới
+mọi môi trường — kể cả production, nơi không có `docker-compose.yml` của repo này chạy.
 
 | Ai làm | Việc |
 |---|---|
 | `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` mỗi khi `NEO4J_SEED_ON_START=true` — file tự dọn dải 9001–9599 rồi `MERGE` lại |
 | `NewsfeedSeedInitializer` (ứng dụng) | xoá sạch khoá `feed:*` rồi fan-out lại, mỗi khi `NEWSFEED_REBUILD_ON_START=true` |
 | `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh |
-| `minio-seed-objects` + `minio-init` (compose, chỉ dev) | tải ảnh thật theo `docker/minio/seed-manifest.tsv` rồi đẩy lên MinIO |
+| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, tải ảnh thật (hoặc sinh file mẫu) rồi nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có |
+
+`minio-seed-objects` + `minio-init` trong `docker-compose.yml` vẫn còn nhưng **chỉ là đường dev**:
+chúng làm đúng việc của `MinIOSeedObjectInitializer` (cộng cache ảnh ở `docker/minio/.cache/` để
+lần `up` sau chạy offline). Production không chạy compose của repo này nên đi qua lớp Java.
 
 Tất cả đều chạy lại được, nhưng **theo kiểu nạp đè chứ không phải bỏ qua**: bucket dùng
-`--ignore-existing`, còn hai bộ khởi tạo của ứng dụng thì dọn phần dữ liệu của mình trước khi
-dựng lại. Trước đây cả hai đều bỏ qua khi thấy dữ liệu đã có, và đó chính là lý do một bộ seed
-mới nạp xong mà danh sách bạn bè lẫn bảng tin vẫn là của thế hệ trước.
+`--ignore-existing`, ba bộ khởi tạo còn lại dọn/kiểm phần dữ liệu của mình trước khi dựng lại
+(`MinIOSeedObjectInitializer` kiểm từng object, đã có thì bỏ qua). Trước đây Neo4j/newsfeed đều
+bỏ qua khi thấy dữ liệu đã có, và đó chính là lý do một bộ seed mới nạp xong mà danh sách bạn bè
+lẫn bảng tin vẫn là của thế hệ trước.
 
-> **Lần `docker compose up` ĐẦU TIÊN mất khoảng 5–6 phút ở bước ảnh, và đó không phải treo.**
+> **Lần nạp ảnh ĐẦU TIÊN trên một MinIO trắng mất khoảng 5–6 phút, và đó không phải treo.**
 > Đo thực tế: 1.139 object, 979 cái cần tải từ mạng, **971 thành công (99,2%)** trong 340 giây.
-> Script in tiến độ mỗi 200 object. Ảnh tải về nằm trong `docker/minio/.cache/`, nên **lần `up`
-> thứ hai chỉ mất 11 giây và không cần mạng**.
+> Ở máy dev, script in tiến độ mỗi 200 object và cache ảnh vào `docker/minio/.cache/` (lần `up`
+> thứ hai chỉ mất 11 giây). Trên production, `MinIOSeedObjectInitializer` chạy nền và ghi log
+> dòng tổng kết; các lần khởi động sau chỉ là ~1.100 lượt `statObject` rồi bỏ qua.
 >
-> Số luồng tải cố ý để **4**. Đo trên 120 object: 4 luồng được 120/120 ảnh thật, 12 luồng còn
-> 101/120, 24 luồng chỉ còn 24/120 — nút thắt là giới hạn tốc độ theo nguồn, không phải băng
-> thông. Nhanh hơn để nhận về một bộ ô màu thì nhanh để làm gì.
+> Số luồng tải cố ý để **4** ở cả hai đường. Đo trên 120 object: 4 luồng được 120/120 ảnh thật,
+> 12 luồng còn 101/120, 24 luồng chỉ còn 24/120 — nút thắt là giới hạn tốc độ theo nguồn, không
+> phải băng thông. Nhanh hơn để nhận về một bộ ô màu thì nhanh để làm gì.
 
-**Vì sao hai phần đầu nằm trong ứng dụng chứ không phải trong compose.** Trước đây cả hai là service
+**Vì sao cả bốn phần nằm trong ứng dụng chứ không phải trong compose.** Trước đây chúng là service
 của `docker-compose.yml`. Máy dev vì thế luôn đúng, còn production — chạy compose của repo
 `DATN-infra`, nơi không có service tương ứng — thì không: đồ thị bạn bè **rỗng** dù Postgres có hàng
-nghìn lời mời đã chấp nhận, và gian sách trả **503** vì bucket `books` chưa từng được tạo
-(`BookStorageService.getPresignedUrl` hỏi region của bucket trước khi ký, và lượt hỏi đó hỏng làm
-đổ cả trang). Cả hai đều hỏng im lặng ở đúng nơi không ai nhìn. Một cơ chế nằm trong ứng dụng thì đi
-theo ứng dụng; một service trong compose chỉ có ở nơi người ta nhớ chép nó sang.
+nghìn lời mời đã chấp nhận, gian sách trả **503** vì bucket `books` chưa từng được tạo, và mọi
+avatar / ảnh bìa / ảnh bài viết **404** (trình duyệt hiện ảnh vỡ, tệ hơn để NULL). Tất cả đều hỏng
+im lặng ở đúng nơi không ai nhìn. Một cơ chế nằm trong ứng dụng thì đi theo ứng dụng; một service
+trong compose chỉ có ở nơi người ta nhớ chép nó sang.
 
 ## Bước thứ ba: dựng lại bảng tin
 
@@ -144,7 +150,7 @@ python scripts/seed/generate_seed.py
 ```
 
 Script này sinh `V81`–`V90`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
-`docker/minio/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
+`db/seed/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
 tay. `V91` bỏ trống — xem "Vì sao không seed tin xu hướng" bên dưới.
 
 Đầu ra **tất định**: chạy lại cho `git diff` sạch nếu không đổi tham số. Đó không phải chi tiết
@@ -261,13 +267,15 @@ thực (`V71` xoá sạch chúng ở mỗi lần migrate), `t_google_calendar_to
 - **Không seed cột trỏ tới object MinIO trừ khi manifest có khai key đó.** Một cột trỏ tới object
   không tồn tại thì **tệ hơn `NULL`**: URL vẫn dựng được nên trình duyệt hiện ảnh vỡ, chứ không rơi
   về fallback. `banner_url` của dự án để `NULL` vì lý do này.
-- **Mỗi loại ảnh mới là ba chỗ phải sửa cùng lúc**: nguồn trong `generate_seed.py` (`want_image` +
-  `BUCKET_OF_PREFIX`), thư mục prefix, và dòng `mc cp` trong `docker-compose.yml`. Bỏ sót một chỗ
-  thì hỏng im lặng.
+- **Mỗi loại ảnh mới là năm chỗ phải sửa cùng lúc**: nguồn trong `generate_seed.py` (`want_image` +
+  `BUCKET_OF_PREFIX`), thư mục prefix, dòng `mc cp` trong `docker-compose.yml`, và
+  `BUCKET_OF_PREFIX` + `placeholder()` trong `MinIOSeedObjectInitializer.java` (đường production).
+  Bỏ sót một chỗ thì hỏng im lặng.
 - **URL ảnh phải có đủ segment bucket**: `<minio.url>/<bucket>/<key>`, đúng như `MediaService`
-  dựng. Manifest chỉ giữ `<key>` — `minio-init` chép `/objects/avatars/` vào
-  `profile-pictures/avatars/` — nên `want_image` tra `BUCKET_OF_PREFIX` để ghép lại. Thiếu khúc
-  bucket thì MinIO trả **403**, URL vẫn hợp lệ, và không có gì báo lỗi.
+  dựng. Manifest chỉ giữ `<key>` — `minio-init` (dev) và `MinIOSeedObjectInitializer` (prod) đều
+  nạp object với key nguyên vẹn vào bucket tra ở `BUCKET_OF_PREFIX`, còn `want_image` ghép
+  `<bucket>` vào URL. Thiếu khúc bucket thì MinIO trả **403**, URL vẫn hợp lệ, và không có gì báo
+  lỗi.
 - **Giá trị của cột `@Enumerated(EnumType.STRING)` phải là hằng CÓ THẬT của enum Java.** Những cột
   ấy là `varchar` không có `CHECK`, nên một nhãn tự chế đi qua Flyway êm ru rồi nổ ở Hibernate lúc
   **đọc** — tức ở tầng ứng dụng, sau khi seed đã xanh. Ngày 28/08 có sáu cột dính cùng lúc, và hai
