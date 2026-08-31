@@ -3,6 +3,8 @@ package com.socialapp.bookstore.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,6 +32,7 @@ import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -590,10 +593,10 @@ class BookServiceTest {
       b28.setId(28);
       b28.setAuthorId(1);
       b28.setIsFree(true);
-      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of(b30, b29, b28));
+      when(bookRepository.findLibraryPage(any(), any(), any())).thenReturn(List.of(b30, b29, b28));
 
       // When
-      BookPageResponseDto result = bookService.getLibraryPage(null, 2, 1);
+      BookPageResponseDto result = bookService.getLibraryPage(null, 2, null, 1);
 
       // Then
       assertThat(result.items()).hasSize(2);
@@ -605,15 +608,30 @@ class BookServiceTest {
     @DisplayName("should return a null cursor and hasMore=false for an empty library")
     void shouldHandleEmptyPage() {
       // Given
-      when(bookRepository.findLibraryPage(any(), any())).thenReturn(List.of());
+      when(bookRepository.findLibraryPage(any(), any(), any())).thenReturn(List.of());
 
       // When
-      BookPageResponseDto result = bookService.getLibraryPage(null, 10, 1);
+      BookPageResponseDto result = bookService.getLibraryPage(null, 10, null, 1);
 
       // Then
       assertThat(result.items()).isEmpty();
       assertThat(result.nextCursor()).isNull();
       assertThat(result.hasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("should hand the category to the query rather than filter the page after it")
+    void shouldPushCategoryDownToTheQuery() {
+      // Given: trang chỉ có tối đa 50 hàng, nên lọc sau khi cắt trang là lọc trên một mẫu — một
+      // chủ đề có sách nhưng không có cuốn nào ở trang đầu sẽ hiện ra rỗng. Bằng chứng duy nhất
+      // ở tầng này là câu hỏi gửi xuống repository đã mang theo chủ đề.
+      when(bookRepository.findLibraryPage(any(), any(), any())).thenReturn(List.of());
+
+      // When
+      bookService.getLibraryPage(null, 10, LearningCategory.MOBILE, 1);
+
+      // Then
+      verify(bookRepository).findLibraryPage(isNull(), eq(LearningCategory.MOBILE), any());
     }
   }
 }

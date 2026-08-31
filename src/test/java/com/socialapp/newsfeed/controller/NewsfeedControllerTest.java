@@ -3,6 +3,7 @@ package com.socialapp.newsfeed.controller;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
@@ -38,11 +40,15 @@ import com.socialapp.security.repository.UserRepository;
  * System/API integration tests for {@link NewsfeedController}, per ISTQB CTFL v4.0.1 Section
  * 2.2.2, using {@code @WebMvcTest} + {@code MockMvc}. {@link NewsfeedService} is mocked.
  *
- * <p>Single-endpoint controller with the same {@code @Positive} query-param pattern as {@code
+ * <p>The {@code GET} follows the same {@code @Positive} query-param pattern as {@code
  * FriendshipController}/{@code NotificationController}: constraint failures on {@code page}/{@code
- * size} are handled as <b>400 Bad Request</b> (see {@code GlobalExceptionHandler}'s class-level
- * Javadoc for why that differs from the 422 used for {@code @RequestBody @Valid} failures). {@code
- * NewsfeedService#getFeed} throws nothing the controller needs to map, so there is no Exception
+ * size} are handled as <b>400 Bad Request</b>. The {@code POST} added for seen-post reporting takes a
+ * {@code @RequestBody @Valid} instead, and therefore answers a failed constraint with <b>422</b>,
+ * malformed JSON with <b>400</b> and a missing content type with <b>415</b> — three statuses on one
+ * controller, which is why they are asserted individually below. See {@code
+ * GlobalExceptionHandler}'s class-level Javadoc for why the first two differ.
+ *
+ * <p>Neither service method throws anything the controller maps itself, so there is no Exception
  * Mapping section here.
  */
 @WebMvcTest(NewsfeedController.class)
@@ -190,6 +196,136 @@ class NewsfeedControllerTest {
     void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
       // When / Then
       mockMvc.perform(get(FEED_URL)).andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("POST /v1/api/feed/seen")
+  class MarkSeenTests {
+
+    private static final String SEEN_URL = FEED_URL + "/seen";
+
+    private static String bodyWithIds(String ids) {
+      return "{\"postIds\":[" + ids + "]}";
+    }
+
+    private static String bodyWith(int count) {
+      return bodyWithIds(
+          java.util.stream.IntStream.rangeClosed(1, count)
+              .mapToObj(Integer::toString)
+              .collect(java.util.stream.Collectors.joining(",")));
+    }
+
+    @Test
+    @DisplayName("shouldReturn204AndDelegate_happyPath")
+    void shouldReturn204AndDelegate_happyPath() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(bodyWithIds("10,11,12")))
+          .andExpect(status().isNoContent());
+
+      verify(newsfeedService).markSeen(currentUser.getId(), List.of(10, 11, 12));
+    }
+
+    @Test
+    @DisplayName("shouldKeyOnTheTokensUser_notAnythingInTheBody")
+    void shouldKeyOnTheTokensUser() throws Exception {
+      // Given — a body that tries to name somebody else
+      String body = "{\"userId\":999,\"postIds\":[10]}";
+
+      // When / Then — the extra property is ignored and the caller's own id is used, which is why
+      // the post ids need no ownership check of their own
+      mockMvc
+          .perform(authed(post(SEEN_URL)).contentType(MediaType.APPLICATION_JSON).content(body))
+          .andExpect(status().isNoContent());
+
+      verify(newsfeedService).markSeen(currentUser.getId(), List.of(10));
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenPostIdsIsEmpty")
+    void shouldReturn422_whenPostIdsIsEmpty() throws Exception {
+      // When / Then — EP: @NotEmpty on a @RequestBody field, which this codebase answers with 422
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(bodyWithIds("")))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenPostIdsIsMissing")
+    void shouldReturn422_whenPostIdsIsMissing() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(post(SEEN_URL)).contentType(MediaType.APPLICATION_JSON).content("{}"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldAccept200Ids_atTheBoundary")
+    void shouldAccept200Ids_atTheBoundary() throws Exception {
+      // When / Then — BVA: 200 is the last accepted size
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL)).contentType(MediaType.APPLICATION_JSON).content(bodyWith(200)))
+          .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_when201IdsAreSent_boundary")
+    void shouldReturn422_when201IdsAreSent() throws Exception {
+      // When / Then — BVA: one past the cap that keeps a reader's seen set bounded
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL)).contentType(MediaType.APPLICATION_JSON).content(bodyWith(201)))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenAnIdIsNotPositive")
+    void shouldReturn422_whenAnIdIsNotPositive() throws Exception {
+      // When / Then — EP: zero and negatives are outside the @Positive partition
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(bodyWithIds("10,-1")))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenTheBodyIsNotValidJson")
+    void shouldReturn400_whenBodyIsNotValidJson() throws Exception {
+      // When / Then — malformed JSON is 400, unlike the 422 above: the request is unreadable
+      // rather than semantically wrong. See GlobalExceptionHandler's class Javadoc.
+      mockMvc
+          .perform(
+              authed(post(SEEN_URL)).contentType(MediaType.APPLICATION_JSON).content("not json"))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn415_whenNoContentTypeIsSent")
+    void shouldReturn415_whenNoContentTypeIsSent() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(authed(post(SEEN_URL)).content(bodyWithIds("10")))
+          .andExpect(status().isUnsupportedMediaType());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      // When / Then
+      mockMvc
+          .perform(
+              post(SEEN_URL).contentType(MediaType.APPLICATION_JSON).content(bodyWithIds("10")))
+          .andExpect(status().isUnauthorized());
     }
   }
 }

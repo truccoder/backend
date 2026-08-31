@@ -16,6 +16,7 @@ import lombok.NoArgsConstructor;
 public class PersonalAccessTokenResponseDto {
   private Integer id;
   private String name;
+  private String tokenPrefix;
   private OffsetDateTime expiresAt;
   private OffsetDateTime lastUsedAt;
   private VaultPermission vaultPermission;

@@ -79,8 +79,14 @@ public class ImageModerationService {
   public ImageSafeSearchResult analyzeImages(
       Integer postId, Integer authorId, List<String> imageUrls) {
     if (!properties.getCloudVision().isEnabled()) {
-      log.debug(
-          "[postId={}, authorId={}] Cloud Vision image moderation is disabled, skipping",
+      // WARN, not DEBUG. Production runs com.socialapp at INFO, so at DEBUG this line never
+      // appeared anywhere — the images on every post went unchecked and the only record of it was
+      // a config default nobody was looking at. Returning safe() means the decision engine sees
+      // VERY_UNLIKELY on all three axes and approves, so "disabled" and "checked and clean" were
+      // indistinguishable in the logs. Now they are not.
+      log.warn(
+          "[postId={}, authorId={}] Cloud Vision image moderation is DISABLED; images are not"
+              + " being checked",
           postId,
           authorId);
       return ImageSafeSearchResult.safe();

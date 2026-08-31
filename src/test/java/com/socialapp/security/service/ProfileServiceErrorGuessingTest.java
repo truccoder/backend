@@ -3,7 +3,6 @@ package com.socialapp.security.service;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -88,14 +87,16 @@ class ProfileServiceErrorGuessingTest {
       // Given — the MinIO server accepted the connection but never responded in time
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new SocketTimeoutException("Read timed out"));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object", new SocketTimeoutException("Read timed out")));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture")
-          .hasCauseInstanceOf(SocketTimeoutException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(SocketTimeoutException.class);
     }
 
     @Test
@@ -104,14 +105,16 @@ class ProfileServiceErrorGuessingTest {
       // Given — MinIO host is unreachable (container down, DNS failure, firewall, etc.)
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new ConnectException("Connection refused"));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object", new ConnectException("Connection refused")));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture")
-          .hasCauseInstanceOf(ConnectException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(ConnectException.class);
     }
 
     @Test
@@ -120,14 +123,17 @@ class ProfileServiceErrorGuessingTest {
       // Given — MinIO responded, but with a genuine server-side failure
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new ServerException("Internal error", 500, "trace-id-abc123"));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object",
+                  new ServerException("Internal error", 500, "trace-id-abc123")));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture")
-          .hasCauseInstanceOf(ServerException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(ServerException.class);
     }
 
     @Test
@@ -136,34 +142,36 @@ class ProfileServiceErrorGuessingTest {
       // Given — any other checked failure from the MinIO SDK's exception hierarchy
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new MinioException("Unexpected internal SDK failure"));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object",
+                  new MinioException("Unexpected internal SDK failure")));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture")
-          .hasCauseInstanceOf(MinioException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(MinioException.class);
     }
 
     @Test
-    @DisplayName("shouldThrowStorageException_whenPublicReadPolicyFailsAfterUploadSucceeds")
-    void shouldThrowStorageException_whenPublicReadPolicyFailsAfterUploadSucceeds()
-        throws Exception {
-      // Given — the upload itself succeeds, but the follow-up policy call (a separate network
-      // round-trip) fails; the picture URL is never persisted since the method never returns
+    @DisplayName("shouldNotTouchTheBucketPolicy_becauseThatMovedToStartup")
+    void shouldNotTouchTheBucketPolicy() throws Exception {
+      // Given — this used to assert that a failing ensurePublicReadPolicy aborted the upload. That
+      // call is no longer on this path at all: the policy is applied once by MinIOBucketInitializer
+      // when the application starts, rather than on every avatar change inside the transaction.
+      // What is left worth asserting is the negative — that changing a picture no longer performs a
+      // bucket-administration round trip.
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      doThrow(new ConnectException("Connection refused"))
-          .when(minIOService)
-          .ensurePublicReadPolicy(anyString());
+      when(minIOConfig.getUrl()).thenReturn("http://minio:9000");
 
-      // When / Then
-      assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
-          .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture")
-          .hasCauseInstanceOf(ConnectException.class);
-      verify(userRepository, never()).save(any());
+      // When
+      profileService.changeProfilePicture(USER_ID, file);
+
+      // Then
+      verify(minIOService, never()).ensurePublicReadPolicy(anyString());
     }
 
     @Test
@@ -173,12 +181,13 @@ class ProfileServiceErrorGuessingTest {
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
       SocketTimeoutException original = new SocketTimeoutException("Read timed out");
-      when(minIOService.uploadFile(anyString(), anyString(), any())).thenThrow(original);
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(new StorageException("Could not store the object", original));
 
       // When / Then
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .cause()
+          .rootCause()
           .isSameAs(original);
     }
 
@@ -188,14 +197,15 @@ class ProfileServiceErrorGuessingTest {
       // Given — a third-party exception with no message at all is a realistic worst case
       MultipartFile file = mockFile();
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
-      when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException((String) null));
+      when(minIOService.uploadFile(anyString(), anyString(), any(), anyString()))
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException((String) null)));
 
       // When / Then — the service's own wrapping message must still be intact, no NPE while
       // building the StorageException itself
       assertThatThrownBy(() -> profileService.changeProfilePicture(USER_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload profile picture");
+          .hasMessageContaining("Could not store");
     }
   }
 }

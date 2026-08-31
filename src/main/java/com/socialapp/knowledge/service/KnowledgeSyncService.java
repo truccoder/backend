@@ -1,13 +1,19 @@
 package com.socialapp.knowledge.service;
 
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.ForbiddenException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.SyncResponseDto;
 import com.socialapp.knowledge.dto.VaultNoteDto;
@@ -38,7 +44,17 @@ public class KnowledgeSyncService {
 
     List<ExplanationEntity> explanations;
     if (Objects.nonNull(since) && !since.isBlank()) {
-      OffsetDateTime sinceTime = OffsetDateTime.parse(since);
+      // `since` is a raw query-string value. DateTimeParseException has no handler, so anything
+      // that is not an ISO-8601 offset date-time — a plugin sending "yesterday", or a date with no
+      // zone — used to fall through to the catch-all as a 500. It is a malformed request.
+      OffsetDateTime sinceTime;
+      try {
+        sinceTime = OffsetDateTime.parse(since);
+      } catch (DateTimeParseException e) {
+        throw new ValidationException(
+            "Invalid 'since' timestamp; expected an ISO-8601 offset date-time"
+                + " (e.g. 2026-08-23T10:15:30+07:00)");
+      }
       explanations = explanationRepository.findByUserIdUpdatedAfter(userId, sinceTime);
     } else {
       explanations = explanationRepository.findByUserIdOrderByCreatedAtDesc(userId);
@@ -79,22 +95,29 @@ public class KnowledgeSyncService {
 
     Integer userId = tokenEntity.getUserId();
 
+    // One select for the whole batch and one saveAll, rather than a select and a save per note:
+    // the plugin pushes a whole vault, so this loop scaled its round trips with the vault size.
+    Map<String, VaultNoteEntity> existingByFilename =
+        vaultNoteRepository
+            .findByUserIdAndFilenameIn(
+                userId,
+                request.getNotes().stream().map(VaultNoteDto::getFilename).distinct().toList())
+            .stream()
+            .collect(Collectors.toMap(VaultNoteEntity::getFilename, Function.identity()));
+
+    List<VaultNoteEntity> toSave = new ArrayList<>();
     for (VaultNoteDto note : request.getNotes()) {
       VaultNoteEntity entity =
-          vaultNoteRepository
-              .findByUserIdAndFilename(userId, note.getFilename())
-              .orElseGet(
-                  () ->
-                      VaultNoteEntity.builder()
-                          .userId(userId)
-                          .filename(note.getFilename())
-                          .build());
+          existingByFilename.computeIfAbsent(
+              note.getFilename(),
+              filename -> VaultNoteEntity.builder().userId(userId).filename(filename).build());
 
       entity.setContent(note.getContent());
       entity.setTags(note.getTags());
       entity.setLinks(note.getLinks());
-      vaultNoteRepository.save(entity);
+      toSave.add(entity);
     }
+    vaultNoteRepository.saveAll(toSave);
 
     log.info("Vault push: {} notes synced for user {}", request.getNotes().size(), userId);
   }

@@ -6,6 +6,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import com.socialapp.bookstore.entity.enums.FileFormat;
+import com.socialapp.common.enums.LearningCategory;
 
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -52,6 +53,20 @@ public class BookEntity {
 
   @Enumerated(EnumType.STRING)
   private FileFormat fileFormat;
+
+  /**
+   * Chủ đề, do tác giả chọn lúc đăng sách.
+   *
+   * <p>Không nhờ model đoán như bên {@code ExplanationEntity}: ở đó không có ai để hỏi, còn ở đây
+   * người viết cuốn sách đang đứng trước form và biết chắc câu trả lời.
+   *
+   * <p>Đây là cột duy nhất trong ba chủ đề phải lọc được ở tầng SQL — danh sách Thư viện bị cắt
+   * trang ở server, xem {@code BookRepository.findLibraryPage} và V78.
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(nullable = false, length = 32)
+  @Builder.Default
+  private LearningCategory category = LearningCategory.OTHER;
 
   private Long fileSizeBytes;
 

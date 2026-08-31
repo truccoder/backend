@@ -150,6 +150,15 @@ public class SecurityConfig {
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/v1/api/trending")
                         .permitAll()
+                        // Hashtag suggest/trending (B31). A tag list carries no per-user data, and
+                        // the search box and post-card badges it feeds sit on pages a guest can
+                        // already see. Pinned to the two exact GET paths like every entry here:
+                        // the module has no writes today, but "/v1/api/hashtags/**" would hand
+                        // permitAll to the first one added.
+                        .requestMatchers(HttpMethod.GET, "/v1/api/hashtags/suggest")
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, "/v1/api/hashtags/trending")
+                        .permitAll()
                         // ---- end guest-readable surface ---------------------------------------
                         // ---- Roadmap authoring + skill moderation -----------------------------
                         // Belt and braces, and the belt is the @PreAuthorize on the two
