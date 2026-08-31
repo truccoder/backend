@@ -133,7 +133,10 @@ public class ExplanationService {
         .concepts(parsed.concepts)
         .prerequisites(parsed.prerequisites)
         .complexityScore(parsed.complexityScore)
-        .externalLinks(parsed.externalLinks)
+        // B34: a model that is not grounded produces links that do not resolve — non-ASCII
+        // spliced into the path, a fabricated deep path on a real host. Drop the broken ones
+        // here so the response, the card, and the saved copy all agree on what is followable.
+        .externalLinks(ExternalLinkSanitizer.followable(parsed.externalLinks))
         .category(parsed.category)
         .build();
   }
@@ -151,7 +154,9 @@ public class ExplanationService {
             .explanationContent(request.getExplanationContent())
             .concepts(request.getConcepts())
             .prerequisites(request.getPrerequisites())
-            .externalLinks(request.getExternalLinks())
+            // Filtered again on the way in: the generate path already sanitises, but a client can
+            // POST here directly, and a broken link is just as unfollowable once it is persisted.
+            .externalLinks(ExternalLinkSanitizer.followable(request.getExternalLinks()))
             .complexityScore(request.getComplexityScore())
             .category(request.getCategory())
             .version(nextVersion)
@@ -339,7 +344,24 @@ public class ExplanationService {
           .append(", whatever language the original post is written in. Do not translate the")
           .append(" original post itself — it is quoted below for reference only.\n");
     }
-    sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n\n");
+    sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n");
+    // backend-plan B34: the model was indenting sub-bullets by one space. CommonMark needs the
+    // indent to reach the width of the parent marker (two columns for "* "), so a one-space
+    // sub-item is parsed as a sibling and the whole list flattens to one level in remark-gfm.
+    sb.append(
+        "8. In \"explanation\", write valid CommonMark. Keep bullet lists to a single level"
+            + " wherever you can — prefer a flat list with a **bold lead-in** per item. If you"
+            + " genuinely must nest, indent each sub-item by exactly TWO spaces per level.\n");
+    // B34: the model invented links — a real host with a fabricated deep path, a title that did
+    // not match the page, non-ASCII spliced mid-URL, a different set every regeneration. The
+    // service drops the syntactically broken ones (sanitizeExternalLinks), but only the prompt
+    // can stop the plausible-looking wrong ones.
+    sb.append(
+        "9. Every \"externalLinks\" URL must be one you are confident is real and currently"
+            + " reachable: an official documentation page, a well-known engineering blog, or a"
+            + " conference talk. Use plain ASCII. Do NOT guess deep paths — if you are unsure of"
+            + " the exact page, link the site's root, and omit a link rather than invent one. The"
+            + " \"title\" must be the actual title of that page.\n\n");
 
     sb.append("=== READER PROFILE ===\n");
     sb.append("- Job title: ").append(profile.getJobTitle()).append("\n");

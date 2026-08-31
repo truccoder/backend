@@ -502,6 +502,24 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  // A third-party API told us we are over its quota or rate limit (HTTP 429 / Gemini
+  // RESOURCE_EXHAUSTED). A subclass of ExternalApiException, so it needs its own @ExceptionHandler
+  // to escape the 503 below — Spring resolves an exception to the handler for its closest type, so
+  // the more specific one wins. 429 not 503 because an immediate retry cannot help: the allowance
+  // is spent, and the caller needs to back off rather than try again.
+  @ResponseStatus(TOO_MANY_REQUESTS)
+  @ExceptionHandler(ExternalRateLimitException.class)
+  public ErrorResponseDto handle(ExternalRateLimitException ex, HttpServletRequest request) {
+    writeLog(ex, request);
+
+    return ErrorResponseDto.builder()
+        .code(TOO_MANY_REQUESTS.value())
+        .error(TOO_MANY_REQUESTS.getReasonPhrase())
+        .message(ex.getMessage())
+        .path(request.getRequestURI())
+        .build();
+  }
+
   // Same rationale as StorageException/PaymentException, for third-party APIs (GitHub, Google,
   // Gemini) instead of MinIO/MoMo — the call failed or returned something we can't use, not a bug
   // in our own request handling, hence 503.

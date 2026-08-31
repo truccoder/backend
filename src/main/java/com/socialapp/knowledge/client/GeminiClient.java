@@ -5,14 +5,20 @@ import java.util.Map;
 import java.util.Objects;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.exception.ExternalRateLimitException;
 import com.socialapp.knowledge.config.GeminiProperties;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Component
 public class GeminiClient {
   private final WebClient geminiWebClient;
@@ -59,6 +65,25 @@ public class GeminiClient {
       // Already carries the specific reason (no candidates / no text / bad JSON) — rethrow as-is
       // instead of shadowing it under a generic message.
       throw e;
+    } catch (WebClientResponseException e) {
+      // Gemini answered with an HTTP error status. Log the status and body — this is the only
+      // place they exist, and backend-plan B32 is stuck for want of them ("is the endpoint dying
+      // on RESOURCE_EXHAUSTED or on UNAVAILABLE?"). Then split the one status the caller must
+      // treat differently:
+      //
+      //  - 429 → we are over Gemini's quota / rate limit. Surfaced as 429 so the caller stops
+      //    retrying (every free-tier key in this project shares one RPD budget: explain, location
+      //    resolve, trending classification, moderation).
+      //  - anything else (5xx, an expired key's 400, a safety refusal) → 503, transient-looking,
+      //    retry allowed. Same as before this branch existed.
+      log.warn(
+          "Gemini generateContent failed: HTTP {} — {}",
+          e.getStatusCode(),
+          e.getResponseBodyAsString());
+      if (e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
+        throw new ExternalRateLimitException("Gemini quota or rate limit exceeded", e);
+      }
+      throw new ExternalApiException("Failed to generate content from Gemini", e);
     } catch (Exception e) {
       throw new ExternalApiException("Failed to generate content from Gemini", e);
     }

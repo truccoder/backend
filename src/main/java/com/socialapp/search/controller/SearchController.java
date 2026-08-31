@@ -10,6 +10,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialapp.common.utils.Constants;
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.matchmaking.dto.ProjectResponseDto;
+import com.socialapp.matchmaking.service.ProjectQueryService;
+import com.socialapp.roadmap.dto.RoadmapDto;
+import com.socialapp.roadmap.service.RoadmapService;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.MentionSuggestionDto;
 import com.socialapp.search.dto.PostDto;
@@ -19,6 +23,7 @@ import com.socialapp.search.dto.UserDto;
 import com.socialapp.search.service.MentionSuggestService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.search.service.SuggestService;
+import com.socialapp.search.util.SearchQuerySanitizer;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.constraints.Max;
@@ -43,6 +48,8 @@ public class SearchController {
   private final SuggestService suggestService;
   private final FriendshipService friendshipService;
   private final MentionSuggestService mentionSuggestService;
+  private final ProjectQueryService projectQueryService;
+  private final RoadmapService roadmapService;
 
   @GetMapping
   public SearchResponse search(
@@ -59,7 +66,15 @@ public class SearchController {
     List<PostDto> posts = searchService.searchPostsWithBookInfo(q, size, currentUserId, friendIds);
     List<BookDto> books = searchService.searchBooks(q, size, currentUserId, friendIds);
 
-    return new SearchResponse(users, posts, books);
+    // B33: projects and roadmaps come from their own domains' read services, not SearchService —
+    // they carry no visibility/block filtering (neither does GET /projects or GET /roadmaps), so
+    // keeping them out of the class whose every branch does keeps that invariant honest. The term
+    // is LIKE-escaped here because those services take it pre-sanitised (see searchProjects).
+    String sanitized = SearchQuerySanitizer.sanitize(q);
+    List<ProjectResponseDto> projects = projectQueryService.searchProjects(sanitized, size);
+    List<RoadmapDto> roadmaps = roadmapService.searchRoadmaps(sanitized, size);
+
+    return new SearchResponse(users, posts, books, projects, roadmaps);
   }
 
   /**

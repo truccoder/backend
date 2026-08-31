@@ -744,6 +744,21 @@ class ExplanationServiceTest {
     }
 
     @Test
+    @DisplayName("should tell the model how to nest lists and not to invent links (B34)")
+    void shouldCarryTheMarkdownAndLinkRules() {
+      stubGeminiEcho();
+      stubHappyPathUpTo(profile(null, null));
+
+      explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      String prompt = promptCaptor.getValue();
+      assertThat(prompt)
+          .contains("indent each sub-item by exactly TWO spaces")
+          .contains("confident is real and currently")
+          .contains("omit a link rather than invent one");
+    }
+
+    @Test
     @DisplayName("should list every category constant, so a new one cannot go unasked for")
     void shouldListEveryCategoryInThePrompt() {
       // Given: danh sách trong prompt được sinh từ chính enum. Nếu ai đó gõ tay danh sách vào
@@ -969,7 +984,7 @@ class ExplanationServiceTest {
       when(geminiClient.generateContent(anyString()))
           .thenReturn(
               "{\"explanation\": \"e\", \"externalLinks\": [{\"title\": \"Doc\", \"url\":"
-                  + " \"https://x\", \"reason\": \"why\"}]}");
+                  + " \"https://spring.io\", \"reason\": \"why\"}]}");
 
       // When
       ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
@@ -977,6 +992,30 @@ class ExplanationServiceTest {
       // Then
       assertThat(result.getExternalLinks()).hasSize(1);
       assertThat(result.getExternalLinks().get(0).getTitle()).isEqualTo("Doc");
+    }
+
+    @Test
+    @DisplayName("should drop an external link the model corrupted mid-generation (B34)")
+    void shouldDropCorruptedExternalLink() {
+      // Given — two links: one clean, one with non-Latin script spliced into the path (the exact
+      // failure measured 31/08/2026) and one more that is a bare word host. Only the clean one is
+      // followable.
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn(
+              "{\"explanation\": \"e\", \"externalLinks\": ["
+                  + "{\"title\": \"Real\", \"url\": \"https://docs.oracle.com/en/java/\"},"
+                  + "{\"title\": \"Glitched\", \"url\":"
+                  + " \"https://datadoghq.com/blog/observability-படு/x\"},"
+                  + "{\"title\": \"Dotless\", \"url\": \"https://localhost/guide\"}]}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(result.getExternalLinks())
+          .extracting(ExplanationResponseDto.ExternalLink::getTitle)
+          .containsExactly("Real");
     }
 
     @Test

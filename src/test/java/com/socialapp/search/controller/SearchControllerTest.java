@@ -23,7 +23,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.roadmap.service.RoadmapService;
 import com.socialapp.search.dto.BookDto;
 import com.socialapp.search.dto.MentionSuggestionDto;
 import com.socialapp.search.dto.SearchResult;
@@ -87,6 +89,11 @@ class SearchControllerTest {
   @MockBean private MentionSuggestService mentionSuggestService;
 
   @MockBean private FriendshipService friendshipService;
+
+  // B33: the /search projects and roadmaps branches are served by the domains' own read services.
+  @MockBean private ProjectQueryService projectQueryService;
+  @MockBean private RoadmapService roadmapService;
+
   @MockBean private JwtProvider jwtProvider;
 
   @MockBean
@@ -154,6 +161,55 @@ class SearchControllerTest {
           .andExpect(jsonPath("$.posts").isArray())
           .andExpect(jsonPath("$.books[0].id").value(7))
           .andExpect(jsonPath("$.books[0].title").value("Reader Monad"));
+    }
+
+    @Test
+    @DisplayName("shouldIncludeProjectAndRoadmapBranches_andPassTheLikeEscapedTerm")
+    void shouldIncludeProjectAndRoadmapBranches() throws Exception {
+      // Given — B33: /search now answers five lists. The term reaches the two new branches
+      // already LIKE-escaped (SearchQuerySanitizer), so a literal '%' is a '%' and not a wildcard.
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(searchService.searchUsers(
+              any(),
+              org.mockito.ArgumentMatchers.anyInt(),
+              org.mockito.ArgumentMatchers.anyInt(),
+              any(),
+              any()))
+          .thenReturn(
+              SearchResult.<UserDto>builder()
+                  .items(List.of())
+                  .totalHits(0)
+                  .page(1)
+                  .size(10)
+                  .build());
+      when(searchService.searchPostsWithBookInfo(
+              any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
+          .thenReturn(List.of());
+      when(searchService.searchBooks(any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
+          .thenReturn(List.of());
+
+      com.socialapp.matchmaking.dto.ProjectResponseDto project =
+          com.socialapp.matchmaking.dto.ProjectResponseDto.builder()
+              .id(11)
+              .title("Java board")
+              .build();
+      com.socialapp.roadmap.dto.RoadmapDto roadmap = new com.socialapp.roadmap.dto.RoadmapDto();
+      roadmap.setId(4);
+      roadmap.setName("Backend Java");
+      when(projectQueryService.searchProjects(
+              eq("50\\% java"), org.mockito.ArgumentMatchers.anyInt()))
+          .thenReturn(List.of(project));
+      when(roadmapService.searchRoadmaps(eq("50\\% java"), org.mockito.ArgumentMatchers.anyInt()))
+          .thenReturn(List.of(roadmap));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(SEARCH_URL)).param("q", "50% java"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.projects[0].id").value(11))
+          .andExpect(jsonPath("$.projects[0].title").value("Java board"))
+          .andExpect(jsonPath("$.roadmaps[0].id").value(4))
+          .andExpect(jsonPath("$.roadmaps[0].name").value("Backend Java"));
     }
 
     @Test

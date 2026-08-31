@@ -111,6 +111,7 @@ class ProjectControllerTest {
         .id(id)
         .title("Project " + id)
         .authorId(OWNER_ID)
+        .authorUsername("owner")
         .authorFullName("Owner One")
         .positions(List.of())
         .build();
@@ -189,6 +190,7 @@ class ProjectControllerTest {
           .perform(authed(get(URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.items[0].id").value(2))
+          .andExpect(jsonPath("$.items[0].authorUsername").value("owner"))
           .andExpect(jsonPath("$.nextCursor").value(2))
           .andExpect(jsonPath("$.hasMore").value(false));
     }
@@ -290,6 +292,7 @@ class ProjectControllerTest {
                       .id(70)
                       .projectId(2)
                       .applicantId(9)
+                      .applicantUsername("someone")
                       .applicantFullName("Someone Else")
                       .status(ApplicationStatus.PENDING)
                       .build()));
@@ -297,7 +300,8 @@ class ProjectControllerTest {
       mockMvc
           .perform(authed(get(URL + "/2/applications")))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$[0].applicantFullName").value("Someone Else"));
+          .andExpect(jsonPath("$[0].applicantFullName").value("Someone Else"))
+          .andExpect(jsonPath("$[0].applicantUsername").value("someone"));
     }
 
     @Test

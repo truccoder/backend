@@ -41,16 +41,31 @@ public class RoadmapService {
 
   public List<RoadmapDto> getAllRoadmaps() {
     return roadmapRepository.findAll().stream()
-        .map(
-            e -> {
-              RoadmapDto dto = new RoadmapDto();
-              dto.setId(e.getId());
-              dto.setName(e.getName());
-              dto.setDescription(e.getDescription());
-              dto.setCategory(e.getCategory());
-              return dto;
-            })
+        .map(RoadmapService::toDto)
         .collect(Collectors.toList());
+  }
+
+  /**
+   * Roadmaps matching a free-text query — the server side of the search page's "Lộ trình" tab
+   * (backend-plan B33), replacing a client-side filter over the whole catalogue.
+   *
+   * <p>{@code sanitizedQuery} is expected pre-escaped for {@code LIKE}; see {@code
+   * ProjectQueryService.searchProjects} for why the sanitiser is not called here. Node names are
+   * not searched — that would be one query per roadmap.
+   */
+  public List<RoadmapDto> searchRoadmaps(String sanitizedQuery, int limit) {
+    return roadmapRepository.search(sanitizedQuery, limit).stream()
+        .map(RoadmapService::toDto)
+        .collect(Collectors.toList());
+  }
+
+  private static RoadmapDto toDto(RoadmapEntity e) {
+    RoadmapDto dto = new RoadmapDto();
+    dto.setId(e.getId());
+    dto.setName(e.getName());
+    dto.setDescription(e.getDescription());
+    dto.setCategory(e.getCategory());
+    return dto;
   }
 
   @Transactional
