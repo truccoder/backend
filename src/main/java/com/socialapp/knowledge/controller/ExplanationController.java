@@ -18,12 +18,22 @@ import lombok.RequiredArgsConstructor;
 public class ExplanationController {
   private final ExplanationService explanationService;
 
+  /**
+   * The body is optional — an explanation with no feedback and no stated language is the normal
+   * first request — so both fields are read through a null check rather than assumed present.
+   */
   @PostMapping("/posts/{postId}/explain")
   public ExplanationResponseDto explainPost(
       @PathVariable Integer postId,
       @Valid @RequestBody(required = false) ExplainRequestDto request) {
     String feedbackNote = request != null ? request.getFeedbackNote() : null;
-    return explanationService.explainPost(SecurityUtils.getCurrentUserId(), postId, feedbackNote);
+    String language = request != null ? request.getLanguage() : null;
+    // Stays a Boolean rather than collapsing to a primitive here: null ("caller said nothing")
+    // and FALSE ("caller said no") mean different things to loadVaultContext, and an absent body
+    // must keep meaning the former.
+    Boolean useVaultContext = request != null ? request.getUseVaultContext() : null;
+    return explanationService.explainPost(
+        SecurityUtils.getCurrentUserId(), postId, feedbackNote, language, useVaultContext);
   }
 
   @PostMapping("/save")
