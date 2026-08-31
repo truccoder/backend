@@ -74,7 +74,7 @@ INSERT INTO socialapp.t_posts
     (id, content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
 VALUES
     (102998,
-     'Bài dùng để kiểm phần xem trước bình luận sau khi lọc người bị chặn. Hai bình luận gốc sớm nhất là của người đã bị chặn.',
+     'Vừa đặt memory limit bằng đúng memory request cho service Node theo khuyến nghị chuẩn — bộ nhớ là tài nguyên không nén được, một khi đã cấp cho pod thì chỉ lấy lại được bằng cách giết pod. Ai có kinh nghiệm chỉnh CPU limit thì chia sẻ thêm với.',
      'PUBLIC', 9003, 'REGULAR', 'APPROVED',
      now() - INTERVAL '40 days', now() - INTERVAL '40 days');
 
@@ -91,18 +91,18 @@ SELECT 9001, u.id, now() - INTERVAL '35 days'
 INSERT INTO socialapp.t_comments (id, post_id, author_id, content, parent_id, created_at, updated_at)
 VALUES
     -- Hai bình luận GỐC cũ nhất — của người bị 9001 chặn, nên 9001 không nhìn thấy.
-    (209101, 102998, 9101, 'Bình luận gốc cũ nhất, của một tài khoản đã bị chặn.', NULL,
+    (209101, 102998, 9101, 'Bên mình cũng từng đặt limit thấp hơn request và dính OOMKilled y hệt vậy.', NULL,
      now() - INTERVAL '39 days', now() - INTERVAL '39 days'),
-    (209102, 102998, 9102, 'Bình luận gốc cũ thứ hai, cũng của tài khoản bị chặn.', NULL,
+    (209102, 102998, 9102, 'Tưởng chỉ cần theo dõi CPU thôi, hoá ra memory mới là thứ hay giết pod bất ngờ nhất.', NULL,
      now() - INTERVAL '38 days', now() - INTERVAL '38 days'),
     -- Một bình luận gốc của người KHÔNG bị chặn, muộn hơn cả hai trả lời bên dưới.
-    (209103, 102998, 9103, 'Bình luận gốc muộn nhất, của người không bị chặn.', NULL,
+    (209103, 102998, 9103, 'Cảm ơn bạn, mai mình thử áp lại cho service báo cáo đang hay bị restart.', NULL,
      now() - INTERVAL '10 days', now() - INTERVAL '10 days'),
     -- Hai TRẢ LỜI, cũ hơn bình luận gốc ở trên. Sau khi lọc chặn, đây là hai bình luận cũ nhất
     -- còn lại — và cả hai đều là trả lời.
-    (209104, 102998, 9104, 'Trả lời cho bình luận đầu, của người không bị chặn.', 209101,
+    (209104, 102998, 9104, 'Đúng rồi, bên mình cũng đổi sang limit bằng request sau đúng một lần OOM lúc nửa đêm.', 209101,
      now() - INTERVAL '37 days', now() - INTERVAL '37 days'),
-    (209105, 102998, 9105, 'Trả lời thứ hai, cũng của người không bị chặn.', 209102,
+    (209105, 102998, 9105, 'CPU throttling thì lộ ra chậm dần, còn memory thì tắt luôn không báo trước — khó lường hơn nhiều.', 209102,
      now() - INTERVAL '36 days', now() - INTERVAL '36 days');
 
 -- =============================================================================================
@@ -120,31 +120,37 @@ INSERT INTO socialapp.t_posts
     (id, content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
 VALUES
     (102999,
-     'Bài dùng để kiểm chip hạng trên hàng bình luận: luồng bên dưới cố ý có nhiều hạng khác nhau.',
+     'Tổng kết đợt rà soát phụ thuộc bên thứ ba của tụi mình tuần này: một gói nhỏ tưởng vô hại nằm sâu trong cây phụ thuộc hoá ra có CVE mới công bố — may là bắt được trước khi lên production.',
      'PUBLIC', 9003, 'REGULAR', 'APPROVED',
      now() - INTERVAL '20 days', now() - INTERVAL '20 days');
 
 INSERT INTO socialapp.t_post_hashtags (post_id, hashtag_id) VALUES (102999, 1210);
 
+-- Nội dung theo TIER (top/zero/mid) chứ không nhắc username: ba bình luận đọc như ba phản ứng
+-- thật, không phải một mẫu lặp gắn tên người viết vào.
 INSERT INTO socialapp.t_comments (post_id, author_id, content, parent_id, created_at, updated_at)
 SELECT 102999, u.id,
-       'Bình luận của ' || u.username || ' — dùng để kiểm chip hạng trên hàng bình luận.',
+       CASE u.tier
+           WHEN 'top' THEN 'Bên mình cũng generate SBOM mỗi lần release, bắt được kha khá case tương tự.'
+           WHEN 'zero' THEN 'Ơ mình chưa biết công cụ scan bắt được cả dependency gián tiếp, tưởng chỉ soi cái khai trực tiếp thôi.'
+           ELSE 'Có lần bên mình dính đúng kiểu này, phải hotfix giữa đêm.'
+       END,
        NULL,
        now() - INTERVAL '19 days', now() - INTERVAL '19 days'
   FROM (
         -- Người điểm cao nhất...
-        (SELECT id, username FROM socialapp.t_users
+        (SELECT id, 'top' AS tier FROM socialapp.t_users
           WHERE role <> 'ADMIN' ORDER BY elite_score DESC LIMIT 1)
         UNION ALL
         -- ...và một người chưa có điểm nào.
-        (SELECT id, username FROM socialapp.t_users
+        (SELECT id, 'zero' AS tier FROM socialapp.t_users
           WHERE role <> 'ADMIN' AND elite_score = 0 ORDER BY id LIMIT 1)
         UNION ALL
         -- ...cộng một người ở khoảng giữa, để luồng có ba mức chứ không chỉ hai đầu.
-        (SELECT id, username FROM socialapp.t_users
+        (SELECT id, 'mid' AS tier FROM socialapp.t_users
           WHERE role <> 'ADMIN' AND elite_score BETWEEN 100 AND 999
           ORDER BY elite_score DESC LIMIT 1)
-       ) AS u(id, username);
+       ) AS u(id, tier);
 
 -- =============================================================================================
 -- Kiểm tra tại chỗ. Ba khối trên đều dựa vào dữ liệu do generator sinh ra, nên nếu generator đổi

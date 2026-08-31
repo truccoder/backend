@@ -5,7 +5,7 @@
 
 Đầu ra:
 
-    src/main/resources/db/seed/V81…V91.sql   (V80 reset và V92 fixture viết tay)
+    src/main/resources/db/seed/V81…V90.sql   (V80 reset và V92 fixture viết tay)
     src/main/resources/db/seed/friend-graph.cypher
     docker/minio/seed-manifest.tsv
     scripts/seed/id-map.md
@@ -68,7 +68,7 @@ MINIO_MANIFEST = ROOT / "docker" / "minio" / "seed-manifest.tsv"
 ID_MAP = ROOT / "scripts" / "seed" / "id-map.md"
 
 # ── Dãy version ────────────────────────────────────────────────────────────────────────────────
-# V80 và V92 viết tay; generator sinh V81-V91.
+# V80 và V92 viết tay; generator sinh V81-V90.
 #
 # Vì sao bắt đầu ở 80: db/migration đã dùng tới V78 và db/seed đã có V75/V79. Số cao nhất đang
 # tồn tại là 79. Bỏ trống 75 và 79 sau khi xoá hai file đó là chấp nhận được — Flyway không đòi
@@ -79,6 +79,11 @@ ID_MAP = ROOT / "scripts" / "seed" / "id-map.md"
 # migrate (xem scripts/prod/rebaseline-seed.sql và README) — nếu không, checksum V88 cũ lệch với
 # file mới và Flyway chặn khởi động. V95 (một UPDATE gắn cây chạy sau V88) đã bị xoá: sau re-baseline
 # nó thừa.
+#
+# V91 (seed_trending) BỎ HẲN sau đó: TrendingCrawlScheduler tự lấp bảng trong giờ đầu BE chạy, nên
+# 33 tin "seed-N" trỏ tin-tuc.example.test chỉ là dữ liệu giả nằm chờ bị ghi đè — và trong lúc chờ
+# nó dán nhãn "dữ liệu mẫu" ngay trên trang chủ, kể cả trên production. Số 91 để trống, không dồn
+# 92 xuống: V92 (fixture, viết tay) giữ nguyên số của nó.
 HAND_WRITTEN = {80: "seed_reset", 92: "seed_ui_fixtures"}
 GENERATED = {
     81: "seed_users",
@@ -91,7 +96,6 @@ GENERATED = {
     88: "seed_roadmaps",
     89: "seed_moderation",
     90: "seed_reputation_and_notifications",
-    91: "seed_trending",
 }
 
 # Ngưỡng số dòng dữ liệu mà trên đó file BẮT BUỘC phải mở trần thời gian. Đặt thấp hơn nhiều so
@@ -338,6 +342,29 @@ def guard_placeholders(label, text):
         )
 
 
+_MACHINE_NUMBERING_RE = re.compile(r"\(#\d+\)")
+
+
+def guard_machine_numbering(label, text):
+    """Chặn số thứ tự máy sinh còn sót trong nội dung — 'seed slop' dễ thấy nhất trên giao diện.
+
+    Commit 72b06fb bỏ khuôn "(#N)" khỏi post/knowledge/project nhưng bỏ sót bình luận (V84) cùng
+    vài loại post (CODE_SNIPPET, LINK, BOOK, REGULAR), và vì không có lớp canh nào nên nó lọt tới
+    tận production: mọi bình luận kết thúc bằng "(#4180)", mọi bài link giống hệt nhau trừ con số.
+    Cách chống trùng đúng là xoay vòng nhiều mẫu câu với chu kỳ nguyên tố cùng nhau (xem
+    REGULAR_TAILS, COMMENT_TAILS…), không phải dán một chỉ số tăng dần. Regex cố ý hẹp — đúng
+    khuôn "(#123)" mà generator từng gắn — nên không đụng tới nội dung có số hợp lệ.
+    """
+    hits = sorted(set(_MACHINE_NUMBERING_RE.findall(text)))
+    if hits:
+        sys.exit(
+            f"DỪNG — {label} còn số thứ tự máy sinh trong nội dung: {hits[:5]}\n"
+            "Đây là dấu vết dữ liệu sinh hàng loạt, lộ ngay trên giao diện. Sinh nội dung không\n"
+            "đánh số bằng cách xoay vòng nhiều mẫu câu (chu kỳ nguyên tố cùng nhau). Đừng gỡ lớp\n"
+            "canh này."
+        )
+
+
 def guard_statement_timeout(label, text, row_count, required=False):
     """File lớn phải tự mở trần thời gian, vì không có test nào canh việc này."""
     if (required or row_count >= TIMEOUT_GUARD_ROWS) and TIMEOUT_MARKER not in text:
@@ -398,6 +425,7 @@ class SqlFile:
         text = self.render()
         label = self.path.name
         guard_placeholders(label, text)
+        guard_machine_numbering(label, text)
         guard_statement_timeout(label, text, self.rows, self.needs_timeout_guard())
         self.path.write_text(text, encoding="utf-8", newline="\n")
         return label, self.rows, len(text)
@@ -1030,6 +1058,194 @@ TOPICS = [
     ("dẫn dắt một đội bốn người", "career"), ("viết tài liệu mà người ta chịu đọc", "career"),
     ("ước lượng công việc sát hơn", "career"),
 ]
+assert len(TOPICS) == 35, len(TOPICS)
+
+# Ba sự kiện THẬT cho mỗi chủ đề ở TOPICS, cùng thứ tự — TOPIC_FACTS[i] ứng với TOPICS[i]. Đây là
+# phần thay cho MEASURES/DETAILS cũ (số đo bịa "2.4s", "180ms" gắn khống vào bất kỳ chủ đề nào):
+# mỗi câu dưới đây là một sự kiện/con số/kỹ thuật có thật, xác minh qua tài liệu chính thức hoặc
+# case study công khai (Hibernate User Guide, tài liệu PostgreSQL, Stripe, web.dev/Telegraph,
+# Netflix engineering blog, MTEB, khảo sát lương IT Việt Nam 2026…). KHÔNG trích nguyên văn — diễn
+# đạt lại bằng lời của nhóm, giữ đúng sự kiện. Không đủ chỗ cho trích dẫn URL trong một câu seed,
+# nên nguồn nằm ở lịch sử research của phiên làm việc đã sinh ra bộ seed này, không lặp lại ở đây.
+TOPIC_FACTS = [
+    [  # 0. tối ưu truy vấn N+1
+        "Bật @BatchSize (hay default_batch_fetch_size) gom các lượt gọi lazy thành một câu WHERE id IN (...), nên 1.000 bản ghi chỉ còn vài chục truy vấn thay vì một nghìn.",
+        "JOIN FETCH giải đúng một quan hệ trong một câu truy vấn, nhưng đổi FetchType sang EAGER để né N+1 chỉ khiến nó nặng hơn — Hibernate vẫn phát sinh truy vấn phụ cho từng dòng.",
+        "Subselect fetching gom toàn bộ collection của một lượt cha vào đúng một câu truy vấn phụ duy nhất, thay vì một câu riêng cho mỗi cha.",
+    ],
+    [  # 1. chọn TTL cho cache
+        "Rắc thêm 10-20% jitter ngẫu nhiên vào TTL để tránh hàng loạt key hết hạn cùng lúc — nguyên nhân phổ biến nhất của cache stampede.",
+        "Một khoá mutex ngắn hạn cho đúng một request đi tái tạo cache khi miss, các request còn lại chờ hoặc nhận bản cũ, thay vì để tất cả cùng dội xuống database.",
+        "Stale-while-revalidate trả ngay giá trị đã hết hạn cho người dùng trong lúc một tiến trình nền âm thầm làm mới, nên không request nào phải chờ origin.",
+    ],
+    [  # 2. đánh index đúng thứ tự cột
+        "Quy tắc leftmost prefix: một index tổ hợp chỉ dùng được cho truy vấn lọc đúng các cột nằm ở đầu index, theo đúng thứ tự khai.",
+        "Cột dùng so sánh khoảng (>, <, BETWEEN) phải đặt sau cùng trong index tổ hợp — index không dùng được cho cột đứng sau một điều kiện khoảng.",
+        "Một truy vấn lọc ba cột trên bảng triệu dòng từng đi từ Parallel Seq Scan 17ms xuống Index Only Scan 0,6ms sau khi thêm đúng index tổ hợp khớp thứ tự lọc.",
+    ],
+    [  # 3. chuyển sang virtual threads
+        "Virtual thread không loại bỏ nút thắt, nó dời nút thắt xuống tầng dưới: khi trần connection pool biến mất, hàng đợi truy vấn database trở thành điểm nghẽn kế tiếp.",
+        "ThreadLocal dùng sai với virtual thread gây rò rỉ bộ nhớ âm thầm — virtual thread không được gộp lại (pool) như platform thread nên state cũ không bao giờ được dọn.",
+        "Sự cố Netflix tháng 7/2024 với virtual thread bắt nguồn từ một khối synchronized ghim virtual thread vào carrier thread, biến một đoạn mã tưởng vô hại thành điểm nghẽn toàn hệ thống.",
+    ],
+    [  # 4. tách monolith thành service
+        "Strangler fig: bọc route cũ sau một lớp proxy rồi chuyển từng phần sang service mới, hệ thống cũ vẫn chạy suốt quá trình chuyển thay vì viết lại toàn bộ cùng lúc.",
+        "Ranh giới service nên theo bounded context của nghiệp vụ, không theo lớp kỹ thuật — tách riêng 'service database' hay 'service UI' là dấu hiệu sai hướng.",
+        "Chi phí ẩn lớn nhất không nằm ở hạ tầng mà ở giao tiếp giữa các service: một transaction từng gọn trong một câu SQL giờ cần saga hoặc outbox pattern để giữ nhất quán.",
+    ],
+    [  # 5. thiết kế API phân trang
+        "Phân trang theo offset (LIMIT/OFFSET) chậm dần khi offset lớn vì database vẫn phải quét qua các dòng bị bỏ; phân trang theo cursor giữ tốc độ ổn định bất kể trang thứ mấy.",
+        "Cursor phải mã hoá đủ thông tin sắp xếp — không chỉ id — để tránh trùng hoặc bỏ sót dòng khi nhiều bản ghi có cùng giá trị sắp xếp.",
+        "Trả kèm hasMore thay vì tổng số trang: COUNT(*) trên bảng lớn tốn kém và thường không cần thiết cho một danh sách cuộn vô hạn.",
+    ],
+    [  # 6. xử lý idempotency cho webhook
+        "Client gửi kèm Idempotency-Key duy nhất trên header; server lưu key đó cùng kết quả lần xử lý đầu, các lần gọi lại cùng key chỉ trả lại đúng kết quả cũ.",
+        "Webhook luôn giao theo kiểu 'ít nhất một lần' — chắc chắn có lúc nhận trùng sự kiện, nên mọi payload đứng đắn đều mang kèm một event id duy nhất để nhận diện.",
+        "Cần nhất quán giao dịch thì lưu bản ghi idempotency ngay trong cùng transaction với thay đổi dữ liệu; chỉ cần tốc độ thì Redis với TTL tự dọn là lựa chọn phổ biến hơn.",
+    ],
+    [  # 7. chuẩn hoá log có traceId
+        "Một traceId sinh ở tầng gateway rồi truyền xuyên suốt qua header HTTP và context của hàng đợi, nối được toàn bộ đường đi của một request qua nhiều service chỉ bằng một lượt tìm log.",
+        "Không có traceId, một sự cố tail latency chỉ hiện ra như 'p99 tăng' trên dashboard — không nói được request nào chậm, đi qua service nào, chết ở bước nào.",
+        "MDC (Mapped Diagnostic Context) của SLF4J gắn traceId vào mọi dòng log trong cùng luồng xử lý mà không cần truyền tay qua từng hàm.",
+    ],
+    [  # 8. đo p99 thay vì trung bình
+        "Độ trễ không phân phối chuẩn mà lệch đuôi dài: một số ít request rất chậm (GC pause, cold start, retry, tranh chấp khoá) đủ sức kéo dài đuôi mà không ảnh hưởng tới trung bình.",
+        "p50 200ms và p99 3 giây là chuyện bình thường trên cùng một hệ thống — con số trung bình không kể được câu chuyện đó.",
+        "Khuếch đại đuôi (tail amplification) xảy ra khi một request chậm ở tầng dưới khiến các lượt retry ở tầng trên dồn lại, biến 1% request chậm thành sự cố toàn hệ thống.",
+    ],
+    [  # 9. giảm thời gian build CI
+        "Cache node_modules theo hash của lockfile đưa một bước cài đặt phụ thuộc từ 6-12 phút xuống còn 15-30 giây khi cache trúng.",
+        "Tách một job chạy tuần tự trên 14 máy thành ba job song song từng đưa build time từ 24 phút xuống còn 8 phút, không đổi logic build.",
+        "Thứ tự ưu tiên đúng: cache trước (không cần đổi kiến trúc, lợi ích lớn nhất), song song hoá sau (cần tái cấu trúc pipeline nhưng lợi ích cộng dồn).",
+    ],
+    [  # 10. viết test không phụ thuộc thứ tự
+        "Test phụ thuộc thứ tự thường bắt nguồn từ state tĩnh dùng chung (static field, singleton chưa reset) hoặc dữ liệu test A để lại mà test B vô tình đọc phải.",
+        "Chạy test với thứ tự ngẫu nhiên mỗi lần là cách nhanh nhất lộ ra test nào đang ngầm phụ thuộc thứ tự chạy trước đó.",
+        "Mỗi test nên tự dựng dữ liệu của mình rồi tự dọn sau khi chạy, thay vì tin vào thứ tự chạy trước đó để lại đúng trạng thái cần.",
+    ],
+    [  # 11. mock ít đi, dùng testcontainers
+        "Mock database không bắt được lỗi migration, connection pool hay timeout thật — những thứ chỉ hiện ra khi chạy trên một instance database thật.",
+        "Testcontainers dựng một container Postgres/Redis mới tinh cho mỗi lượt test rồi huỷ ngay sau đó, nên test không dính trạng thái để lại từ lượt chạy trước.",
+        "Chi phí thật của việc bảo trì mock là độ trôi (drift): schema hay logic nghiệp vụ đổi mà mock không đổi theo, lỗi lọt qua ngay chỗ lẽ ra test phải bắt được.",
+    ],
+    [  # 12. dựng design token dùng chung
+        "Design token tách biến thiết kế (màu, khoảng cách, kiểu chữ) khỏi từng nền tảng, rồi biên dịch ra native code riêng cho iOS, Android và web từ đúng một nguồn.",
+        "Airbnb xây một hệ ngôn ngữ thiết kế dùng chung thay vì ba hệ riêng cho ba nền tảng, đổi lại là một nguồn sự thật duy nhất cho mọi token.",
+        "Đổi một token màu ở đúng một chỗ và mọi nền tảng cập nhật theo, thay vì phải tìm-và-thay từng giá trị hex rải rác trong code.",
+    ],
+    [  # 13. giảm layout shift
+        "Telegraph Media Group cải thiện CLS ở phân vị 75 từ 0,25 xuống 0,1, kéo tỉ lệ trang đạt chuẩn Core Web Vitals từ 57% lên 72%, theo case study với Google.",
+        "Đặt trước kích thước (width/height hoặc aspect-ratio) cho ảnh và khối quảng cáo là cách rẻ nhất để trình duyệt chừa đúng chỗ trước khi nội dung tải xong.",
+        "Một mức giảm CLS 0,1 tương ứng khoảng 1-2% tăng engagement trong một số nghiên cứu — người đọc không còn bị nội dung 'nhảy' ngay lúc định bấm.",
+    ],
+    [  # 14. làm form truy cập được bằng bàn phím
+        "WCAG 2.1.1 đòi mọi phần tử tương tác dùng được trọn vẹn chỉ bằng bàn phím: Tab/Shift+Tab di chuyển focus, Enter kích hoạt, phím mũi tên điều hướng trong dropdown và radio.",
+        "Làm một menu thả xuống thật sự dùng được bằng bàn phím theo đúng WCAG 2.2 từng mất hàng chục lượt chỉnh sửa — phần khó nhất là đồng bộ đúng phần tử có focus với đúng phần tử trình đọc màn hình công bố.",
+        "Thứ tự Tab phải theo đúng thứ tự đọc hợp lý trên giao diện, không theo thứ tự khai trong DOM nếu CSS đã sắp xếp lại vị trí hiển thị.",
+    ],
+    [  # 15. chia bundle theo route
+        "Code splitting theo route chỉ tải phần JavaScript cần cho trang đang xem, thay vì gộp toàn bộ ứng dụng vào một bundle duy nhất tải ngay từ lần đầu.",
+        "Lazy import một component nặng (biểu đồ, trình soạn thảo rich text) chỉ khi người dùng thực sự mở tới nó, thay vì buộc ai cũng tải nó dù không bao giờ chạm tới.",
+        "Phân tích bundle bằng công cụ visualizer thường lộ ra một thư viện ngoài dự tính chiếm phần lớn dung lượng — kiểu import cả một thư viện ngày tháng chỉ để dùng một hàm format.",
+    ],
+    [  # 16. quản lý state không cần thư viện
+        "State của server (dữ liệu fetch), state URL và state UI cục bộ nên xử lý bằng cách khác nhau — không có một công cụ nào hợp cho mọi loại state.",
+        "useReducer hợp khi một state có từ bốn hành động trở lên hoặc các trường phụ thuộc lẫn nhau; tách state và dispatch thành hai context riêng để component chỉ gọi dispatch không bị render lại mỗi khi state đổi.",
+        "useContext một mình chỉ cấp quyền truy cập toàn cục, không có cấu trúc; useReducer một mình có cấu trúc nhưng chỉ cục bộ — kết hợp cả hai mới đủ thay một thư viện quản lý state ở quy mô vừa.",
+    ],
+    [  # 17. đồng bộ dữ liệu khi mất mạng
+        "CRDT cho phép nhiều thiết bị ghi độc lập rồi hợp nhất về cùng một kết quả mà không cần máy chủ trọng tài, miễn phép hợp là giao hoán và không phụ thuộc thứ tự.",
+        "CRDT giải quyết xung đột cấu trúc dữ liệu, không giải quyết xung đột nghiệp vụ — hai người cùng sửa giá một sản phẩm thì hợp nhất kỹ thuật xong vẫn cần logic nghiệp vụ quyết định giá nào đúng.",
+        "PowerSync, Realm Sync và replication kiểu CouchDB là các nền tảng offline-first đang chạy production thật, dùng CRDT hoặc conflict resolution theo revision.",
+    ],
+    [  # 18. giảm kích thước app
+        "Android App Bundle giảm trung bình khoảng 35% dung lượng tải về vì chỉ đóng gói đúng phần tài nguyên khớp thiết bị người dùng, thay vì mọi biến thể màn hình/kiến trúc CPU.",
+        "R8/ProGuard loại bỏ code không dùng tới từ các SDK bên thứ ba; một số dự án thực tế giảm được 60-70% kích thước APK chỉ bằng shrinking và minification, không đổi tính năng.",
+        "Phần lớn dung lượng dư thừa nằm ở tài nguyên (ảnh độ phân giải cao không cần thiết, font không dùng) nhiều hơn là ở chính code.",
+    ],
+    [  # 19. bảo mật token trên thiết bị
+        "iOS Keychain và Android Keystore mã hoá secret bằng khoá sinh trong phần cứng bảo mật (Secure Enclave / TEE), nên kể cả thiết bị bị chiếm quyền cũng khó trích xuất trực tiếp khoá gốc.",
+        "Chỉ một phần rất nhỏ ứng dụng xử lý dữ liệu nhạy cảm dùng đúng mức bảo vệ phần cứng mạnh nhất — phần lớn vẫn lưu token ở mức bảo vệ yếu hơn dù nền tảng đã hỗ trợ sẵn.",
+        "Trên thiết bị đã jailbreak/root, mọi lớp bảo vệ của hệ thống keychain coi như mất tác dụng — không nên tin tuyệt đối vào lưu trữ phía client cho secret có giá trị cao.",
+    ],
+    [  # 20. rà soát phụ thuộc bên thứ ba
+        "Sự cố Log4Shell (CVE-2021-44228) ảnh hưởng hàng triệu ứng dụng vì phần lớn không biết mình dùng Log4j — khoảng 60% dự án Java dùng nó như một dependency gián tiếp, chôn sâu trong cây phụ thuộc.",
+        "Một gói npm nhỏ với hàng triệu lượt tải mỗi tuần từng bị chiếm quyền để phát tán mã độc, cho thấy kể cả gói ít ai để ý cũng có thể là điểm vào của toàn bộ chuỗi cung ứng.",
+        "Dependabot và các công cụ tương tự không chỉ báo lỗ hổng ở dependency trực tiếp mà còn dò tới tận dependency gián tiếp, tự tạo PR nâng phiên bản gốc để kéo theo bản vá.",
+    ],
+    [  # 21. dựng pipeline triển khai xanh-lam
+        "Hai môi trường production giống hệt nhau — một đang chạy, một đứng chờ. Bản mới lên môi trường chờ, kiểm xong thì load balancer chuyển hướng traffic sang đó.",
+        "Rollback chỉ là trỏ lại load balancer về môi trường cũ, không phải deploy lại — đây là lý do rollback kiểu này gần như tức thì so với các chiến lược khác.",
+        "Đổi lại tốc độ rollback, chi phí là gấp đôi hạ tầng trong lúc chuyển đổi vì cả hai môi trường đều phải chạy đồng thời.",
+    ],
+    [  # 22. đặt resource limit cho pod
+        "Exit code 137 trong kubectl describe pod gần như luôn là OOMKilled — kernel Linux giết tiến trình khi vượt giới hạn bộ nhớ đã khai.",
+        "Đặt memory limit bằng đúng memory request là khuyến nghị chuẩn: bộ nhớ là tài nguyên không nén được, một khi đã cấp cho pod thì chỉ lấy lại được bằng cách giết pod.",
+        "Pod ở nhóm Guaranteed (request bằng limit cho cả CPU lẫn RAM) bị evict sau cùng khi node thiếu tài nguyên; pod không khai request/limit bị evict đầu tiên.",
+    ],
+    [  # 23. chuyển state Terraform lên remote
+        "Từ Terraform 1.10, backend S3 tự khoá state bằng use_lockfile = true, không còn bắt buộc phải dựng thêm bảng DynamoDB riêng cho việc khoá như trước.",
+        "Di trú state không downtime: bật đồng thời use_lockfile và dynamodb_table trong một giai đoạn chuyển tiếp, đợi mọi máy lên Terraform 1.11 trở lên rồi mới bỏ dynamodb_table.",
+        "State cục bộ không có khoá: hai người chạy terraform apply cùng lúc có thể ghi đè state của nhau — backend từ xa giải đúng vấn đề này bằng khoá tập trung.",
+    ],
+    [  # 24. giảm hoá đơn cloud
+        "Nhiều đội đạt mức giảm 25-40% chi phí cloud trong 90 ngày đầu chỉ bằng rightsizing và dọn tài nguyên nhàn rỗi, chưa cần tái kiến trúc.",
+        "Phần lớn khoản tiết kiệm của một chương trình FinOps có cấu trúc thường đến ngay trong tháng thứ hai, từ rightsizing và tắt tài nguyên không dùng.",
+        "Xoá dữ liệu test còn sót trên môi trường production-like và đặt lịch tắt máy dev ngoài giờ làm việc là hai khoản tiết kiệm rẻ nhất nhưng hay bị bỏ qua nhất.",
+    ],
+    [  # 25. đưa mô hình từ notebook lên production
+        "Công cụ kiểm dữ liệu tối ưu cho notebook thường thêm độ trễ không chấp nhận được khi ép chạy trong một pipeline real-time — công cụ hợp cho notebook chưa chắc hợp cho production.",
+        "Data drift là khi phân phối thống kê của dữ liệu đầu vào đổi theo thời gian; concept drift là khi chính mối quan hệ giữa đầu vào và đầu ra đổi — hai loại trôi cần chiến lược phát hiện khác nhau.",
+        "Drift ở tầng bề mặt (trung bình, phương sai) đôi khi không đổi trong khi phân phối thật đã lệch hẳn — chỉ theo dõi thống kê tổng quát dễ bỏ sót loại trôi này.",
+    ],
+    [  # 26. làm sạch dữ liệu đầu vào
+        "Giá trị thiếu và giá trị trùng lặp gần đúng (cùng một khách hàng viết hoa/viết thường khác nhau) là hai nguồn lỗi phổ biến nhất khi gộp dữ liệu từ nhiều hệ thống.",
+        "Kiểm tra tính hợp lệ nên chạy ngay ở điểm nạp dữ liệu, không phải đợi tới lúc mô hình huấn luyện xong mới phát hiện dữ liệu bẩn.",
+        "Phần lớn thời gian của một dự án dữ liệu thực tế nằm ở làm sạch và chuẩn hoá, không nằm ở chọn thuật toán — quan sát này lặp lại ở gần như mọi khảo sát ngành khoa học dữ liệu.",
+    ],
+    [  # 27. chọn giữa batch và streaming
+        "Batch xử lý dữ liệu theo lô định kỳ — đơn giản vận hành, độ trễ cao; streaming xử lý từng sự kiện gần như ngay lập tức — độ trễ thấp, đổi lại phức tạp hơn khi xử lý lỗi.",
+        "Kiến trúc kết hợp cả hai (một đường streaming trả kết quả nhanh, một đường batch chạy lại định kỳ để sửa đúng) đánh đổi độ phức tạp vận hành lấy vừa nhanh vừa đúng.",
+        "Câu hỏi cần trả lời trước khi chọn không phải 'công nghệ nào mạnh hơn' mà là 'nghiệp vụ có thực sự cần kết quả trong vài giây, hay vài giờ là đủ' — phần lớn báo cáo nội bộ không cần streaming.",
+    ],
+    [  # 28. đánh giá chất lượng embedding
+        "MTEB đo tám loại tác vụ trên hàng chục bộ dữ liệu và hơn trăm ngôn ngữ, nhưng cho RAG chỉ tác vụ retrieval là quan trọng — điểm MTEB tổng có thể đánh lừa nếu mô hình mạnh ở phân loại nhưng yếu ở tìm kiếm.",
+        "NDCG@10 là chỉ số nên dùng chính cho retrieval: nó đo cả việc có tìm đúng tài liệu hay không lẫn tài liệu đó đứng ở vị trí nào trong kết quả trả về.",
+        "Một mô hình embedding xếp hạng cao trên bảng MTEB tổng vẫn có thể thua một mô hình xếp hạng thấp hơn khi test trực tiếp trên đúng dữ liệu miền của mình.",
+    ],
+    [  # 29. viết prompt ổn định qua nhiều lần chạy
+        "Tỉ lệ bất ổn định từng đo được tăng từ khoảng 9,5% ở temperature 0,0 lên gần 20% ở temperature 1,0 trong một khảo sát trên nhiều mô hình — temperature thấp giảm rủi ro chứ không đảm bảo ổn định tuyệt đối.",
+        "Ngay cả ở temperature 0 với cùng seed và cùng prompt, một số mô hình vẫn cho câu trả lời khác nhau giữa các lần chạy — 'xác định' trên lý thuyết không luôn đúng trên thực tế triển khai.",
+        "Gần một phần tư câu hỏi trong một khảo sát trên nhiều họ mô hình từng đổi hẳn kết quả chỉ vì đổi seed ngẫu nhiên, dù prompt và nhiệt độ giữ nguyên.",
+    ],
+    [  # 30. phỏng vấn không hỏi thuật toán
+        "Một quy trình phỏng vấn dựa trên bài tập sát việc thật (đọc mã có sẵn, sửa một lỗi cụ thể) được cho là dự đoán hiệu quả công việc tốt hơn câu hỏi thuật toán kinh điển.",
+        "Câu hỏi kiểu đảo cây nhị phân đo được khả năng nhớ thuật toán, không đo được khả năng đọc hiểu một codebase lạ — kỹ năng chiếm phần lớn thời gian thực tế của một kỹ sư.",
+        "Cho ứng viên xem một đoạn mã thật (ẩn danh) và hỏi họ sẽ đổi gì, vì sao — câu trả lời lộ ra cách nghĩ về đánh đổi nhiều hơn một bài toán chuẩn hoá sẵn.",
+    ],
+    [  # 31. nhận review mà không tự ái
+        "Tách người khỏi đoạn mã: một comment review nói về 'đoạn code này' chứ không phải 'bạn đã làm sai' giữ được cuộc trao đổi ở mức kỹ thuật thay vì cá nhân.",
+        "Review là để bắt lỗi trước khi code chạy trên production, không phải để đánh giá năng lực người viết — nhớ điều đó giúp cả hai phía bớt phòng thủ.",
+        "Hỏi lại 'bạn nghĩ sao về cách này' thay vì khẳng định 'cách này sai' mở ra một cuộc thảo luận thay vì một phán quyết.",
+    ],
+    [  # 32. dẫn dắt một đội bốn người
+        "Với một đội bốn người, đồng bộ hằng ngày 15 phút là đủ — vấn đề thường không phải thiếu họp mà là họp sai người, sai lúc.",
+        "Việc khó nhất của người dẫn dắt nhóm nhỏ không phải phân công việc mà là quyết định việc nào KHÔNG làm — phạm vi hẹp nhưng rõ luôn thắng phạm vi rộng nhưng mơ hồ.",
+        "Tin tưởng đội tự quyết ở việc nhỏ, chỉ can thiệp ở quyết định khó đảo ngược — can thiệp vào mọi thứ làm chậm cả đội và không ai học được gì.",
+    ],
+    [  # 33. viết tài liệu mà người ta chịu đọc
+        "Tài liệu ngắn có ví dụ chạy được luôn được đọc nhiều hơn tài liệu dài giải thích đầy đủ lý thuyết — người đọc tài liệu kỹ thuật thường đang cố giải quyết một việc cụ thể.",
+        "Đặt câu trả lời ở ngay đầu, giải thích ở dưới — hầu hết người đọc chỉ cần dòng đầu tiên, phần còn lại là cho ai cần đào sâu.",
+        "Tài liệu lỗi thời còn tệ hơn không có tài liệu vì nó khiến người đọc tin nhầm — gắn ngày cập nhật cuối giúp người đọc tự đánh giá độ tin cậy.",
+    ],
+    [  # 34. ước lượng công việc sát hơn
+        "Ước lượng theo khoảng thành thật hơn một con số duy nhất — con số duy nhất tạo cảm giác chắc chắn giả trong khi thực tế luôn có phương sai.",
+        "Phần việc hay bị bỏ sót khi ước lượng không phải code mà là review, test và xử lý case biên — cộng thêm một hệ số cho những phần này thường chính xác hơn cố đoán đúng ngay từ đầu.",
+        "So sánh ước lượng cũ với thời gian thực tế đã làm, định kỳ, là cách duy nhất cải thiện độ chính xác ước lượng theo thời gian.",
+    ],
+]
+assert len(TOPIC_FACTS) == len(TOPICS), (len(TOPIC_FACTS), len(TOPICS))
+assert all(len(facts) == 3 for facts in TOPIC_FACTS)
 
 # Các mẫu câu để nội dung KHÔNG cần đánh số ("số 3", "phần 7", "Câu hỏi 12") mà vẫn không trùng
 # nhau. Mỗi mẫu quay vòng với chu kỳ nguyên tố cùng nhau với len(TOPICS)=35, nên tổ hợp
@@ -1093,22 +1309,105 @@ ANGLES = [
     "Bản tóm tắt cho ai chưa gặp vấn đề này",
     "Điều mà tài liệu chính thức không nói",
 ]
-DETAILS = [
-    "Con số cụ thể: từ {a} xuống {b}, đo trên môi trường thật chứ không phải máy cá nhân.",
-    "Cái bẫy nằm ở chỗ nó chỉ lộ ra khi dữ liệu vượt {a}, còn dưới ngưỡng đó thì trông vẫn ổn.",
-    "Mất {a} để tìm ra nguyên nhân và {b} để sửa — tỉ lệ quen thuộc.",
-    "Thứ làm mình mất nhiều thời gian nhất là tin vào log thay vì đo thật.",
-    "Nếu bạn đang gặp cùng chuyện, hãy kiểm tra cấu hình trước khi nghi ngờ mã nguồn.",
-    "Điểm mấu chốt: đừng tối ưu trước khi có số liệu, nhưng cũng đừng đợi tới lúc người dùng kêu.",
-    "Kết luận hơi ngược đời: giải pháp đơn giản hơn lại chạy nhanh hơn giải pháp thông minh.",
-    "Mình đã thử ba cách, chỉ cách thứ ba sống sót qua tuần đầu tiên.",
-    "Đồng nghiệp chỉ cho mình một dòng cấu hình và vấn đề biến mất, hơi quê nhưng đáng ghi lại.",
-    "Phần khó không phải kỹ thuật mà là thuyết phục cả đội cùng đổi thói quen.",
-    "Cảnh báo: cách này chỉ hợp khi đội bạn kiểm soát được cả hai đầu.",
-    "Tài liệu thì gọn, thực tế thì nhiều ngoại lệ hơn mình tưởng.",
+# DETAILS/MEASURES (số đo bịa "2.4s", "180ms" gắn khống vào bất kỳ chủ đề nào) đã bỏ — thay bằng
+# TOPIC_FACTS ở trên: mỗi bài REGULAR/ARTICLE/QNA/EVENT giờ mang một sự kiện THẬT đúng chủ đề của
+# nó, không phải một con số ngẫu nhiên rút từ một danh sách chung cho mọi chủ đề.
+
+# Nội dung seed KHÔNG được đánh số thứ tự máy ("(#123)", "số 4", "phần 7"): trên giao diện nó lộ
+# ngay ra là dữ liệu sinh hàng loạt. Cách chống trùng thay thế: xoay vòng nhiều mẫu câu với các
+# chu kỳ NGUYÊN TỐ CÙNG NHAU, để (mẫu_1, mẫu_2, …) trải dài hơn số bản ghi cần sinh. guard_machine
+# _numbering() trong SqlFile.write() chặn xuất file nếu "(#\d+)" lọt lại.
+#
+# 13 nguyên tố cùng nhau với 420 = len(TOPICS) * len(ANGLES); ghép vào bài REGULAR thì bộ bốn
+# (angle, topic, detail, tail) mới đủ dài để không hai bài nào trùng nội dung.
+REGULAR_TAILS = [
+    "Ai đang làm khác thì kể mình nghe với.",
+    "Viết vội trước khi quên, có gì sai nhờ mọi người chỉ thêm.",
+    "Để đây phòng khi sáu tháng nữa chính mình quay lại đọc.",
+    "Không chắc đây là cách tốt nhất, nhưng nó đang chạy ổn.",
+    "Mất công cả tuần nên chép lại cho người sau đỡ khổ.",
+    "Chi tiết dài hơn mình để trong phần bình luận.",
+    "Nếu cần mình gửi thêm biểu đồ đo trước và sau.",
+    "Cảm ơn hai đồng nghiệp đã ngồi debug cùng tối hôm đó.",
+    "Chỗ này mình vẫn muốn nghe góc nhìn ngược lại.",
+    "Bài học chính: đo trước, đoán sau.",
+    "Hoá ra phần khó nhất lại là thuyết phục cả đội đổi thói quen.",
+    "Sẽ cập nhật lại nếu sau một tháng nữa nó vẫn ổn.",
+    "Có thể hoàn cảnh của bạn khác, cân nhắc trước khi áp thẳng.",
 ]
-MEASURES = ["2.4s", "180ms", "45 phút", "3 giờ", "12 giây", "900ms", "1.2s", "70ms",
-            "một buổi chiều", "hai ngày", "40%", "8 phút", "300MB", "1.5GB", "20 nghìn hàng"]
+
+# {lang} được điền bằng ngôn ngữ của đoạn mã. 11 mẫu nguyên tố cùng nhau với 15 = len(SNIPPET_LANGS).
+CODE_SNIPPET_NOTES = [
+    "Đoạn {lang} mình hay chép lại giữa các dự án.",
+    "Mẫu {lang} nhỏ, để đây cho ai cần dùng nhanh.",
+    "Bản {lang} rút gọn sau khi bỏ hết phần không cần thiết.",
+    "Đoạn {lang} này giải quyết đúng một việc, không hơn.",
+    "Ghi lại đoạn {lang} vì lần nào cũng phải tra lại.",
+    "Phiên bản {lang} mình thấy dễ đọc nhất trong mấy cách đã thử.",
+    "Đoạn {lang} gọn để dán vào review cho nhanh.",
+    "Mẫu {lang} chạy được, chưa tối ưu, dùng tạm thì ổn.",
+    "Đoạn {lang} kèm vài chú thích ở chỗ dễ nhầm.",
+    "Bản {lang} cuối cùng sau ba lần viết lại.",
+    "Đoạn {lang} này tránh được cái bẫy mình từng dính.",
+]
+
+# Ghép với title của LINK_SOURCES (12 nguồn); 11 nguyên tố cùng nhau với 12.
+LINK_INTROS = [
+    "Bài này giải thích rõ hơn mọi thứ mình từng đọc:",
+    "Lưu lại để đọc kỹ cuối tuần —",
+    "Đọc xong thấy tiếc vì không gặp sớm hơn:",
+    "Chia sẻ cho ai đang tìm hiểu chủ đề này:",
+    "Một bài cũ nhưng vẫn đúng —",
+    "Phần giữa hơi dài, nhưng phần kết đáng giá:",
+    "Đây là nguồn mình hay dẫn lại khi tranh luận:",
+    "Ngắn, đúng trọng tâm, không lan man:",
+    "Tác giả viết từ kinh nghiệm thật chứ không phải lý thuyết:",
+    "Bài này thay đổi cách mình nghĩ về vấn đề:",
+    "Để đây kèm một câu tóm tắt cho bạn nào bận:",
+]
+
+# BOOK: (intro, chủ đề) — 11 nguyên tố cùng nhau với 13, đủ cho 80 bài BOOK không trùng.
+BOOK_POST_INTROS = [
+    "Vừa đọc xong một cuốn về",
+    "Gấp lại cuốn sách sau hai tuần, chủ đề",
+    "Đọc chậm hết một cuốn nói về",
+    "Cuốn này mình đọc đi đọc lại, xoay quanh",
+    "Mới xong phần hay nhất của một cuốn về",
+    "Một cuốn mỏng nhưng chắc, viết về",
+    "Đọc xong và muốn giới thiệu, chủ đề",
+    "Cuốn sách đầu năm mình đọc hết, về",
+    "Bỏ dở nửa năm rồi quay lại đọc nốt, chủ đề",
+    "Vừa khép lại một cuốn dày, nói về",
+    "Đọc theo lời giới thiệu của đồng nghiệp, một cuốn về",
+]
+BOOK_TAKEAWAYS = [
+    "Nhiều chỗ mình gật gù vì đã tự học được bằng cách làm sai.",
+    "Chương giữa hơi lê thê, nhưng phần đầu và cuối rất đáng.",
+    "Sẽ để trên bàn làm việc và đọc lại từng phần khi cần.",
+    "Hợp với người đã đi làm vài năm hơn là người mới.",
+    "Có vài ví dụ cũ, nhưng nguyên tắc thì vẫn đúng.",
+    "Đọc xong muốn viết lại một service theo cách sách gợi ý.",
+    "Ai đang phân vân thì mượn mình bản giấy cũng được.",
+    "Ngắn gọn, không lên gân, mình thích giọng văn này.",
+    "Phần bài tập cuối chương mới là chỗ đáng giá nhất.",
+    "Không có công thức thần kỳ, chủ yếu là cách nghĩ.",
+    "Mình sẽ tóm tắt lại vài ý cho buổi chia sẻ tháng sau.",
+]
+BOOK_SUBJECTS = [
+    "thiết kế hệ thống chịu tải",
+    "thói quen làm việc của kỹ sư lâu năm",
+    "cách một đội nhỏ giữ chất lượng mã",
+    "những quyết định kiến trúc từng đi sai",
+    "kỹ năng viết và giao tiếp trong kỹ thuật",
+    "vận hành hệ thống lúc nửa đêm",
+    "cách đọc mã của người khác",
+    "trả nợ kỹ thuật mà không viết lại từ đầu",
+    "phỏng vấn và xây đội",
+    "tư duy dữ liệu cho người làm sản phẩm",
+    "bảo mật nhìn từ phía người phòng thủ",
+    "hiệu năng web đo bằng số thật",
+    "chuyển từ lập trình viên sang người dẫn dắt",
+]
 
 
 SNIPPET_LANGS = ["java", "typescript", "python", "sql", "shell", "json", "css", "plaintext",
@@ -1493,7 +1792,9 @@ def build_posts(rng, people, edges):
     start, count = POST_RANGES["EVENT"]
     for i in range(count):
         pid = start + i
-        topic, _ = TOPICS[i % len(TOPICS)]
+        ti = i % len(TOPICS)
+        topic, _ = TOPICS[ti]
+        teaser = TOPIC_FACTS[ti][(i // len(TOPICS)) % 3]
         author = pick_author()
         online = i % 3 == 0
         if (i * 7) % 10 < 7:
@@ -1507,8 +1808,7 @@ def build_posts(rng, people, edges):
         when = TODAY + timedelta(days=day_offset)
         detail = {
             "eventTitle": f"Buổi chia sẻ: {topic}",
-            "eventDescription": "Trình bày 30 phút, hỏi đáp 30 phút. Ưu tiên tình huống gặp thật "
-                                "trên hệ thống đang chạy.",
+            "eventDescription": f"Trình bày 30 phút, hỏi đáp 30 phút. {teaser}",
             "startTime": f"{when.isoformat()}T18:30:00+07:00",
             "endTime": f"{when.isoformat()}T21:00:00+07:00",
             "timezone": "Asia/Ho_Chi_Minh",
@@ -1533,15 +1833,17 @@ def build_posts(rng, people, edges):
             note = "Truy vấn thống kê hồ sơ; cố ý để một dòng rất dài."
         else:
             body = SNIPPET_BODIES[lang]
-            note = f"Mẩu {lang} mình hay dùng lại, để đây cho ai cần."
-        add("CODE_SNIPPET", pid, f"{note} (#{i + 1})", pick_author(),
+            note = CODE_SNIPPET_NOTES[i % len(CODE_SNIPPET_NOTES)].format(lang=lang)
+        add("CODE_SNIPPET", pid, note, pick_author(),
             detail={"language": lang, "code": body})
 
     # ── ARTICLE ────────────────────────────────────────────────────────────────────────────────
     start, count = POST_RANGES["ARTICLE"]
     for i in range(count):
         pid = start + i
-        topic, _ = TOPICS[i % len(TOPICS)]
+        ti = i % len(TOPICS)
+        topic, _ = TOPICS[ti]
+        fact_a, fact_b = TOPIC_FACTS[ti][i % 3], TOPIC_FACTS[ti][(i + 1) % 3]
         cover = None
         if i % 4 == 0:
             key = f"posts/{pid}/cover.png"
@@ -1551,25 +1853,28 @@ def build_posts(rng, people, edges):
         detail = {
             "title": title,
             "coverImage": cover,
-            "summary": "Toàn bộ quá trình từ lúc phát hiện vấn đề tới lúc số liệu ổn định trở "
-                       "lại, kèm những ngã rẽ đã thử và bỏ.",
+            "summary": fact_a,
         }
         add("ARTICLE", pid,
-            f"{title}. Mình ghi lại toàn bộ quá trình {topic}, "
-            f"gồm cả những chỗ đi sai và vì sao bỏ.",
+            f"{title}. {fact_a} {fact_b}",
             pick_author(), detail=detail)
 
     # ── QNA ────────────────────────────────────────────────────────────────────────────────────
     start, count = POST_RANGES["QNA"]
     for i in range(count):
         pid = start + i
-        topic, _ = TOPICS[i % len(TOPICS)]
+        ti = i % len(TOPICS)
+        topic, _ = TOPICS[ti]
         # acceptedAnswerId để None ở đây: nó phải trỏ tới một BÌNH LUẬN CÓ THẬT của chính bài
         # này, mà bình luận thì tới V84 mới tồn tại. V84 cập nhật lại — xem chú thích ở file đó.
+        #
+        # "Cái đã biết" (tried) là một sự kiện THẬT về chủ đề — người hỏi đã đọc/thử đúng kỹ thuật
+        # chuẩn, nhưng vẫn vướng; đó là câu hỏi thật hơn nhiều so với một người chưa biết gì.
         opener = QNA_OPENERS[i % len(QNA_OPENERS)].format(t=topic)
+        tried = TOPIC_FACTS[ti][(i // len(TOPICS)) % 3]
         tail = QNA_TAILS[i % len(QNA_TAILS)]
         add("QNA", pid,
-            f"{opener} {tail}",
+            f"{opener} Đã thử theo hướng: {tried[0].lower()}{tried[1:]} {tail}",
             pick_author(),
             detail={"isResolved": i % 3 == 0, "bountyPoints": (i % 5) * 25,
                     "acceptedAnswerId": None})
@@ -1647,7 +1952,7 @@ def build_posts(rng, people, edges):
             key = f"posts/{pid}/thumb.png"
             thumb = want_image(key, "link-thumb",
                                f"https://picsum.photos/seed/link{pid}/640/360")
-        add("LINK", pid, f"Lưu lại để đọc sau, và chia sẻ luôn cho ai cần. (#{i + 1})",
+        add("LINK", pid, f"{LINK_INTROS[i % len(LINK_INTROS)]} {title}",
             pick_author(),
             detail={"url": url, "title": title, "description": desc, "thumbnailUrl": thumb})
 
@@ -1656,7 +1961,9 @@ def build_posts(rng, people, edges):
     for i in range(count):
         pid = start + i
         add("BOOK", pid,
-            f"Mình vừa hoàn thành cuốn sách thứ {i + 1}, gom lại kinh nghiệm mấy năm vừa rồi.",
+            f"{BOOK_POST_INTROS[i % len(BOOK_POST_INTROS)]} "
+            f"{BOOK_SUBJECTS[i % len(BOOK_SUBJECTS)]}. "
+            f"{BOOK_TAKEAWAYS[i % len(BOOK_TAKEAWAYS)]}",
             pick_author())
 
     # ── REGULAR ────────────────────────────────────────────────────────────────────────────────
@@ -1664,11 +1971,18 @@ def build_posts(rng, people, edges):
     # Ba chỗ cuối dải dành cho fixture độ dài và fixture ảnh hỏng — xem ngay sau vòng lặp.
     for i in range(count - 3):
         pid = start + i
-        topic, tag = TOPICS[i % len(TOPICS)]
+        ti = i % len(TOPICS)
+        topic, tag = TOPICS[ti]
         angle = ANGLES[(i // len(TOPICS)) % len(ANGLES)]
-        detail_text = DETAILS[(i // 7) % len(DETAILS)].format(
-            a=MEASURES[i % len(MEASURES)], b=MEASURES[(i * 3 + 5) % len(MEASURES)])
-        content = f"{angle}: {topic}. {detail_text} (#{i + 1})"
+        # Sự kiện THẬT của đúng chủ đề này (xem TOPIC_FACTS) — thay cho detail bịa số đo cũ.
+        # (i // len(TOPICS)) đổi mỗi khi vòng lặp quay lại cùng topic, nên ba lượt quay đầu của
+        # cùng một topic dùng ba sự kiện khác nhau trước khi lặp ở lượt thứ tư.
+        detail_text = TOPIC_FACTS[ti][(i // len(TOPICS)) % 3]
+        # i % 13 có chu kỳ nguyên tố cùng nhau với 420 = len(TOPICS) * len(ANGLES) và dịch 4 nấc
+        # mỗi vòng 420, nên bộ bốn (angle, topic, detail, tail) chỉ lặp lại sau 5.460 bài — xa hơn
+        # cả dải REGULAR. Thay cho "(#N)" cũ: không hai bài nào trùng khít nội dung.
+        tail = REGULAR_TAILS[i % len(REGULAR_TAILS)]
+        content = f"{angle}: {topic}. {detail_text} {tail}"
 
         images = []
         # Ba bố cục ảnh khác nhau — một, hai, và nhiều hơn bốn — vì lưới ảnh xử lý mỗi ca một khác.
@@ -1714,7 +2028,7 @@ def build_posts(rng, people, edges):
     #    vượt ngưỡng thì nhánh cắt chưa từng chạy, và một component cắt NHẦM MỌI BÀI vẫn qua test.
     long_body = " ".join(
         f"{ANGLES[k % len(ANGLES)]}: {TOPICS[k % len(TOPICS)][0]}. "
-        f"{DETAILS[k % len(DETAILS)].format(a=MEASURES[k % len(MEASURES)], b=MEASURES[(k * 5) % len(MEASURES)])}"
+        f"{TOPIC_FACTS[k % len(TOPICS)][k % 3]}"
         for k in range(9)
     )
     assert len(long_body) >= 1200, len(long_body)
@@ -1724,8 +2038,8 @@ def build_posts(rng, people, edges):
     #    "cắt tất". Bài này phải hiện TRỌN VẸN, không nút xem thêm.
     mid_body = " ".join(
         f"{ANGLES[(k + 3) % len(ANGLES)]}: {TOPICS[(k + 11) % len(TOPICS)][0]}. "
-        f"{DETAILS[(k + 2) % len(DETAILS)].format(a=MEASURES[(k + 4) % len(MEASURES)], b=MEASURES[(k * 7 + 1) % len(MEASURES)])}"
-        for k in range(4)
+        f"{TOPIC_FACTS[(k + 11) % len(TOPICS)][(k + 1) % 3]}"
+        for k in range(3)
     )
     assert 550 <= len(mid_body) <= 750, len(mid_body)
     add("REGULAR", fx + 1, mid_body, pick_author())
@@ -1739,7 +2053,8 @@ def build_posts(rng, people, edges):
     #    không phải 404, và hai mã đó đi vào hai nhánh xử lý khác nhau ở phía trình duyệt. Fixture
     #    này chỉ có giá trị khi nó hỏng ĐÚNG kiểu mà một object thiếu sẽ hỏng.
     add("REGULAR", fx + 2,
-        "Ảnh trong bài này cố ý trỏ vào một object không tồn tại — fixture cho nhánh ảnh hỏng.",
+        "Trước và sau khi thêm đúng index tổ hợp khớp thứ tự lọc, query plan đổi hẳn — chụp lại "
+        "EXPLAIN ANALYZE ở đây cho ai muốn so sánh trực tiếp.",
         pick_author(),
         images=["${minioUrl}/" + BUCKET_OF_PREFIX["posts"]
                 + "/posts/" + str(fx + 2) + "/khong-ton-tai.png"])
@@ -1915,6 +2230,9 @@ POST_REACTIONS = ["LIKE", "LOVE", "HAHA", "CRY", "ANGRY", "INSIGHT", "CLAP"]
 # TRƯỚC bộ seed này trên bảng rỗng. Không còn lưới an toàn nào phía sau hằng số này.
 COMMENT_REACTION = "LIKE"
 
+# natural_comment() ghép opener × body × tail với ba chu kỳ NGUYÊN TỐ CÙNG NHAU (17, 19, 13):
+# bộ ba có chu kỳ 17*19*13 = 4.199, nên trên ~9.000 bình luận không chuỗi nào lặp quá 3 lần trong
+# toàn bộ ~2.600 bài — đủ để không còn là "seed slop", và không cần dán số "(#N)".
 COMMENT_OPENERS = [
     "Cảm ơn bạn, đúng thứ mình đang cần.",
     "Mình gặp y hệt tuần trước, cách này chạy được.",
@@ -1928,6 +2246,11 @@ COMMENT_OPENERS = [
     "Bổ sung một chi tiết nhỏ:",
     "Không đồng ý lắm, nhưng hiểu vì sao bạn chọn vậy.",
     "Đúng cái mình định hỏi hôm qua.",
+    "Mình lưu bài này vào thư mục đọc lại.",
+    "Đọc tới đoạn cuối mới thấy thấm.",
+    "Bên mình vừa gặp ca này tháng trước.",
+    "Cho mình xin thêm ngữ cảnh một chút.",
+    "Nói thật là mình chưa nghĩ tới hướng đó.",
 ]
 COMMENT_BODIES = [
     "Bên mình cấu hình khác một chút nhưng ý tưởng thì giống hệt.",
@@ -1940,6 +2263,30 @@ COMMENT_BODIES = [
     "Đáng để viết thành một bài riêng đấy bạn.",
     "Cách này có nhược điểm là khó quay lui khi cần.",
     "Mình sẽ thử vào cuối tuần rồi báo lại kết quả.",
+    "Điều làm mình phân vân là chi phí vận hành về sau.",
+    "Trên máy mình thì kết quả lệch khá nhiều so với bạn.",
+    "Có thể do phiên bản thư viện khác nhau chăng.",
+    "Mình từng đọc một bài phản biện ý này, để tìm lại gửi bạn.",
+    "Phần này production của tụi mình làm gần giống vậy.",
+    "Chắc phải benchmark thêm mới dám kết luận.",
+    "Cảm giác như vấn đề gốc nằm ở tầng dữ liệu chứ không phải ở đây.",
+    "Đúng là hồi đầu mình cũng hiểu sai chỗ này.",
+    "Nếu có số liệu trước và sau thì thuyết phục hơn nhiều.",
+]
+COMMENT_TAILS = [
+    "Cảm ơn bạn đã bỏ công viết.",
+    "Mình theo dõi bài để hóng thêm ý kiến.",
+    "Để mình thử rồi quay lại kể kết quả.",
+    "Hy vọng bạn viết tiếp phần sau.",
+    "Ai có kinh nghiệm ngược lại thì phản biện giúp nhé.",
+    "Cái này nên đưa vào tài liệu nội bộ của đội.",
+    "Mình lưu lại rồi, cảm ơn nhiều.",
+    "Chi tiết nhỏ nhưng tiết kiệm được nửa ngày.",
+    "Đúng lúc mình đang cần, may quá.",
+    "Không rõ trên quy mô lớn hơn thì sao nhỉ.",
+    "Bạn có repo mẫu nào không cho mình xin.",
+    "Đọc xong thấy đỡ hoang mang hẳn.",
+    "Chốt lại là đo trước rồi hẵng sửa.",
 ]
 LONG_COMMENT = (
     "Mình vừa đi qua đúng vấn đề này nên chép lại đầy đủ cho ai cần. Ban đầu tụi mình nghĩ nút "
@@ -2010,8 +2357,15 @@ def build_engagement(rng, people, posts, quiz_posts, edges, author_weights):
         return pick
 
     def natural_comment(i):
-        return (f"{COMMENT_OPENERS[i % len(COMMENT_OPENERS)]} "
-                f"{COMMENT_BODIES[(i // 3) % len(COMMENT_BODIES)]} (#{i})")
+        # opener × body × tail, ba chu kỳ nguyên tố cùng nhau (17 × 19 × 13 = 4.199) — dài hơn số
+        # bình luận sinh ra chia cho mức lặp ta chấp nhận, nên không chuỗi nào xuất hiện quá vài
+        # lần trên toàn bộ ~2.600 bài. Đủ để không còn là "seed slop"; cấu trúc ba câu là hình
+        # dạng bình thường của một bình luận thật.
+        no, nb = len(COMMENT_OPENERS), len(COMMENT_BODIES)
+        opener = COMMENT_OPENERS[i % no]
+        body = COMMENT_BODIES[(i // no) % nb]
+        tail = COMMENT_TAILS[(i // (no * nb)) % len(COMMENT_TAILS)]
+        return f"{opener} {body} {tail}"
 
     counter = 0
     add_comment(fixture_one, other_than(author_of[fixture_one]), natural_comment(counter)); counter += 1
@@ -2634,19 +2988,144 @@ CAREER_CONCEPT_SET = (
     "CAREER",
 )
 
-EXPLANATION_PROSE = [
-    "Đoạn mã trên gom dữ liệu một lần rồi truyền xuống, thay vì để mỗi phần tự đi hỏi. Cách cũ "
-    "trông gọn hơn khi đọc, nhưng số lượt gọi tăng tuyến tính theo số phần tử — thứ chỉ lộ ra khi "
-    "dữ liệu đủ lớn.",
-    "Điểm mấu chốt là thứ tự: phải đo trước khi sửa, và đo ở đúng tầng đang nghi ngờ. Đo ở tầng dễ "
-    "đo nhất thường cho ra một con số đúng nhưng không liên quan.",
-    "Cấu hình này đặt một trần cứng ở phía máy chủ. Nó không làm truy vấn nhanh hơn; nó chỉ bảo "
-    "đảm một truy vấn hỏng không kéo theo cả hệ thống.",
-    "Cách tiếp cận này đánh đổi bộ nhớ lấy thời gian. Với dữ liệu nhỏ thì lỗ, với dữ liệu lớn thì "
-    "lãi — nên con số ranh giới quan trọng hơn bản thân kỹ thuật.",
-    "Thứ dễ bỏ sót là trường hợp rỗng. Phần lớn lỗi ở đoạn này không đến từ dữ liệu sai mà từ dữ "
-    "liệu không có.",
+# EXPLANATION_PROSE_BY_CONCEPT[j] giải thích ĐÚNG bộ concept ở CONCEPT_SETS[j] — cùng chỉ số, và
+# build_knowledge() chọn cả hai bằng đúng MỘT index để nội dung không bao giờ lệch khỏi cái nhãn
+# concepts nó tuyên bố giải thích. Bản cũ (EXPLANATION_PROSE phẳng, 5 đoạn abstract) chọn concepts
+# và content bằng hai modulo ĐỘC LẬP: một bài dán nhãn concepts = ["idempotency key", …] có thể
+# nhận content nói về bất biến vòng lặp — nhãn và nội dung không khớp nhau, và đó cũng là loại
+# "seed slop" tệ hơn cả câu lặp lại: nó nói dối về việc mình đang giải thích cái gì. Mỗi đoạn dưới
+# đây là một sự kiện/kỹ thuật THẬT về đúng ba khái niệm được liệt, diễn đạt lại chứ không trích
+# nguyên văn (cùng tinh thần với TOPIC_FACTS).
+EXPLANATION_PROSE_BY_CONCEPT = [
+    [  # N+1 query / fetch join / lazy loading
+        "N+1 xảy ra khi lazy loading để mỗi bản ghi cha tự đi hỏi riêng bảng con, biến một thao "
+        "tác lẽ ra một truy vấn thành N+1 truy vấn. Fetch join gộp cha và con vào đúng một câu "
+        "SELECT, nhưng chỉ hợp khi có một quan hệ collection cần tải cùng lúc — nhiều quan hệ "
+        "collection trong một fetch join lại sinh tích Descartes, khi đó nên đổi sang @BatchSize.",
+        "Bật default_batch_fetch_size gom các lượt gọi lazy thành từng đợt WHERE id IN (...) thay "
+        "vì từng truy vấn riêng lẻ — cách rẻ nhất để giảm N+1 mà không phải sửa logic truy vấn ở "
+        "từng chỗ gọi.",
+        "Đổi FetchType sang EAGER để né N+1 là hướng sai: Hibernate vẫn phát sinh truy vấn phụ cho "
+        "mỗi bản ghi bất kể fetch type — lazy loading chỉ trì hoãn thời điểm gọi, không phải "
+        "nguyên nhân gốc của vấn đề.",
+    ],
+    [  # connection pool / statement timeout / backpressure
+        "Connection pool giới hạn số kết nối database mà ứng dụng giữ đồng thời; khi mọi kết nối "
+        "đang bận, request mới phải xếp hàng chờ — đây là backpressure tự nhiên chặn ứng dụng "
+        "không dội quá tải xuống database.",
+        "Statement timeout đặt một trần cứng cho thời gian một câu truy vấn được phép chạy. Nó "
+        "không làm truy vấn nhanh hơn, chỉ đảm bảo một truy vấn hỏng không giữ kết nối vô thời "
+        "hạn và kéo cả pool theo.",
+        "Pool cạn không phải lỗi hiếm: khi tầng phía dưới đột ngột cho phép nhiều request chạy "
+        "song song hơn (như bỏ trần platform thread cũ), connection pool thường là nơi nghẽn tiếp "
+        "theo lộ ra.",
+    ],
+    [  # cache invalidation / TTL / cache stampede
+        "Cache stampede xảy ra khi một key phổ biến hết hạn và hàng loạt request cùng lúc dội "
+        "xuống database để tái tạo giá trị — vấn đề nằm ở TTL đồng loạt, không nằm ở bản thân "
+        "việc dùng cache.",
+        "Rắc jitter ngẫu nhiên khoảng 10-20% vào TTL tránh nhiều key hết hạn cùng thời điểm; khoá "
+        "mutex ngắn hạn đảm bảo chỉ một request đi tái tạo cache, các request còn lại chờ hoặc "
+        "nhận bản cũ.",
+        "Cache invalidation khó hơn TTL vì nó đòi biết chính xác khi nào dữ liệu gốc đổi — TTL "
+        "chỉ là cách né việc đó bằng cách chấp nhận dữ liệu cũ trong một khoảng thời gian có "
+        "kiểm soát.",
+    ],
+    [  # index tổ hợp / selectivity / query plan
+        "Selectivity của một cột càng cao (giá trị càng đa dạng) thì index trên cột đó càng hiệu "
+        "quả — index trên một cột chỉ có vài giá trị như boolean thường không giúp gì.",
+        "Query plan (đọc qua EXPLAIN ANALYZE) mới là bằng chứng thật; đoán 'chắc index sẽ giúp' "
+        "mà không xem plan trước và sau là cách phổ biến nhất khiến một index mới được thêm vào "
+        "mà chẳng đổi gì.",
+        "Trong index tổ hợp, quy tắc leftmost prefix nghĩa là thứ tự cột khai quyết định index "
+        "dùng được cho truy vấn nào — đặt sai thứ tự thì planner âm thầm bỏ qua index đó.",
+    ],
+    [  # idempotency key / retry / exactly-once
+        "'Exactly-once' gần như không tồn tại thật trong hệ phân tán; thứ khả thi là 'at-least-"
+        "once' cộng idempotency key để retry an toàn — nhận trùng sự kiện không còn nguy hiểm vì "
+        "xử lý lần hai chỉ trả lại đúng kết quả lần đầu.",
+        "Idempotency key phải là một giá trị duy nhất do client sinh, gửi kèm mọi lần gọi kể cả "
+        "lần retry — server lưu key này cùng kết quả để nhận diện và bỏ qua các lần gọi lặp.",
+        "Retry mù trên một thao tác không idempotent — như trừ tiền hai lần vì request đầu bị "
+        "timeout nhưng thực ra đã xử lý xong — là lớp lỗi phổ biến nhất khi thêm cơ chế thử lại "
+        "mà không nghĩ tới trùng lặp.",
+    ],
+    [  # code splitting / lazy import / bundle size
+        "Code splitting theo route chỉ gửi xuống trình duyệt phần JavaScript cần cho trang đang "
+        "xem, thay vì gộp toàn bộ ứng dụng vào một bundle tải ngay từ lần đầu.",
+        "Lazy import trì hoãn việc tải một component nặng tới đúng lúc người dùng cần tới nó — "
+        "đúng thời điểm quan trọng hơn kỹ thuật: lazy import một thứ ai cũng dùng ngay khi mở app "
+        "không tiết kiệm được gì.",
+        "Bundle size phình ra thường không phải vì code của chính dự án mà vì một thư viện bên "
+        "thứ ba nặng hơn tưởng — công cụ phân tích bundle luôn đáng chạy trước khi tối ưu tay.",
+    ],
+    [  # layout shift / critical CSS / preload
+        "Layout shift xảy ra khi một phần tử đổi vị trí sau khi trang đã render — nguyên nhân phổ "
+        "biến nhất là ảnh hoặc quảng cáo chưa được chừa chỗ trước bằng width/height hay "
+        "aspect-ratio.",
+        "Critical CSS là phần style cần cho nội dung hiện ngay trong màn hình đầu tiên, nhúng "
+        "trực tiếp vào HTML để trình duyệt không phải chờ tải file CSS ngoài mới vẽ được gì.",
+        "Preload báo trước cho trình duyệt về một tài nguyên sẽ cần sớm (như font chữ) để nó bắt "
+        "đầu tải ngay, tránh việc chữ đổi font giữa chừng gây nhảy layout.",
+    ],
+    [  # conflict resolution / offline queue / sync token
+        "Offline queue lưu lại mọi thao tác người dùng làm khi mất mạng, rồi phát lại theo đúng "
+        "thứ tự khi kết nối trở lại — ghi phải luôn thành công cục bộ trước, đồng bộ là việc làm "
+        "sau.",
+        "Sync token đánh dấu điểm đồng bộ gần nhất giữa thiết bị và máy chủ, để lần đồng bộ tiếp "
+        "theo chỉ cần gửi phần thay đổi từ token đó thay vì gửi lại toàn bộ dữ liệu.",
+        "Conflict resolution kiểu CRDT hợp nhất thay đổi từ nhiều thiết bị mà không cần máy chủ "
+        "trọng tài, miễn phép hợp là giao hoán — nhưng nó chỉ giải xung đột cấu trúc dữ liệu, "
+        "không giải xung đột nghiệp vụ.",
+    ],
+    [  # feature scaling / data leakage / cross validation
+        "Feature scaling cần thiết cho các thuật toán dựa trên khoảng cách — thiếu bước này, một "
+        "đặc trưng có giá trị lớn hơn sẽ áp đảo các đặc trưng khác dù không quan trọng hơn.",
+        "Data leakage là khi thông tin từ tập kiểm tra vô tình lọt vào quá trình huấn luyện (ví "
+        "dụ chuẩn hoá dữ liệu trước khi chia train/test) — mô hình trông rất tốt lúc đánh giá "
+        "nhưng thất bại khi gặp dữ liệu thật.",
+        "Cross validation chia dữ liệu thành nhiều phần, huấn luyện và đánh giá luân phiên trên "
+        "các phần khác nhau, cho một ước lượng hiệu năng đáng tin hơn nhiều so với chỉ chia một "
+        "lần train/test.",
+    ],
+    [  # threat model / least privilege / secret rotation
+        "Threat model trả lời ba câu hỏi trước khi viết một dòng mã bảo mật nào: ai muốn tấn "
+        "công, họ muốn gì, và họ vào bằng đường nào — thiếu bước này, phòng thủ dễ mạnh chỗ không "
+        "ai tấn công và yếu đúng chỗ hay bị nhắm tới.",
+        "Least privilege nghĩa là mỗi thành phần chỉ được cấp đúng quyền cần cho việc nó làm, "
+        "không hơn — một service đọc dữ liệu không cần quyền ghi, dù cấp thêm có vẻ 'tiện cho sau "
+        "này'.",
+        "Secret rotation dùng mẫu hai khoá song song: phát khoá mới, chấp nhận cả khoá cũ lẫn mới "
+        "trong một khoảng chuyển tiếp, rồi mới thu hồi khoá cũ — xoay đột ngột không có giai đoạn "
+        "chuyển tiếp sẽ làm gián đoạn mọi client chưa kịp cập nhật.",
+    ],
+    [  # test double / flaky test / kim tự tháp kiểm thử
+        "Test double (mock, stub, fake) thay thế một phụ thuộc thật để cô lập đơn vị đang test — "
+        "hữu ích cho logic thuần tuý, nhưng không bắt được lỗi tích hợp thật như connection pool, "
+        "migration hay timeout.",
+        "Test giòn phần lớn bắt nguồn từ việc chờ theo thời gian cố định thay vì chờ theo điều "
+        "kiện thật, hoặc từ trạng thái dùng chung giữa các test chạy không theo thứ tự cố định.",
+        "Kim tự tháp kiểm thử khuyên nhiều test đơn vị nhỏ, ít test tích hợp hơn, và rất ít test "
+        "đầu cuối — đảo ngược tỉ lệ này làm bộ test chậm và giòn hơn hẳn.",
+    ],
+    [  # độ phức tạp khấu hao / cục bộ bộ nhớ / bất biến vòng lặp
+        "Độ phức tạp khấu hao tính chi phí trung bình trên nhiều lần gọi, không phải chi phí của "
+        "lần tệ nhất — một mảng động thi thoảng tốn O(n) để mở rộng vẫn có độ phức tạp khấu hao "
+        "O(1) cho mỗi lần thêm phần tử.",
+        "Tính cục bộ bộ nhớ giải thích vì sao duyệt một mảng thường nhanh hơn duyệt một danh sách "
+        "liên kết dù cùng độ phức tạp O(n) — CPU cache nạp cả một dải bộ nhớ liền kề, mảng tận "
+        "dụng được điều đó còn danh sách liên kết thì không.",
+        "Bất biến vòng lặp là điều kiện luôn đúng trước và sau mỗi lần lặp — xác định đúng bất "
+        "biến là cách chắc chắn nhất để chứng minh một thuật toán vòng lặp làm đúng việc nó "
+        "tuyên bố làm, thay vì chỉ 'chạy thử thấy đúng'.",
+    ],
 ]
+assert len(EXPLANATION_PROSE_BY_CONCEPT) == len(CONCEPT_SETS)
+assert all(len(variants) == 3 for variants in EXPLANATION_PROSE_BY_CONCEPT)
+
+# Dạng phẳng, cho ghi chú vault: mỗi ghi chú cá nhân không gắn với đúng một bộ concept như bản
+# giải thích AI, nên xoay vòng qua cả 36 đoạn thay vì lặp 5 đoạn abstract cũ 80 lần mỗi đoạn.
+EXPLANATION_PROSE_FLAT = [text for group in EXPLANATION_PROSE_BY_CONCEPT for text in group]
 
 VAULT_TAGS = [["backend", "ghi-chú"], ["kiến-trúc"], ["hiệu-năng", "đo-đạc"], ["đọc-sách"],
               ["phỏng-vấn"], ["devops", "vận-hành"], ["frontend"], ["ý-tưởng"]]
@@ -2712,11 +3191,15 @@ def build_knowledge(rng, people, posts):
         if (post["id"], who) in seen:
             continue
         seen.add((post["id"], who))
-        concepts, prereq, category = CONCEPT_SETS[(post["id"] + who) % len(CONCEPT_SETS)]
+        # concept_idx chọn CẢ NHÃN LẪN NỘI DUNG bằng đúng một chỉ số — content luôn giải thích
+        # đúng bộ concepts nó tuyên bố, không lệch nhau như bản EXPLANATION_PROSE phẳng cũ.
+        concept_idx = (post["id"] + who) % len(CONCEPT_SETS)
+        concepts, prereq, category = CONCEPT_SETS[concept_idx]
+        variants = EXPLANATION_PROSE_BY_CONCEPT[concept_idx]
         explanations.append({
             "id": eid, "post_id": post["id"], "user_id": who,
             "original": post["content"],
-            "content": EXPLANATION_PROSE[(post["id"] * 3 + who) % len(EXPLANATION_PROSE)],
+            "content": variants[(post["id"] * 3 + who) % len(variants)],
             "concepts": concepts, "prereq": prereq, "category": category,
             "complexity": rng.randint(1, 5),
             "links": [],
@@ -2735,7 +3218,7 @@ def build_knowledge(rng, people, posts):
         seen_note.add((who, filename))
         notes.append({
             "user_id": who, "filename": filename,
-            "content": EXPLANATION_PROSE[idx % len(EXPLANATION_PROSE)],
+            "content": EXPLANATION_PROSE_FLAT[idx % len(EXPLANATION_PROSE_FLAT)],
             "tags": VAULT_TAGS[idx % len(VAULT_TAGS)],
             "links": [f"ghi-chu-{max(0, idx - 1):03d}.md"] if idx % 4 == 0 else [],
             "age": rng.randint(1, 400),
@@ -3569,172 +4052,6 @@ SELECT setval('socialapp.q_post_reports_id',
     return f
 
 
-# ═══ V91 — tin xu hướng ════════════════════════════════════════════════════════════════════════
-
-# Danh mục lấy đúng enum TrendingCategory: OPENSOURCE, EVENT, NEW_TECH, REGULATION, MINDSET,
-# TOOL, CAREER, OTHER. Gán sai một giá trị là IllegalArgumentException lúc đọc entity, không phải
-# một ô trống trên giao diện.
-#
-# (tiêu đề, category, source, author, summary, tags). Mỗi tin gắn NGUỒN tự nhiên của nó thay vì
-# rải nguồn theo vị trí: một tiêu đề GitHub crawl từ Hacker News nhìn là biết dữ liệu bịa. author
-# theo đúng thứ crawler thật ghi — HACKER_NEWS là handle người đăng, GITHUB là owner login,
-# DEV_TO là tên tác giả. image_url để NULL: HN cũng không có ảnh, và TrendingCrawlScheduler chạy
-# mỗi giờ sẽ lấp ảnh thật ngay khi BE online — bộ này chỉ là nền cho lúc offline / giờ đầu.
-TRENDING = [
-    ("Java 25 ra bản LTS, mặc định bật generational ZGC", "NEW_TECH", "HACKER_NEWS", "todsacerdoti",
-     "Bản hỗ trợ dài hạn kế tiếp sau Java 21. Đáng chú ý nhất là ZGC thế hệ mới thành mặc định và "
-     "structured concurrency rời khỏi preview.", ["java", "jvm", "gc"]),
-    ("PostgreSQL 18: I/O bất đồng bộ và VACUUM nhanh hơn hẳn", "NEW_TECH", "HACKER_NEWS", "tptacek",
-     "io_uring cho đường đọc, cùng một lượt VACUUM gom được nhiều dead tuple hơn mỗi vòng. Người "
-     "chạy bảng lớn nên đọc kỹ phần thay đổi cấu hình mặc định.", ["postgresql", "database", "performance"]),
-    ("Redis đổi giấy phép lần thứ hai trong hai năm", "REGULATION", "HACKER_NEWS", "ingve",
-     "Bản mới quay lại một giấy phép gần với mã nguồn mở hơn sau làn sóng chỉ trích và sự ra đời "
-     "của Valkey. Bài phân tích lại toàn bộ dòng thời gian.", ["redis", "license", "opensource"]),
-    ("Kubernetes 1.34 gỡ bỏ vài API đã đánh dấu lỗi thời từ lâu", "NEW_TECH", "HACKER_NEWS", "mooreds",
-     "Danh sách API bị gỡ và cách dò trong cụm trước khi nâng cấp. Vài Helm chart phổ biến vẫn "
-     "còn tham chiếu phiên bản cũ.", ["kubernetes", "devops", "migration"]),
-    ("polars — DataFrame trên Rust, API giống pandas", "OPENSOURCE", "GITHUB", "pola-rs",
-     "Thư viện xử lý dữ liệu dạng cột, chạy song song và lười đánh giá. Bản mới thêm streaming "
-     "engine cho tập dữ liệu lớn hơn RAM.", ["rust", "python", "data"]),
-    ("bun — runtime JavaScript gộp cả bundler và test runner", "OPENSOURCE", "GITHUB", "oven-sh",
-     "Bản mới tập trung vào tương thích Node và tốc độ cài phụ thuộc. Nhiều dự án chuyển CI sang "
-     "bun chỉ để rút ngắn bước install.", ["javascript", "nodejs", "tooling"]),
-    ("duckdb — cơ sở dữ liệu phân tích chạy trong tiến trình", "OPENSOURCE", "GITHUB", "duckdb",
-     "SQLite cho phân tích: một file, không server, đọc thẳng Parquet và CSV. Bản mới cải thiện "
-     "bộ nhớ khi join tập lớn.", ["database", "analytics", "sql"]),
-    ("Nhiều đội quay lại monolith sau vài năm microservices", "MINDSET", "DEV_TO", "Nguyễn Minh Đức",
-     "Ghi lại quá trình gộp mười hai dịch vụ về ba, và những chi phí ẩn của microservices mà "
-     "sơ đồ kiến trúc không cho thấy.", ["architecture", "microservices", "monolith"]),
-    ("Có nên viết test cho đoạn mã sắp bị xoá?", "MINDSET", "DEV_TO", "Trần Thu Hà",
-     "Lập luận cho cả hai phía, và một quy tắc đơn giản: test để mã đổi được an toàn, nên mã "
-     "không đổi nữa thì test cũng hết việc.", ["testing", "mindset", "refactoring"]),
-    ("Đọc query plan trước khi thêm index", "TOOL", "DEV_TO", "Phạm Quốc Bảo",
-     "Hướng dẫn từng bước đọc EXPLAIN ANALYZE của Postgres, kèm bốn dấu hiệu cho biết index sẽ "
-     "không giúp gì.", ["postgresql", "performance", "database"]),
-    ("Xoay vòng khoá bí mật mà không gián đoạn dịch vụ", "TOOL", "DEV_TO", "Lê Hoàng Nam",
-     "Mẫu hai khoá song song: phát khoá mới, chấp nhận cả hai trong thời gian chuyển tiếp, rồi "
-     "mới thu hồi khoá cũ. Kèm ví dụ cho JWT và khoá API.", ["security", "secrets", "operations"]),
-    ("uv — trình quản lý gói Python viết bằng Rust", "TOOL", "GITHUB", "astral-sh",
-     "Thay thế pip và virtualenv, giải phụ thuộc nhanh hơn nhiều lần. Bản mới thêm khoá phiên "
-     "bản khoá liên nền tảng.", ["python", "packaging", "tooling"]),
-    ("Báo cáo lương ngành phần mềm Việt Nam nửa cuối năm", "CAREER", "HACKER_NEWS", "mooreds",
-     "Tổng hợp từ hơn ba nghìn phản hồi: mức trung vị theo cấp bậc, chênh lệch giữa các thành "
-     "phố, và tác động của làm việc từ xa lên lương.", ["career", "salary", "vietnam"]),
-    ("Thị trường tuyển dụng nghiêng về kỹ sư đa năng", "CAREER", "DEV_TO", "Đỗ Thị Lan",
-     "Phân tích tin tuyển dụng trong sáu tháng: số vị trí đòi cả hai đầu tăng, số vị trí chuyên "
-     "sâu một mảng giảm. Kèm góc nhìn nên phản ứng thế nào.", ["career", "hiring", "fullstack"]),
-    ("Phỏng vấn kỹ thuật không hỏi thuật toán", "CAREER", "DEV_TO", "Vũ Đình Khoa",
-     "Một quy trình dựa trên bài tập sát việc thật và đọc mã có sẵn, cùng dữ liệu cho thấy nó "
-     "dự đoán hiệu quả công việc tốt hơn.", ["career", "interview", "hiring"]),
-    ("Hội thảo Vietnam Web Summit mở đăng ký", "EVENT", "HACKER_NEWS", "ingve",
-     "Sự kiện thường niên về kỹ thuật web, năm nay có nhánh riêng cho hiệu năng và khả năng "
-     "truy cập. Vé sớm giới hạn số lượng.", ["event", "web", "conference"]),
-    ("GopherCon công bố danh sách diễn giả", "EVENT", "HACKER_NEWS", "todsacerdoti",
-     "Chủ đề tập trung vào công cụ, hồ sơ hiệu năng và các thay đổi sắp tới của bộ thu gom rác "
-     "trong Go.", ["event", "golang", "conference"]),
-    ("htmx 2.0: bớt JavaScript, trả HTML từ máy chủ", "NEW_TECH", "HACKER_NEWS", "tptacek",
-     "Bản chính thức của cách tiếp cận 'hypermedia làm trung tâm'. Bài viết so sánh thẳng với "
-     "một ứng dụng SPA tương đương về dòng mã và thời gian tải.", ["frontend", "htmx", "web"]),
-    ("SQLite thêm chế độ ghi đồng thời nhiều tiến trình", "NEW_TECH", "HACKER_NEWS", "ingve",
-     "Tính năng thử nghiệm cho phép nhiều tiến trình ghi mà không khoá toàn bộ file. Vẫn còn "
-     "cảnh báo rõ ràng về phạm vi dùng.", ["sqlite", "database", "concurrency"]),
-    ("OWASP cập nhật danh sách Top 10 rủi ro ứng dụng web", "REGULATION", "HACKER_NEWS", "tptacek",
-     "Lỗi cấu hình và lỗ hổng chuỗi cung ứng leo hạng. Bài viết đối chiếu từng mục với các sự "
-     "cố có thật trong năm.", ["security", "owasp", "appsec"]),
-    ("Quy định mới về lưu trữ dữ liệu người dùng trong nước", "REGULATION", "DEV_TO", "Hoàng Anh Tuấn",
-     "Tóm tắt phần liên quan tới đội kỹ thuật: dữ liệu nào phải đặt máy chủ trong nước, thời "
-     "hạn chuyển đổi, và ảnh hưởng lên lựa chọn nhà cung cấp đám mây.", ["regulation", "data", "compliance"]),
-    ("tokio — runtime bất đồng bộ cho Rust", "OPENSOURCE", "GITHUB", "tokio-rs",
-     "Bản mới cải thiện bộ lập lịch tác vụ và thêm công cụ theo dõi tác vụ bị treo. Nền tảng "
-     "của phần lớn dịch vụ mạng viết bằng Rust.", ["rust", "async", "networking"]),
-    ("ripgrep — tìm chuỗi trong mã nhanh hơn grep", "OPENSOURCE", "GITHUB", "BurntSushi",
-     "Công cụ dòng lệnh tôn trọng .gitignore và quét song song. Bài viết của tác giả giải thích "
-     "các lựa chọn thiết kế đứng sau tốc độ.", ["cli", "rust", "tooling"]),
-    ("Đo p99 thay vì trung bình, và vì sao điều đó quan trọng", "MINDSET", "DEV_TO", "Ngô Phương Linh",
-     "Một request chậm trong một trăm vẫn là một phần trăm người dùng bực bội. Bài viết chỉ cách "
-     "dựng biểu đồ phân vị và đọc nó.", ["performance", "observability", "metrics"]),
-    ("Ghi lại quyết định kiến trúc bằng một trang mỗi lần", "MINDSET", "DEV_TO", "Bùi Thanh Sơn",
-     "Mẫu ADR gọn: bối cảnh, lựa chọn, hệ quả, phương án đã loại. Đội mới vào đọc lại hiểu vì "
-     "sao hệ thống thành ra như bây giờ.", ["architecture", "documentation", "team"]),
-    ("k6 — kiểm thử tải viết bằng JavaScript", "TOOL", "GITHUB", "grafana",
-     "Kịch bản tải viết như mã thường, chạy được trong CI. Bản mới thêm báo cáo ngưỡng rõ ràng "
-     "hơn khi tích hợp pipeline.", ["testing", "performance", "load-testing"]),
-    ("OpenTelemetry ổn định phần logs, khép lại bộ ba tín hiệu", "NEW_TECH", "HACKER_NEWS", "mooreds",
-     "Sau metrics và traces, đặc tả logs đạt mốc ổn định. Nhiều thư viện bắt đầu bỏ định dạng "
-     "log riêng để theo chuẩn chung.", ["observability", "opentelemetry", "logging"]),
-    ("Terraform và cuộc dịch chuyển sang OpenTofu", "REGULATION", "HACKER_NEWS", "todsacerdoti",
-     "Một năm sau khi tách nhánh, bài viết tổng kết số dự án đã chuyển, khác biệt tính năng và "
-     "những gì cần lưu ý khi di trú state.", ["terraform", "opentofu", "infrastructure"]),
-    ("Zed — trình soạn thảo mã viết bằng Rust, mở mã nguồn", "OPENSOURCE", "GITHUB", "zed-industries",
-     "Tập trung vào độ trễ gõ phím và cộng tác thời gian thực. Bản mới thêm hỗ trợ gỡ lỗi tích "
-     "hợp cho vài ngôn ngữ.", ["editor", "rust", "tooling"]),
-    ("Học trong ngành: chọn thứ đáng học, bỏ qua thứ đang ồn ào", "CAREER", "DEV_TO", "Trịnh Gia Hân",
-     "Khung ra quyết định học cái gì: nền tảng lâu bền trước, công cụ theo nhu cầu công việc "
-     "sau, và cách nhận ra một xu hướng sẽ không trụ được.", ["career", "learning", "mindset"]),
-    ("Cách một đội nhỏ vận hành hạ tầng mà không cần trực đêm", "OTHER", "DEV_TO", "Lý Tuấn Kiệt",
-     "Ghi chép về việc chọn dịch vụ quản lý thay vì tự vận hành, đặt cảnh báo hành động được, "
-     "và viết runbook cho ba sự cố hay gặp nhất.", ["operations", "devops", "team"]),
-    ("Vì sao build CI của bạn chậm, và bốn cách rút ngắn", "OTHER", "DEV_TO", "Nguyễn Hải Đăng",
-     "Phân tích một pipeline mười tám phút xuống còn sáu: cache phụ thuộc, chạy song song, bỏ "
-     "bước trùng, và tách test chậm ra nhánh riêng.", ["cicd", "performance", "tooling"]),
-    ("caddy — web server tự động cấp chứng chỉ HTTPS", "OPENSOURCE", "GITHUB", "caddyserver",
-     "Cấu hình ngắn, HTTPS bật sẵn không cần thao tác. Bản mới cải thiện reverse proxy và thêm "
-     "chỉ số Prometheus mặc định.", ["web-server", "https", "devops"]),
-]
-
-
-def emit_trending(rng):
-    f = SqlFile(91, "seed_trending",
-                f"{len(TRENDING)} tin xu hướng, mỗi tin có nguồn, tác giả và tóm tắt riêng.")
-    f.note("""
-FILE NÀY SINH TỰ ĐỘNG bởi scripts/seed/generate_seed.py — sửa tay sẽ bị ghi đè.
-
-KHÔNG CÓ PHẦN GITHUB STATS. Quyết định 25/08: không liên kết tài khoản nào với GitHub, nên
-t_github_stats để trống hẳn. Hệ quả cần biết trước, không phải lỗi:
-SkillVerificationService.verifyViaExternalApi tra bảng đó để tự xác minh kỹ năng, không có hàng
-nào thì nhánh này LUÔN TRẢ FALSE và mọi yêu cầu xác minh kỹ năng rơi về duyệt tay. Với buổi demo
-đây lại là điều tốt — hàng đợi quản trị có việc thật. (source GITHUB dưới đây là của tin xu hướng
-crawl từ GitHub Trending, không liên quan gì tới t_github_stats.)
-
-UNIQUE(source, source_id): source_id phải khác nhau từng dòng, nếu không chỉ chèn được một tin.
-
-source lấy đúng BA HẰNG của TrendingSource (HACKER_NEWS, DEV_TO, GITHUB) — một hằng cho mỗi crawler
-còn sống, KHÔNG có 'SEED'. Cột là varchar(50) không có CHECK nên một nhãn tự chế vẫn chèn được,
-rồi nổ ở Hibernate lúc đọc và làm GET /v1/api/trending trả 500. Mỗi tin gắn nguồn tự nhiên của nó
-(GitHub cho repo, dev.to cho bài blog, HN cho tin tổng hợp) thay vì rải nguồn theo vị trí.
-
-author theo đúng thứ crawler thật ghi: HACKER_NEWS là handle người đăng, GITHUB là owner login,
-DEV_TO là tên tác giả. image_url để NULL — HN cũng không có ảnh, và TrendingCrawlScheduler chạy
-mỗi giờ sẽ lấp ảnh thật ngay khi BE online. Đây chỉ là bộ nền cho lúc offline / giờ đầu.
-
-URL trỏ tin-tuc.example.test: .test là tên miền dành riêng, không định tuyến được (RFC 2606). Đổi
-sang news.ycombinator.com hay dev.to sẽ cho ra liên kết trông thật rồi 404 khi bấm — tệ hơn một
-liên kết thấy ngay là dữ liệu mẫu. Crawler thật ghi URL thật; bộ nền này thì không.
-""")
-    f.rule()
-    rows = []
-    for i, (title, category, source, author, summary, tags) in enumerate(TRENDING):
-        published = rng.randint(2, 75)
-        crawled = max(0, published - rng.choice([0, 0, 1, 2, 3]))
-        rows.append(
-            f"    ({q(title)}, {q(summary)}, "
-            f"{q('https://tin-tuc.example.test/bai/' + str(i + 1))}, NULL, "
-            f"{q(source)}, {q('seed-' + str(i + 1))}, {q(category)}, {jsonb(tags)}, "
-            f"{rng.randint(120, 9800)}, {q(author)}, "
-            f"now() - INTERVAL '{published} days', now() - INTERVAL '{crawled} days')"
-        )
-    f.sql(
-        "INSERT INTO socialapp.t_trending_items\n"
-        "    (title, summary, url, image_url, source, source_id, category, tags, score, author,\n"
-        "     published_at, crawled_at) VALUES\n" + ",\n".join(rows) + ";",
-        rows=len(rows),
-    )
-    f.sql("""
-SELECT setval('socialapp.q_trending_items_id',
-              GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_trending_items), 1), true);""")
-    return f
-
-
 # ═══ V90 — uy tín và thông báo ═════════════════════════════════════════════════════════════════
 
 def emit_reputation_and_notifications(rng, people, posts, eng):
@@ -4232,7 +4549,6 @@ def main():
         emit_roadmaps(roadmaps, nodes, progress),
         emit_moderation(logs, violations, bans, reports, admins),
         emit_reputation_and_notifications(rng, people, posts, eng),
-        emit_trending(rng),
     ]
     for f in files:
         label, rows, size = f.write()

@@ -143,9 +143,9 @@ trước khi ghi và **dừng lại** nếu số nó định dùng đã có ở 
 python scripts/seed/generate_seed.py
 ```
 
-Script này sinh `V81`–`V91`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
+Script này sinh `V81`–`V90`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
 `docker/minio/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
-tay.
+tay. `V91` bỏ trống — xem "Vì sao không seed tin xu hướng" bên dưới.
 
 Đầu ra **tất định**: chạy lại cho `git diff` sạch nếu không đổi tham số. Đó không phải chi tiết
 phong cách — nó là thứ khiến việc sửa một dòng trong bộ seed review được, thay vì mỗi lần sinh lại
@@ -186,6 +186,19 @@ nên `BACKEND` đông hơn hẳn phần còn lại. Rải chúng ra chín tab ch
 hơn và một cơ sở dữ liệu nói dối. Hàng `CAREER` duy nhất là **cố ý**: đó là ca chứng minh bộ lọc
 thật sự lọc, và vì nó không nằm ở trang đầu nên cũng là ca kiểm phân trang duy nhất đáng giá ở màn
 này.
+
+## Vì sao không seed tin xu hướng
+
+`t_trending_items` **không** có dữ liệu seed (từng có, ở `V91`, đã bỏ). `TrendingCrawlScheduler`
+crawl HN/dev.to/GitHub Trending mỗi giờ và tự lấp bảng ngay khi BE chạy — kể cả trên production.
+33 tin "seed-N" trỏ `tin-tuc.example.test` chỉ là dữ liệu giả nằm chờ bị ghi đè trong giờ đầu, và
+trong lúc chờ nó hiện ngay trên trang chủ như dữ liệu mẫu chưa dọn — production seed xong mà chưa
+kịp crawl lần đầu thì người dùng thấy thẳng link `.test` không bấm được.
+
+`/v1/api/trending` trả rỗng cho tới khi crawler chạy lần đầu tiên. Với buổi demo: chạy app đủ lâu
+trước khi lên sân khấu, hoặc gọi thủ công job crawl nếu cần trending có ngay. Số `V91` để trống,
+không dồn `V92` xuống — xem "Vì sao dãy seed bắt đầu ở V80" phía trên, dãy version không cần liền
+mạch.
 
 ## MoMo trong buổi demo
 
@@ -233,7 +246,7 @@ thực (`V71` xoá sạch chúng ở mỗi lần migrate), `t_google_calendar_to
   dung file, dòng `--` cũng tính, và `application-prod.yml` bật `validate-on-migrate: true`. Thêm
   đúng 5 dòng ghi chú vào `V61` (commit `d6f6dd1`) đã làm production không khởi động được. Cần đổi
   dữ liệu thì thêm file mới với số version cao hơn.
-- **Đừng sửa tay `V81`–`V91`.** Chúng sinh tự động; sửa tay sẽ bị ghi đè ở lần chạy generator kế
+- **Đừng sửa tay `V81`–`V90`.** Chúng sinh tự động; sửa tay sẽ bị ghi đè ở lần chạy generator kế
   tiếp. Sửa `scripts/seed/generate_seed.py` rồi chạy lại.
 - **Bộ seed đã được RE-BASELINE ngày 2026-08-30.** `V88` nay mang `parent_node_id` (cây lộ trình),
   và toàn bộ `V81`–`V92` được sinh lại một lượt — nên **checksum của chúng khác với bản `f9aeea7`
