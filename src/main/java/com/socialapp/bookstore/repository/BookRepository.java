@@ -49,6 +49,30 @@ public interface BookRepository extends JpaRepository<BookEntity, Integer> {
       Pageable pageable);
 
   /**
+   * One cursor page of the books {@code buyerId} has completed a purchase for, newest-purchased
+   * catalogue-id first — see {@link com.socialapp.bookstore.service.BookService#getPurchasedPage}
+   * for why this is not "everything the buyer can read" and does not need a free-book branch.
+   *
+   * <p>{@code t_book_purchases} has no JPA association back to {@code BookEntity} (see {@link
+   * com.socialapp.bookstore.entity.BookPurchaseEntity}: {@code bookId} is a bare column), so the
+   * join is a subquery rather than a path expression. Same {@code limit + 1} / id-descending
+   * cursor contract as {@link #findLibraryPage}.
+   */
+  @Query(
+      """
+      SELECT b FROM BookEntity b
+      WHERE b.id IN (
+          SELECT p.bookId FROM BookPurchaseEntity p
+          WHERE p.buyerId = :buyerId
+            AND p.paymentStatus = com.socialapp.bookstore.entity.enums.PaymentStatus.COMPLETED
+        )
+        AND (:cursor IS NULL OR b.id < :cursor)
+      ORDER BY b.id DESC
+      """)
+  List<BookEntity> findPurchasedPage(
+      @Param("buyerId") Integer buyerId, @Param("cursor") Integer cursor, Pageable pageable);
+
+  /**
    * <p>{@code f_unaccent} is the IMMUTABLE wrapper from {@code
    * V48__add_trigram_search_indexes.sql}; the trigram GIN indexes on title and description are
    * built on that exact expression. Calling plain {@code unaccent} here would still return the

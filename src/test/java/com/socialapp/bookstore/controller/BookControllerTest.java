@@ -606,4 +606,63 @@ class BookControllerTest {
       mockMvc.perform(get(BOOKS_URL)).andExpect(status().isUnauthorized());
     }
   }
+
+  // =====================================================================
+  // GET /v1/api/books/purchased  (FE docs/backend-plan.md B37 — the "Sách đã mua" tab)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/books/purchased")
+  class GetPurchasedBooksTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndCursorPage_happyPath")
+    void shouldReturnCursorPage() throws Exception {
+      // Given
+      when(bookService.getPurchasedPage(eq(currentUser.getId()), any(), anyInt()))
+          .thenReturn(
+              new BookPageResponseDto(
+                  List.of(BookResponseDto.builder().id(31).title("Effective Java").build()),
+                  31,
+                  true));
+
+      // When / Then — same {items, nextCursor, hasMore} contract as /books
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.items[0].id").value(31))
+          .andExpect(jsonPath("$.nextCursor").value(31))
+          .andExpect(jsonPath("$.hasMore").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
+    void shouldPassParamsThrough() throws Exception {
+      // Given
+      when(bookService.getPurchasedPage(eq(currentUser.getId()), any(), anyInt()))
+          .thenReturn(new BookPageResponseDto(List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")).param("cursor", "20").param("limit", "5"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(bookService).getPurchasedPage(currentUser.getId(), 20, 5);
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitExceedsTheCap_boundary")
+    void shouldRejectLimitAboveCap() throws Exception {
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")).param("limit", "51"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      mockMvc.perform(get(BOOKS_URL + "/purchased")).andExpect(status().isUnauthorized());
+    }
+  }
 }

@@ -29,11 +29,15 @@ import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.reputation.RepLevel;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -51,6 +55,7 @@ public class CommentService {
   private final NewsfeedService newsfeedService;
   private final BlockQueryService blockQueryService;
   private final PostVisibilityService postVisibilityService;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   /**
    * The comments on a post, as {@code viewerId} is allowed to see them.
@@ -294,14 +299,48 @@ public class CommentService {
 
   @Transactional
   public void deleteComment(Integer actorId, Integer postId, Integer commentId) {
-    verifyPostExists(postId);
+    PostEntity post =
+        postRepository
+            .findById(postId)
+            .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
 
     CommentEntity comment = findCommentOrThrow(commentId);
     verifyBelongsToPost(comment, postId);
     verifyAuthor(actorId, comment);
 
+    unresolveIfAcceptedAnswer(post, comment);
+
     commentRepository.delete(comment);
     refreshCachedCommentCount(postId);
+  }
+
+  /**
+   * If the comment being deleted is its post's accepted answer, unpick it: clear {@code
+   * acceptedAnswerId}, mark the QNA unresolved again, refresh the feed cache, and revoke the
+   * {@code ACCEPTED_ANSWER} points.
+   *
+   * <p>Without this a deleted accepted answer left the post labelled "resolved" and pointing at a
+   * comment id that no longer exists — and {@code PostService.acceptAnswer} refuses to run while
+   * {@code acceptedAnswerId} is set, so the author could never pick a replacement. Mirrors {@code
+   * PostService.unacceptAnswer}; the revoke is a no-op when no award was made (an author
+   * accepting their own answer earns nothing).
+   */
+  private void unresolveIfAcceptedAnswer(PostEntity post, CommentEntity comment) {
+    if (post.getPostType() != PostType.QNA || post.getQnaDetails() == null) {
+      return;
+    }
+    QnaDetails qnaDetails = post.getQnaDetails();
+    if (!comment.getId().equals(qnaDetails.getAcceptedAnswerId())) {
+      return;
+    }
+
+    qnaDetails.setAcceptedAnswerId(null);
+    qnaDetails.setIsResolved(false);
+    postRepository.save(post);
+    newsfeedService.updateCachedQnaDetails(post.getId(), qnaDetails);
+
+    reputationEventPublisher.revoke(
+        comment.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, comment.getId().toString());
   }
 
   /**

@@ -183,4 +183,54 @@ class SkillTagResolverTest {
       assertThat(tags).isEmpty();
     }
   }
+
+  @Nested
+  @DisplayName("resolveTagsFor — hand-curated Vietnamese-to-hashtag translations")
+  class KnownTranslations {
+
+    @Test
+    @DisplayName("should offer the curated hashtag(s) for a node name folding cannot reach")
+    void shouldOfferCuratedTranslation() {
+      // Given — "Xác thực" folds to "xac" and "thuc", neither of which is "security"; the two are
+      // translations of each other, not spelling variants, so no fold ever bridges them
+      givenVerifiedSkills("Xác thực");
+      when(hashtagRepository.findByNameIn(any())).thenReturn(List.of());
+
+      // When
+      resolver.resolveTagsFor(USER_ID);
+
+      // Then
+      verify(hashtagRepository).findByNameIn(candidatesCaptor.capture());
+      assertThat(candidatesCaptor.getValue()).contains("security");
+    }
+
+    @Test
+    @DisplayName("should let the curated hashtag reach the result once it exists in t_hashtags")
+    void shouldResolveCuratedTranslationThroughIntersection() {
+      // Given
+      givenVerifiedSkills("Xác thực");
+      when(hashtagRepository.findByNameIn(any())).thenReturn(List.of(tag("security")));
+
+      // When
+      Set<String> tags = resolver.resolveTagsFor(USER_ID);
+
+      // Then
+      assertThat(tags).containsExactly("security");
+    }
+
+    @Test
+    @DisplayName("should not offer a curated hashtag for an unlisted node name")
+    void shouldNotOfferCuratedTranslationForUnlistedName() {
+      // Given — close to a curated key but not an exact match, so it must fall back to folding only
+      givenVerifiedSkills("Mô hình đe doạ");
+      when(hashtagRepository.findByNameIn(any())).thenReturn(List.of());
+
+      // When
+      resolver.resolveTagsFor(USER_ID);
+
+      // Then
+      verify(hashtagRepository).findByNameIn(candidatesCaptor.capture());
+      assertThat(candidatesCaptor.getValue()).doesNotContain("security");
+    }
+  }
 }

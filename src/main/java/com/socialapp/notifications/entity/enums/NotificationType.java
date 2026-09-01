@@ -92,5 +92,26 @@ public enum NotificationType {
    * that is refused silently is indistinguishable from one still sitting in the queue, so without
    * this the claimant waits forever on an answer that has already been given.
    */
-  SKILL_REJECTED
+  SKILL_REJECTED,
+
+  /**
+   * A project owner accepted the caller's application to one of their roles.
+   *
+   * <p>The matchmaking counterpart of {@link #SKILL_VERIFIED}, and added for the identical reason:
+   * {@code ProjectService.acceptApplication} only awarded reputation and told nobody, so the only
+   * way to learn a decision had been made was to reopen "Đơn của tôi" and check. {@code
+   * referenceId} is the project, {@code referenceType} {@code "PROJECT"}.
+   */
+  PROJECT_APPLICATION_ACCEPTED,
+
+  /** A project owner declined the caller's application. The sibling of {@link #SKILL_REJECTED}. */
+  PROJECT_APPLICATION_REJECTED,
+
+  /**
+   * A project owner removed the caller from the team after having accepted them. Distinct from
+   * {@link #PROJECT_APPLICATION_REJECTED} — "you were on the team and are not any more" reads
+   * differently from "your application was declined", and a user may want to mute one without the
+   * other.
+   */
+  PROJECT_MEMBER_REMOVED
 }

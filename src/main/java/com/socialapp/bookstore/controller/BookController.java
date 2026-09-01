@@ -58,6 +58,23 @@ public class BookController {
   }
 
   /**
+   * The "Sách đã mua" tab: every book the caller has completed a purchase for, newest-purchased
+   * first, cursor-paginated like {@link #getLibrary}. FE's {@code docs/backend-plan.md} B37.
+   *
+   * <p>Matched before {@code /{bookId}} by Spring's exact-segment-over-variable precedence, same
+   * as {@code /author/{authorId}} already is.
+   */
+  @GetMapping("/purchased")
+  public BookPageResponseDto getPurchasedBooks(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = Constants.DEFAULT_PAGINATION_PAGE_SIZE)
+          @Positive
+          @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
+    return bookService.getPurchasedPage(SecurityUtils.getCurrentUserId(), cursor, limit);
+  }
+
+  /**
    * The books written by one author — the "sách đã viết" section of a public profile, and
    * therefore readable by a guest.
    *

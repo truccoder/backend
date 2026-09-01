@@ -9,13 +9,19 @@ import org.springframework.web.bind.annotation.*;
 import com.socialapp.common.utils.Constants;
 import com.socialapp.matchmaking.dto.ApplicationRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
+import com.socialapp.matchmaking.dto.ProjectMemberDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
+import com.socialapp.matchmaking.dto.ProjectPositionRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectPositionResponseDto;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectResponseDto;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.dto.SuggestedProjectDto;
+import com.socialapp.matchmaking.dto.UpdatePositionStatusRequestDTO;
+import com.socialapp.matchmaking.dto.UpdateProjectRequestDTO;
+import com.socialapp.matchmaking.dto.UpdateProjectStatusRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectEntity;
+import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.matchmaking.service.ProjectService;
@@ -87,6 +93,115 @@ public class ProjectController {
       @PathVariable Integer projectId) {
     return projectQueryService.getApplicationsForProject(
         projectId, SecurityUtils.getCurrentUserId());
+  }
+
+  /**
+   * A project's team — everyone accepted onto it. Readable by any signed-in user, unlike the
+   * application inbox above; see {@code ProjectQueryService.getMembers}.
+   */
+  @GetMapping("/{projectId:\\d+}/members")
+  public List<ProjectMemberDto> getMembers(@PathVariable Integer projectId) {
+    return projectQueryService.getMembers(projectId);
+  }
+
+  // ---- Owner project management ------------------------------------------------
+  // Ownership is enforced in ProjectService, not here and not in SecurityConfig
+  // (which only requires authentication for /v1/api/projects/**) — the same place
+  // acceptApplication/rejectApplication already check it.
+
+  /** Edit a project's title, description, banner and tags. Owner only; 409 once COMPLETED. */
+  @PutMapping("/{projectId:\\d+}")
+  public ProjectResponseDto updateProject(
+      @PathVariable Integer projectId, @Valid @RequestBody UpdateProjectRequestDTO request) {
+    projectService.updateProject(SecurityUtils.getCurrentUserId(), projectId, request);
+    return projectQueryService.getProject(projectId);
+  }
+
+  /**
+   * Move a project between OPEN, CLOSED and COMPLETED. Owner only. COMPLETED is terminal; setting
+   * the current status is a no-op. See {@code ProjectService.updateStatus}.
+   */
+  @PatchMapping("/{projectId:\\d+}/status")
+  public ProjectResponseDto updateProjectStatus(
+      @PathVariable Integer projectId, @Valid @RequestBody UpdateProjectStatusRequestDTO request) {
+    projectService.updateStatus(SecurityUtils.getCurrentUserId(), projectId, request.getStatus());
+    return projectQueryService.getProject(projectId);
+  }
+
+  /**
+   * Permanently delete a project, its positions and every application to it. Owner only.
+   * Accepted members' reputation is revoked first — see {@code ProjectService.deleteProject}.
+   */
+  @DeleteMapping("/{projectId:\\d+}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void deleteProject(@PathVariable Integer projectId) {
+    projectService.deleteProject(SecurityUtils.getCurrentUserId(), projectId);
+  }
+
+  /** Add a role to a project. Owner only. Returns the created position. */
+  @PostMapping("/{projectId:\\d+}/positions")
+  @ResponseStatus(HttpStatus.CREATED)
+  public ProjectPositionResponseDto addPosition(
+      @PathVariable Integer projectId, @Valid @RequestBody ProjectPositionRequestDTO request) {
+    ProjectPositionEntity position =
+        projectService.addPosition(SecurityUtils.getCurrentUserId(), projectId, request);
+    return ProjectPositionResponseDto.from(position);
+  }
+
+  /**
+   * Remove an accepted member from a project's team (all roles they hold on it). Owner only.
+   * Reputation is revoked and freed seats reopen — see {@code ProjectService.removeMember}.
+   */
+  @DeleteMapping("/{projectId:\\d+}/members/{userId:\\d+}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void removeMember(@PathVariable Integer projectId, @PathVariable Integer userId) {
+    projectService.removeMember(SecurityUtils.getCurrentUserId(), projectId, userId);
+  }
+
+  /**
+   * Edit one role — title, description, required skills, quantity. Owner only. Quantity cannot
+   * drop below the seats already filled; see {@code ProjectService.updatePosition}.
+   */
+  @PutMapping("/positions/{positionId}")
+  public ProjectPositionResponseDto updatePosition(
+      @PathVariable Integer positionId, @Valid @RequestBody ProjectPositionRequestDTO request) {
+    ProjectPositionEntity position =
+        projectService.updatePosition(SecurityUtils.getCurrentUserId(), positionId, request);
+    return ProjectPositionResponseDto.from(position);
+  }
+
+  /**
+   * Open or close one role by hand. Owner only. FILLED is not settable; a role at capacity
+   * cannot be reopened without raising its quantity. See {@code ProjectService.updatePositionStatus}.
+   */
+  @PatchMapping("/positions/{positionId}/status")
+  public ProjectPositionResponseDto updatePositionStatus(
+      @PathVariable Integer positionId,
+      @Valid @RequestBody UpdatePositionStatusRequestDTO request) {
+    ProjectPositionEntity position =
+        projectService.updatePositionStatus(
+            SecurityUtils.getCurrentUserId(), positionId, request.getStatus());
+    return ProjectPositionResponseDto.from(position);
+  }
+
+  /**
+   * Delete one role. Owner only. Refused while anyone is accepted into it — remove those members
+   * first. See {@code ProjectService.deletePosition}.
+   */
+  @DeleteMapping("/positions/{positionId}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void deletePosition(@PathVariable Integer positionId) {
+    projectService.deletePosition(SecurityUtils.getCurrentUserId(), positionId);
+  }
+
+  /**
+   * Withdraw a pending application. The applicant's own action — 403 for anyone else, 409 once
+   * the owner has decided it. See {@code ProjectService.withdrawApplication}.
+   */
+  @DeleteMapping("/applications/{applicationId}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void withdrawApplication(@PathVariable Integer applicationId) {
+    projectService.withdrawApplication(SecurityUtils.getCurrentUserId(), applicationId);
   }
 
   /** The caller's own applications. */

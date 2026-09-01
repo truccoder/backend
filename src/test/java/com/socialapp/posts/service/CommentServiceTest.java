@@ -69,6 +69,7 @@ class CommentServiceTest {
   @Mock private NewsfeedService newsfeedService;
   @Mock private BlockQueryService blockQueryService;
   @Mock private PostVisibilityService postVisibilityService;
+  @Mock private com.socialapp.reputation.event.ReputationEventPublisher reputationEventPublisher;
 
   @InjectMocks private CommentService commentService;
 
@@ -681,7 +682,7 @@ class CommentServiceTest {
     @DisplayName("should push the decremented comment total into the feed cache")
     void shouldRefreshCachedCommentCount_whenCommentIsDeleted() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(commentRepository.findById(COMMENT_ID))
           .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
       when(commentRepository.countByPostId(POST_ID)).thenReturn(5L);
@@ -697,7 +698,7 @@ class CommentServiceTest {
     @DisplayName("should delete the comment when the actor is its author")
     void shouldDeleteComment_whenActorIsAuthor() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(commentRepository.findById(COMMENT_ID))
           .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
 
@@ -712,7 +713,7 @@ class CommentServiceTest {
     @DisplayName("should throw ForbiddenException when the actor is not the comment's author")
     void shouldThrowForbiddenException_whenActorIsNotAuthor() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(commentRepository.findById(COMMENT_ID))
           .thenReturn(Optional.of(sampleComment(999, null)));
 
@@ -723,10 +724,39 @@ class CommentServiceTest {
     }
 
     @Test
+    @DisplayName(
+        "should unresolve the QNA and revoke the award when the accepted answer is deleted")
+    void shouldUnresolveAndRevoke_whenDeletingAcceptedAnswer() {
+      // Given: a QNA post whose accepted answer is the comment being deleted, by a non-owner
+      // (so an ACCEPTED_ANSWER award exists to revoke).
+      com.socialapp.posts.entity.PostEntity qnaPost = samplePost(999);
+      qnaPost.setPostType(com.socialapp.posts.entity.enums.PostType.QNA);
+      qnaPost.setQnaDetails(new com.socialapp.posts.entity.QnaDetails(true, null, COMMENT_ID));
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(qnaPost));
+      when(commentRepository.findById(COMMENT_ID))
+          .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
+
+      // When
+      commentService.deleteComment(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then: the post no longer points at a comment that will not exist, cache corrected too.
+      assertThat(qnaPost.getQnaDetails().getAcceptedAnswerId()).isNull();
+      assertThat(qnaPost.getQnaDetails().getIsResolved()).isFalse();
+      verify(postRepository).save(qnaPost);
+      verify(newsfeedService).updateCachedQnaDetails(POST_ID, qnaPost.getQnaDetails());
+      verify(reputationEventPublisher)
+          .revoke(
+              AUTHOR_ID,
+              com.socialapp.reputation.entity.enums.RepSourceType.ACCEPTED_ANSWER,
+              COMMENT_ID.toString());
+      verify(commentRepository).delete(any(CommentEntity.class));
+    }
+
+    @Test
     @DisplayName("should throw NotFoundException when the comment does not exist")
     void shouldThrowNotFoundException_whenCommentDoesNotExist() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(true);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
       when(commentRepository.findById(COMMENT_ID)).thenReturn(Optional.empty());
 
       // When / Then
@@ -738,7 +768,7 @@ class CommentServiceTest {
     @DisplayName("should throw NotFoundException when the post does not exist")
     void shouldThrowNotFoundException_whenPostDoesNotExist() {
       // Given
-      when(postRepository.existsById(POST_ID)).thenReturn(false);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.empty());
 
       // When / Then
       assertThatThrownBy(() -> commentService.deleteComment(AUTHOR_ID, POST_ID, COMMENT_ID))

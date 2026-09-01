@@ -142,10 +142,22 @@ public class GlobalExceptionHandler {
         .build();
   }
 
+  /**
+   * A resource the caller named does not exist — a profile that was deleted, a post id that never
+   * existed, a user with no linked GitHub account on {@code GET /v1/api/github/stats/{userId}}
+   * (which the frontend calls for every profile view, linked or not).
+   *
+   * <p><b>Logged at WARN without the stack trace</b>, same rationale as the {@link
+   * NoResourceFoundException} handler below. Nothing went wrong on the server: the request reached
+   * its controller, ran, and correctly answered "no such thing". A full ERROR stack trace for every
+   * such 404 — one per profile view of any user who has not linked GitHub — buries real 500s under
+   * routine not-found noise and trains people to ignore the error log.
+   */
   @ResponseStatus(NOT_FOUND)
   @ExceptionHandler(NotFoundException.class)
   public ErrorResponseDto handle(NotFoundException ex, HttpServletRequest request) {
-    writeLog(ex, request);
+    log.warn(
+        "Not found [{} {}]: {}", request.getMethod(), request.getRequestURI(), ex.getMessage());
 
     return ErrorResponseDto.builder()
         .code(NOT_FOUND.value())

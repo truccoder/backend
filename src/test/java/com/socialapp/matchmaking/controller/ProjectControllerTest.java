@@ -7,8 +7,11 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -31,12 +34,16 @@ import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
+import com.socialapp.matchmaking.dto.ProjectMemberDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
 import com.socialapp.matchmaking.dto.ProjectResponseDto;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.dto.SuggestedProjectDto;
 import com.socialapp.matchmaking.entity.ProjectEntity;
+import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.entity.enums.ApplicationStatus;
+import com.socialapp.matchmaking.entity.enums.PositionStatus;
+import com.socialapp.matchmaking.entity.enums.ProjectStatus;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.matchmaking.service.ProjectService;
@@ -800,6 +807,489 @@ class ProjectControllerTest {
           .andExpect(status().isUnauthorized());
 
       verify(matchmakingService, never()).suggestCandidates(any(), any(), anyInt());
+    }
+  }
+
+  // =====================================================================
+  // Owner project management — PUT/PATCH/DELETE, positions, members
+  // =====================================================================
+
+  private static ProjectPositionEntity positionEntity(Integer id, PositionStatus status) {
+    ProjectPositionEntity p = new ProjectPositionEntity();
+    p.setId(id);
+    p.setTitle("Backend Developer");
+    p.setQuantity(2);
+    p.setStatus(status);
+    return p;
+  }
+
+  @Nested
+  @DisplayName("PUT /v1/api/projects/{projectId}")
+  class UpdateProjectTests {
+
+    private static final String BODY =
+        "{ \"title\": \"Renamed\", \"description\": \"Now with a scope\" }";
+
+    @Test
+    @DisplayName("shouldReturn200AndTheUpdatedProject_happyPath")
+    void shouldUpdate() throws Exception {
+      when(projectQueryService.getProject(2)).thenReturn(project(2));
+
+      mockMvc
+          .perform(authed(put(URL + "/2")).contentType(MediaType.APPLICATION_JSON).content(BODY))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.id").value(2));
+
+      verify(projectService)
+          .updateProject(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID), org.mockito.ArgumentMatchers.eq(2), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenTitleIsBlank")
+    void shouldReturn422OnBlankTitle() throws Exception {
+      mockMvc
+          .perform(
+              authed(put(URL + "/2"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"title\": \"\", \"description\": \"x\" }"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenTheCallerIsNotTheOwner")
+    void shouldReturn403ForNonOwner() throws Exception {
+      doThrow(new ForbiddenException("Not authorized to manage this project"))
+          .when(projectService)
+          .updateProject(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID), org.mockito.ArgumentMatchers.eq(2), any());
+
+      mockMvc
+          .perform(authed(put(URL + "/2")).contentType(MediaType.APPLICATION_JSON).content(BODY))
+          .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whenTheProjectIsCompleted")
+    void shouldReturn409WhenCompleted() throws Exception {
+      doThrow(new ConflictException("A completed project cannot be edited"))
+          .when(projectService)
+          .updateProject(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID), org.mockito.ArgumentMatchers.eq(2), any());
+
+      mockMvc
+          .perform(authed(put(URL + "/2")).contentType(MediaType.APPLICATION_JSON).content(BODY))
+          .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc
+          .perform(put(URL + "/2").contentType(MediaType.APPLICATION_JSON).content(BODY))
+          .andExpect(status().isUnauthorized());
+
+      verify(projectService, never()).updateProject(any(), any(), any());
+    }
+  }
+
+  @Nested
+  @DisplayName("PATCH /v1/api/projects/{projectId}/status")
+  class UpdateProjectStatusTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndMoveTheProjectToTheTargetStatus_happyPath")
+    void shouldUpdateStatus() throws Exception {
+      when(projectQueryService.getProject(2)).thenReturn(project(2));
+
+      mockMvc
+          .perform(
+              authed(patch(URL + "/2/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"status\": \"CLOSED\" }"))
+          .andExpect(status().isOk());
+
+      verify(projectService).updateStatus(OWNER_ID, 2, ProjectStatus.CLOSED);
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenStatusIsMissing")
+    void shouldReturn422WhenStatusMissing() throws Exception {
+      mockMvc
+          .perform(
+              authed(patch(URL + "/2/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{}"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whenLeavingACompletedProject")
+    void shouldReturn409WhenLeavingCompleted() throws Exception {
+      doThrow(new ConflictException("A completed project cannot change status"))
+          .when(projectService)
+          .updateStatus(OWNER_ID, 2, ProjectStatus.OPEN);
+
+      mockMvc
+          .perform(
+              authed(patch(URL + "/2/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"status\": \"OPEN\" }"))
+          .andExpect(status().isConflict());
+    }
+  }
+
+  @Nested
+  @DisplayName("DELETE /v1/api/projects/{projectId}")
+  class DeleteProjectTests {
+
+    @Test
+    @DisplayName("shouldReturn204_happyPath")
+    void shouldDelete() throws Exception {
+      mockMvc.perform(authed(delete(URL + "/2"))).andExpect(status().isNoContent());
+
+      verify(projectService).deleteProject(OWNER_ID, 2);
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenTheCallerIsNotTheOwner")
+    void shouldReturn403ForNonOwner() throws Exception {
+      doThrow(new ForbiddenException("Not authorized to manage this project"))
+          .when(projectService)
+          .deleteProject(OWNER_ID, 2);
+
+      mockMvc.perform(authed(delete(URL + "/2"))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc.perform(delete(URL + "/2")).andExpect(status().isUnauthorized());
+
+      verify(projectService, never()).deleteProject(any(), any());
+    }
+  }
+
+  @Nested
+  @DisplayName("GET /v1/api/projects/{projectId}/members")
+  class GetMembersTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheRoster_forAnySignedInCaller")
+    void shouldReturnRoster() throws Exception {
+      when(projectQueryService.getMembers(2))
+          .thenReturn(
+              List.of(
+                  ProjectMemberDto.builder()
+                      .applicationId(80)
+                      .userId(9)
+                      .username("teammate")
+                      .positionId(5)
+                      .positionTitle("Backend Developer")
+                      .build()));
+
+      mockMvc
+          .perform(authed(get(URL + "/2/members")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].userId").value(9))
+          .andExpect(jsonPath("$[0].username").value("teammate"))
+          .andExpect(jsonPath("$[0].applicationId").value(80));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenTheProjectDoesNotExist")
+    void shouldReturn404() throws Exception {
+      when(projectQueryService.getMembers(999))
+          .thenThrow(new NotFoundException("Project not found with ID: 999"));
+
+      mockMvc.perform(authed(get(URL + "/999/members"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc.perform(get(URL + "/2/members")).andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("DELETE /v1/api/projects/{projectId}/members/{userId}")
+  class RemoveMemberTests {
+
+    @Test
+    @DisplayName("shouldReturn204AndPassBothIdsThrough_happyPath")
+    void shouldRemoveMember() throws Exception {
+      mockMvc.perform(authed(delete(URL + "/2/members/9"))).andExpect(status().isNoContent());
+
+      verify(projectService).removeMember(OWNER_ID, 2, 9);
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenThatUserIsNotAnAcceptedMember")
+    void shouldReturn404() throws Exception {
+      doThrow(new NotFoundException("That user is not an accepted member of this project"))
+          .when(projectService)
+          .removeMember(OWNER_ID, 2, 9);
+
+      mockMvc.perform(authed(delete(URL + "/2/members/9"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenTheCallerIsNotTheOwner")
+    void shouldReturn403ForNonOwner() throws Exception {
+      doThrow(new ForbiddenException("Not authorized to manage this project"))
+          .when(projectService)
+          .removeMember(OWNER_ID, 2, 9);
+
+      mockMvc.perform(authed(delete(URL + "/2/members/9"))).andExpect(status().isForbidden());
+    }
+  }
+
+  @Nested
+  @DisplayName("POST /v1/api/projects/{projectId}/positions")
+  class AddPositionTests {
+
+    private static final String BODY = "{ \"title\": \"Frontend Developer\" }";
+
+    @Test
+    @DisplayName("shouldReturn201AndTheCreatedPosition_happyPath")
+    void shouldAddPosition() throws Exception {
+      when(projectService.addPosition(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID), org.mockito.ArgumentMatchers.eq(2), any()))
+          .thenReturn(positionEntity(55, PositionStatus.OPEN));
+
+      mockMvc
+          .perform(
+              authed(post(URL + "/2/positions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(BODY))
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.id").value(55))
+          .andExpect(jsonPath("$.status").value("OPEN"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenPositionTitleIsMissing")
+    void shouldReturn422OnMissingTitle() throws Exception {
+      mockMvc
+          .perform(
+              authed(post(URL + "/2/positions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"description\": \"no title\" }"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whenTheProjectIsCompleted")
+    void shouldReturn409WhenCompleted() throws Exception {
+      doThrow(new ConflictException("Cannot add a position to a completed project"))
+          .when(projectService)
+          .addPosition(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID), org.mockito.ArgumentMatchers.eq(2), any());
+
+      mockMvc
+          .perform(
+              authed(post(URL + "/2/positions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(BODY))
+          .andExpect(status().isConflict());
+    }
+  }
+
+  @Nested
+  @DisplayName("PUT /v1/api/projects/positions/{positionId}")
+  class UpdatePositionTests {
+
+    private static final String BODY = "{ \"title\": \"Backend Developer\", \"quantity\": 3 }";
+
+    @Test
+    @DisplayName("shouldReturn200AndTheUpdatedPosition_happyPath")
+    void shouldUpdatePosition() throws Exception {
+      when(projectService.updatePosition(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID),
+              org.mockito.ArgumentMatchers.eq(30),
+              any()))
+          .thenReturn(positionEntity(30, PositionStatus.OPEN));
+
+      mockMvc
+          .perform(
+              authed(put(URL + "/positions/30"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(BODY))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.id").value(30));
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whenQuantityWouldDropBelowFilledSeats")
+    void shouldReturn409OnQuantityConflict() throws Exception {
+      doThrow(new ConflictException("Quantity cannot be below the 2 seat(s) already filled"))
+          .when(projectService)
+          .updatePosition(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID),
+              org.mockito.ArgumentMatchers.eq(30),
+              any());
+
+      mockMvc
+          .perform(
+              authed(put(URL + "/positions/30"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"title\": \"Backend Developer\", \"quantity\": 1 }"))
+          .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("shouldRouteToThisLiteralPath_ratherThanTheProjectIdRoute")
+    void shouldNotBeSwallowedByProjectIdRoute() throws Exception {
+      // PUT /positions/{id} sits beside PUT /{projectId:\\d+}; "positions" is not digits so it
+      // must reach this handler, not bind as a project id.
+      when(projectService.updatePosition(
+              org.mockito.ArgumentMatchers.eq(OWNER_ID),
+              org.mockito.ArgumentMatchers.eq(30),
+              any()))
+          .thenReturn(positionEntity(30, PositionStatus.OPEN));
+
+      mockMvc
+          .perform(
+              authed(put(URL + "/positions/30"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(BODY))
+          .andExpect(status().isOk());
+
+      verify(projectService, never()).updateProject(any(), any(), any());
+    }
+  }
+
+  @Nested
+  @DisplayName("PATCH /v1/api/projects/positions/{positionId}/status")
+  class UpdatePositionStatusTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndSetTheStatus_happyPath")
+    void shouldUpdate() throws Exception {
+      when(projectService.updatePositionStatus(OWNER_ID, 30, PositionStatus.CLOSED))
+          .thenReturn(positionEntity(30, PositionStatus.CLOSED));
+
+      mockMvc
+          .perform(
+              authed(patch(URL + "/positions/30/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"status\": \"CLOSED\" }"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.status").value("CLOSED"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenFilledIsRequested")
+    void shouldReturn400OnFilled() throws Exception {
+      // FILLED is not a value a caller may set — the service throws the custom
+      // com.socialapp.common.exception.ValidationException, which GlobalExceptionHandler maps to
+      // 400 (the jakarta.validation.ValidationException that becomes 422 is a different type).
+      doThrow(
+              new com.socialapp.common.exception.ValidationException(
+                  "FILLED is set by accepting applications, not directly"))
+          .when(projectService)
+          .updatePositionStatus(OWNER_ID, 30, PositionStatus.FILLED);
+
+      mockMvc
+          .perform(
+              authed(patch(URL + "/positions/30/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"status\": \"FILLED\" }"))
+          .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whenReopeningAPositionAtCapacity")
+    void shouldReturn409() throws Exception {
+      doThrow(
+              new ConflictException(
+                  "Position is at capacity; raise its quantity before reopening it"))
+          .when(projectService)
+          .updatePositionStatus(OWNER_ID, 30, PositionStatus.OPEN);
+
+      mockMvc
+          .perform(
+              authed(patch(URL + "/positions/30/status"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"status\": \"OPEN\" }"))
+          .andExpect(status().isConflict());
+    }
+  }
+
+  @Nested
+  @DisplayName("DELETE /v1/api/projects/positions/{positionId}")
+  class DeletePositionTests {
+
+    @Test
+    @DisplayName("shouldReturn204_happyPath")
+    void shouldDelete() throws Exception {
+      mockMvc.perform(authed(delete(URL + "/positions/30"))).andExpect(status().isNoContent());
+
+      verify(projectService).deletePosition(OWNER_ID, 30);
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_whileAMemberIsAcceptedIntoThePosition")
+    void shouldReturn409() throws Exception {
+      doThrow(
+              new ConflictException(
+                  "Remove the accepted member(s) from this position before deleting it"))
+          .when(projectService)
+          .deletePosition(OWNER_ID, 30);
+
+      mockMvc.perform(authed(delete(URL + "/positions/30"))).andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenTheCallerIsNotTheOwner")
+    void shouldReturn403() throws Exception {
+      doThrow(new ForbiddenException("Not authorized to manage this position"))
+          .when(projectService)
+          .deletePosition(OWNER_ID, 30);
+
+      mockMvc.perform(authed(delete(URL + "/positions/30"))).andExpect(status().isForbidden());
+    }
+  }
+
+  @Nested
+  @DisplayName("DELETE /v1/api/projects/applications/{applicationId}")
+  class WithdrawApplicationTests {
+
+    @Test
+    @DisplayName("shouldReturn204AndWithdraw_happyPath")
+    void shouldWithdraw() throws Exception {
+      mockMvc.perform(authed(delete(URL + "/applications/70"))).andExpect(status().isNoContent());
+
+      verify(projectService).withdrawApplication(OWNER_ID, 70);
+    }
+
+    @Test
+    @DisplayName("shouldReturn403_whenTheCallerIsNotTheApplicant")
+    void shouldReturn403() throws Exception {
+      doThrow(new ForbiddenException("Not authorized to withdraw this application"))
+          .when(projectService)
+          .withdrawApplication(OWNER_ID, 70);
+
+      mockMvc.perform(authed(delete(URL + "/applications/70"))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("shouldReturn409_onceTheOwnerHasDecidedIt")
+    void shouldReturn409() throws Exception {
+      doThrow(new ConflictException("Cannot withdraw an application that is already ACCEPTED"))
+          .when(projectService)
+          .withdrawApplication(OWNER_ID, 70);
+
+      mockMvc.perform(authed(delete(URL + "/applications/70"))).andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc.perform(delete(URL + "/applications/70")).andExpect(status().isUnauthorized());
+
+      verify(projectService, never()).withdrawApplication(any(), any());
     }
   }
 }
