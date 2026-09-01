@@ -50,6 +50,7 @@ class ProjectQueryServiceTest {
   private static UserEntity user(Integer id) {
     UserEntity user = new UserEntity();
     user.setId(id);
+    user.setUsername("user" + id);
     user.setFullName("User " + id);
     return user;
   }
@@ -95,6 +96,8 @@ class ProjectQueryServiceTest {
       assertThat(result.items()).hasSize(1);
       assertThat(result.items().get(0).getPositions()).hasSize(1);
       assertThat(result.items().get(0).getAuthorFullName()).isEqualTo("User 1");
+      // B35: the owner's handle rides along so the card can link to /u/{username}
+      assertThat(result.items().get(0).getAuthorUsername()).isEqualTo("user1");
     }
 
     @Test
@@ -198,6 +201,8 @@ class ProjectQueryServiceTest {
       // Then
       assertThat(result).hasSize(1);
       assertThat(result.get(0).getApplicantFullName()).isEqualTo("User 2");
+      // B35: the applicant's handle too, so the owner's inbox can link each row to a profile
+      assertThat(result.get(0).getApplicantUsername()).isEqualTo("user2");
     }
 
     @Test

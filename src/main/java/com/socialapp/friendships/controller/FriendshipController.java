@@ -5,13 +5,15 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import com.socialapp.common.utils.Constants;
 import com.socialapp.friendships.dto.FriendListResponseDto;
+import com.socialapp.friendships.dto.FriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
-import com.socialapp.friendships.dto.PendingFriendRequestDto;
-import com.socialapp.friendships.dto.SentFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestPageResponseDto;
 import com.socialapp.friendships.service.FriendshipService;
 import com.socialapp.security.util.SecurityUtils;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -24,24 +26,32 @@ public class FriendshipController {
   @GetMapping
   public FriendListResponseDto getFriends(
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = "20") @Positive int limit) {
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
     return friendshipService.getFriends(SecurityUtils.getCurrentUserId(), cursor, limit);
   }
 
   @GetMapping("/suggestions")
   public List<FriendSuggestionDto> getSuggestions(
-      @RequestParam(defaultValue = "10") @Positive int limit) {
+      @RequestParam(defaultValue = "10") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
     return friendshipService.getSuggestions(SecurityUtils.getCurrentUserId(), limit);
   }
 
   @GetMapping("/requests/pending")
-  public List<PendingFriendRequestDto> getPendingRequests() {
-    return friendshipService.getPendingRequests(SecurityUtils.getCurrentUserId());
+  public FriendRequestPageResponseDto getPendingRequests(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
+    return friendshipService.getPendingRequests(SecurityUtils.getCurrentUserId(), cursor, limit);
   }
 
   @GetMapping("/requests/sent")
-  public List<SentFriendRequestDto> getSentRequests() {
-    return friendshipService.getSentRequests(SecurityUtils.getCurrentUserId());
+  public SentFriendRequestPageResponseDto getSentRequests(
+      @RequestParam(required = false) Integer cursor,
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
+    return friendshipService.getSentRequests(SecurityUtils.getCurrentUserId(), cursor, limit);
   }
 
   /**

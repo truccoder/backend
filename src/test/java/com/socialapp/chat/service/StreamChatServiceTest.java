@@ -4,13 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
@@ -21,13 +24,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.blocks.entity.UserBlockId;
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.chat.client.StreamChatClient;
 import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.dto.ChatTokenResponse;
+import com.socialapp.chat.dto.GroupChatResponse;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.MissingConfigurationException;
 import com.socialapp.common.exception.NotFoundException;
@@ -54,6 +60,7 @@ class StreamChatServiceTest {
   @Mock private BlockQueryService blockQueryService;
 
   @Captor private ArgumentCaptor<Collection<UserEntity>> upsertedUsers;
+  @Captor private ArgumentCaptor<Collection<Integer>> membersSent;
 
   private StreamChatProperties properties;
   private StreamChatService service;
@@ -366,6 +373,177 @@ class StreamChatServiceTest {
       // When / Then: if Stream is unreachable the pair is still blocked everywhere this backend
       // controls, so the block call itself must not fail
       assertThatCode(() -> service.applyBlock(1, 2)).doesNotThrowAnyException();
+    }
+  }
+
+  // =====================================================================
+  // createGroupChat  (the one channel this backend creates itself)
+  // =====================================================================
+
+  /**
+   * Component tests for group creation, per ISTQB CTFL v4.0.1: Section 4.2.1 equivalence
+   * partitioning over the member-count partitions (too few after de-duplication / valid / an id
+   * with no user behind it) and Section 4.3.2 branch testing over the three block outcomes — none,
+   * one involving the caller, one between two other members — which produce three different
+   * messages on purpose.
+   */
+  @Nested
+  @DisplayName("createGroupChat")
+  class CreateGroupChatTests {
+
+    private static final Integer CALLER = 42;
+
+    private void givenUsersExist(Integer... ids) {
+      List<UserEntity> found = new ArrayList<>();
+      for (Integer id : ids) {
+        found.add(id.equals(CALLER) ? user : friend(id));
+      }
+      given(userRepository.findAllById(any())).willReturn(found);
+    }
+
+    @Test
+    @DisplayName("should create the channel with the caller as owner and first member")
+    void shouldCreateChannel() {
+      // Given
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of());
+
+      // When
+      GroupChatResponse response =
+          service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8));
+
+      // Then: the caller is never asked for in the request — they are taken from the authenticated
+      // principal, so a request cannot build a group it is not part of nor give ownership away
+      assertThat(response.getMemberIds()).containsExactly("42", "7", "8");
+      assertThat(response.getCreatedBy()).isEqualTo("42");
+      assertThat(response.getChannelType()).isEqualTo("messaging");
+      assertThat(response.getCid()).isEqualTo("messaging:" + response.getChannelId());
+      assertThat(response.getName()).isEqualTo("Nhom DATN");
+    }
+
+    @Test
+    @DisplayName("should upsert every member BEFORE creating the channel")
+    void shouldUpsertBeforeCreate() {
+      // Given
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of());
+
+      // When
+      service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8));
+
+      // Then: reversed, Stream answers that the users involved in the channel create operation do
+      // not exist, and the group is never created
+      InOrder inOrder = inOrder(streamChatClient);
+      inOrder.verify(streamChatClient).upsertUsers(any());
+      inOrder.verify(streamChatClient).createGroupChannel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should drop duplicates and the caller's own id from the member list")
+    void shouldDeduplicateMembers() {
+      // Given: a member picker that let the same person be chosen twice, plus a frontend that
+      // included the caller
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of());
+
+      // When
+      GroupChatResponse response =
+          service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 7, 8, CALLER));
+
+      // Then
+      assertThat(response.getMemberIds()).containsExactly("42", "7", "8");
+      then(streamChatClient)
+          .should()
+          .createGroupChannel(any(), any(), any(), eq(CALLER), membersSent.capture());
+      assertThat(membersSent.getValue()).containsExactly(42, 7, 8);
+    }
+
+    @Test
+    @DisplayName("should refuse a group that is only the caller and one other after de-duplication")
+    void shouldRefuseTooSmallGroup() {
+      // When / Then: two people with a name on it is a direct message, and creating it here would
+      // give a pair who already have a channel a second one — bean validation cannot catch this,
+      // because a list of the same id twice passes @Size(min = 2)
+      assertThatThrownBy(() -> service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 7)))
+          .isInstanceOf(ValidationException.class);
+      then(streamChatClient).should(never()).createGroupChannel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should 404, naming the id, when a member does not exist")
+    void shouldThrowWhenMemberMissing() {
+      // Given: 8 has no row in Postgres
+      givenUsersExist(CALLER, 7);
+
+      // When / Then
+      assertThatThrownBy(() -> service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8)))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("8");
+      then(streamChatClient).should(never()).upsertUsers(any());
+    }
+
+    @Test
+    @DisplayName("should refuse, naming them, members the caller is blocked from")
+    void shouldRefuseBlockInvolvingCaller() {
+      // Given
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of(new UserBlockId(7, CALLER)));
+
+      // When / Then: naming 7 tells the caller nothing they could not already learn by calling
+      // ensureChatParticipants for that one person, and it lets the member picker mark them — but
+      // the message still does not say the word, same rule as the friend-request rejection
+      assertThatThrownBy(() -> service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8)))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("7")
+          .hasMessageNotContaining("block");
+      then(streamChatClient).should(never()).createGroupChannel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should refuse WITHOUT naming anyone when two other members blocked each other")
+    void shouldRefuseBlockBetweenOtherMembersWithoutNamingThem() {
+      // Given: the caller is on good terms with both; 7 and 8 are not with each other
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of(new UserBlockId(7, 8)));
+
+      // When / Then: naming the two would hand anyone a way to probe for blocks between people
+      // they know, by assembling groups and reading the error back
+      assertThatThrownBy(() -> service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8)))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageNotContaining("7")
+          .hasMessageNotContaining("8")
+          .hasMessageNotContaining("block");
+      then(streamChatClient).should(never()).createGroupChannel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should give two groups with identical members two different channels")
+    void shouldNotReuseAChannelIdAcrossGroups() {
+      // Given
+      givenUsersExist(CALLER, 7, 8);
+      given(blockQueryService.blocksAmong(any())).willReturn(List.of());
+
+      // When
+      String first = service.createGroupChat(CALLER, "Do an", null, List.of(7, 8)).getChannelId();
+      String second =
+          service.createGroupChat(CALLER, "An trua", null, List.of(7, 8)).getChannelId();
+
+      // Then: Stream's create verb is get-or-create, so an id derived from the membership would
+      // silently hand the second group the first one's channel instead of failing
+      assertThat(first).isNotEqualTo(second);
+    }
+
+    @Test
+    @DisplayName("should reject when Stream is not configured, before touching the database")
+    void shouldRejectWhenUnconfigured() {
+      // Given: the local dev situation
+      properties.setApiKey(null);
+      properties.setApiSecret(null);
+
+      // When / Then
+      assertThatThrownBy(() -> service.createGroupChat(CALLER, "Nhom DATN", null, List.of(7, 8)))
+          .isInstanceOf(MissingConfigurationException.class);
+      then(userRepository).should(never()).findAllById(any());
     }
   }
 }

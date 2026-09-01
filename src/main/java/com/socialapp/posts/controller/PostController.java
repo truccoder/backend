@@ -4,6 +4,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.common.utils.Constants;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.PostPageResponseDto;
@@ -13,6 +14,7 @@ import com.socialapp.posts.service.PostService;
 import com.socialapp.security.util.SecurityUtils;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -39,10 +41,14 @@ public class PostController {
   @GetMapping("/public")
   public PostPageResponseDto getPublicFeed(
       @RequestParam(required = false) Integer cursor,
-      @RequestParam(defaultValue = "20") @Positive int limit) {
+      @RequestParam(required = false) String hashtag,
+      @RequestParam(defaultValue = "20") @Positive @Max(Constants.MAX_PAGINATION_PAGE_SIZE)
+          int limit) {
     // OrNull, not getCurrentUserId(): this endpoint is open to guests, and the throwing variant
     // would turn an allowed anonymous request into a 401 after Spring Security let it through.
-    return postQueryService.getPublicFeed(SecurityUtils.getCurrentUserIdOrNull(), cursor, limit);
+    // hashtag is what makes a hashtag badge on a post card clickable (B31) — null means unfiltered.
+    return postQueryService.getPublicFeed(
+        SecurityUtils.getCurrentUserIdOrNull(), cursor, hashtag, limit);
   }
 
   /** Permalink. A post the caller may not see is reported as missing — see PostQueryService. */
