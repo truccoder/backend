@@ -6,6 +6,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.roadmap.dto.PendingVerificationDto;
+import com.socialapp.roadmap.dto.RoadmapProgressDto;
 import com.socialapp.roadmap.dto.SkillVerificationRequestDto;
 import com.socialapp.roadmap.service.SkillVerificationService;
 import com.socialapp.security.util.SecurityUtils;
@@ -34,10 +35,16 @@ public class SkillVerificationController {
 
   private final SkillVerificationService skillVerificationService;
 
+  /**
+   * Files a skill claim. Returns the resulting progress row (B21) so the client sees the outcome
+   * — {@code VERIFIED}, {@code REJECTED} or {@code PENDING_APPROVAL} depending on the tier —
+   * without re-reading {@code /users/{id}/roadmap-progress}.
+   */
   @PostMapping("/verify")
-  public void submitVerification(@Valid @RequestBody SkillVerificationRequestDto request) {
+  public RoadmapProgressDto submitVerification(
+      @Valid @RequestBody SkillVerificationRequestDto request) {
     Integer userId = SecurityUtils.getCurrentUserId();
-    skillVerificationService.submitVerificationRequest(userId, request);
+    return skillVerificationService.submitVerificationRequest(userId, request);
   }
 
   @GetMapping("/pending")

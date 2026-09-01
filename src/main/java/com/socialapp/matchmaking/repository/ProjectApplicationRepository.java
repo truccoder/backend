@@ -3,6 +3,7 @@ package com.socialapp.matchmaking.repository;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -15,6 +16,59 @@ public interface ProjectApplicationRepository
 
   /** Whether this applicant has already applied to this position — one application each. */
   boolean existsByPositionIdAndApplicantId(Integer positionId, Integer applicantId);
+
+  /**
+   * Whether a position has at least one application in the given status — the guard behind
+   * "cannot delete a position that has an accepted member". A derived {@code exists} rather than
+   * a count because the caller only asks yes/no.
+   */
+  boolean existsByPositionIdAndStatus(Integer positionId, ApplicationStatus status);
+
+  /**
+   * The team on a project: its {@code ACCEPTED} applications, newest-accepted first, with
+   * applicant and position join-fetched for {@link
+   * com.socialapp.matchmaking.dto.ProjectMemberDto#from}. Status is passed rather than hardcoded
+   * so the one caller ({@code ProjectQueryService.getMembers}) states its intent at the call
+   * site.
+   */
+  @Query(
+      """
+      SELECT a FROM ProjectApplicationEntity a
+      JOIN FETCH a.applicant
+      JOIN FETCH a.position
+      WHERE a.project.id = :projectId AND a.status = :status
+      ORDER BY a.updatedAt DESC, a.id DESC
+      """)
+  List<ProjectApplicationEntity> findByProjectIdAndStatusForRoster(
+      @Param("projectId") Integer projectId, @Param("status") ApplicationStatus status);
+
+  /**
+   * One user's applications to one project in a given status, position join-fetched. Backs the
+   * owner's "remove from team" action: a person accepted to two roles on the same project has two
+   * {@code ACCEPTED} rows, and removing the member ends both.
+   */
+  @Query(
+      """
+      SELECT a FROM ProjectApplicationEntity a
+      JOIN FETCH a.position
+      WHERE a.project.id = :projectId
+        AND a.applicant.id = :applicantId
+        AND a.status = :status
+      """)
+  List<ProjectApplicationEntity> findByProjectAndApplicantAndStatus(
+      @Param("projectId") Integer projectId,
+      @Param("applicantId") Integer applicantId,
+      @Param("status") ApplicationStatus status);
+
+  /**
+   * Deletes every application row for a position, whatever its status. Called just before the
+   * position itself is deleted: the {@code t_project_applications.position_id} FK is {@code ON
+   * DELETE CASCADE}, so the database would clear these anyway, but doing it explicitly keeps
+   * Hibernate's first-level cache from holding rows the database has removed underneath it.
+   */
+  @Modifying
+  @Query("DELETE FROM ProjectApplicationEntity a WHERE a.position.id = :positionId")
+  void deleteByPositionId(@Param("positionId") Integer positionId);
 
   /**
    * The applications sent to one project, newest first — a project owner's inbox.

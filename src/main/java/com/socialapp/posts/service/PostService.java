@@ -415,6 +415,8 @@ public class PostService {
 
     List<Integer> taggedUserIds = extractTaggedUserIds(post);
 
+    revokeReputationForDeletedPost(post);
+
     // Before the post, not after: the book is what the post is for, and BookService refuses to
     // delete one that has been sold. Running it first means such a delete fails with the book's
     // own message and the post survives, instead of the post vanishing and the row surviving with
@@ -429,6 +431,41 @@ public class PostService {
       newsfeedService.removePost(postId, actorId, taggedUserIds);
     } catch (Exception e) {
       log.warn("Failed to remove post {} from feeds: {}", postId, e.getMessage());
+    }
+  }
+
+  /**
+   * Clears the reputation a post earned before the post itself is deleted.
+   *
+   * <p>{@code t_reputation_events} has no foreign key to {@code t_posts} — {@code source_id} is
+   * text — so a deleted post's points would otherwise stay on the ledger forever, and the nightly
+   * reconcile re-sums that same ledger and never notices. Two kinds accrue against a post:
+   *
+   * <ul>
+   *   <li>{@code REACTION_RECEIVED}: one row per reactor for the author, keyed {@code
+   *       "{postId}:{reactorId}"} — bulk-revoked by prefix;
+   *   <li>{@code ACCEPTED_ANSWER}: on a resolved QNA post, one row for whoever wrote the accepted
+   *       reply, keyed by that comment's id. The comment author id is read now, before the
+   *       cascade delete takes the comment with the post.
+   * </ul>
+   *
+   * Comment reactions award no reputation ({@code CommentReactionService}), so the comments that
+   * vanish with the post carry nothing else to settle.
+   */
+  private void revokeReputationForDeletedPost(PostEntity post) {
+    reputationEventPublisher.revokeByPrefix(
+        post.getAuthorId(), RepSourceType.REACTION_RECEIVED, post.getId() + ":");
+
+    if (PostType.QNA.equals(post.getPostType())
+        && post.getQnaDetails() != null
+        && post.getQnaDetails().getAcceptedAnswerId() != null) {
+      Integer answerId = post.getQnaDetails().getAcceptedAnswerId();
+      commentRepository
+          .findById(answerId)
+          .ifPresent(
+              answer ->
+                  reputationEventPublisher.revoke(
+                      answer.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, answerId.toString()));
     }
   }
 

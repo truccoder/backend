@@ -16,6 +16,12 @@ public class ReputationResponseDto {
   private String levelName;
 
   /**
+   * The user this reputation belongs to, so a caller keyed on {@code userId} (e.g. {@code /chats})
+   * can still build a {@code /u/{username}} link — FE's {@code docs/backend-plan.md} B38.
+   */
+  private String username;
+
+  /**
    * Floor of the level the user is on right now. Without it a progress bar can only run
    * {@code 0 → nextLevelMin}; the alternative — the client hardcoding the threshold table — would
    * be a third copy of {@link com.socialapp.reputation.RepLevel} to keep in sync.

@@ -634,4 +634,69 @@ class BookServiceTest {
       verify(bookRepository).findLibraryPage(isNull(), eq(LearningCategory.MOBILE), any());
     }
   }
+
+  // =====================================================================
+  // getPurchasedPage  (FE docs/backend-plan.md B37 — the "Sách đã mua" tab)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getPurchasedPage")
+  class GetPurchasedPageTests {
+
+    @Test
+    @DisplayName("should trim the look-ahead row and report hasMore")
+    void shouldTrimLookaheadRow() {
+      // Given
+      BookEntity b30 = new BookEntity();
+      b30.setId(30);
+      b30.setAuthorId(1);
+      b30.setIsFree(false);
+      BookEntity b29 = new BookEntity();
+      b29.setId(29);
+      b29.setAuthorId(1);
+      b29.setIsFree(false);
+      BookEntity b28 = new BookEntity();
+      b28.setId(28);
+      b28.setAuthorId(1);
+      b28.setIsFree(false);
+      when(bookRepository.findPurchasedPage(any(), any(), any()))
+          .thenReturn(List.of(b30, b29, b28));
+
+      // When
+      BookPageResponseDto result = bookService.getPurchasedPage(OTHER_USER_ID, null, 2);
+
+      // Then
+      assertThat(result.items()).hasSize(2);
+      assertThat(result.hasMore()).isTrue();
+      assertThat(result.nextCursor()).isEqualTo(29);
+    }
+
+    @Test
+    @DisplayName("should return a null cursor and hasMore=false when nothing was purchased")
+    void shouldHandleEmptyPage() {
+      // Given
+      when(bookRepository.findPurchasedPage(any(), any(), any())).thenReturn(List.of());
+
+      // When
+      BookPageResponseDto result = bookService.getPurchasedPage(OTHER_USER_ID, null, 10);
+
+      // Then
+      assertThat(result.items()).isEmpty();
+      assertThat(result.nextCursor()).isNull();
+      assertThat(result.hasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("should scope the query to the calling buyer and pass the cursor through")
+    void shouldScopeToBuyerAndPassCursorThrough() {
+      // Given
+      when(bookRepository.findPurchasedPage(any(), any(), any())).thenReturn(List.of());
+
+      // When
+      bookService.getPurchasedPage(OTHER_USER_ID, 20, 10);
+
+      // Then
+      verify(bookRepository).findPurchasedPage(eq(OTHER_USER_ID), eq(20), any());
+    }
+  }
 }

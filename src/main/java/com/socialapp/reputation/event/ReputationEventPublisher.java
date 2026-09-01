@@ -31,4 +31,20 @@ public class ReputationEventPublisher {
             .revoke(true)
             .build());
   }
+
+  /**
+   * Bulk-revokes every {@code sourceType} event whose {@code sourceId} starts with {@code
+   * sourceIdPrefix}, and rebuilds {@code recipientId}'s score afterwards. For content deletion,
+   * where the events cannot be enumerated as individual triples — a deleted post's per-reactor
+   * {@code REACTION_RECEIVED} rows, say.
+   */
+  public void revokeByPrefix(Integer recipientId, RepSourceType sourceType, String sourceIdPrefix) {
+    eventPublisher.publishEvent(
+        ReputationAwardEvent.builder()
+            .userId(recipientId)
+            .sourceType(sourceType)
+            .sourceIdPrefix(sourceIdPrefix)
+            .revoke(true)
+            .build());
+  }
 }

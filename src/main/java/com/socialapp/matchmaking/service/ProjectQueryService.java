@@ -13,11 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
+import com.socialapp.matchmaking.dto.ProjectMemberDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
 import com.socialapp.matchmaking.dto.ProjectPositionResponseDto;
 import com.socialapp.matchmaking.dto.ProjectResponseDto;
 import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
+import com.socialapp.matchmaking.entity.enums.ApplicationStatus;
 import com.socialapp.matchmaking.repository.ProjectApplicationRepository;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 import com.socialapp.matchmaking.repository.ProjectRepository;
@@ -143,6 +145,29 @@ public class ProjectQueryService {
 
     return applicationRepository.findByProjectIdForInbox(projectId).stream()
         .map(ProjectApplicationResponseDto::from)
+        .toList();
+  }
+
+  /**
+   * A project's team — everyone accepted onto it, with the role they hold.
+   *
+   * <p>Visible to any signed-in user, like the project itself: who is building a thing is part of
+   * what a project board is for. The private half stays private — {@link
+   * #getApplicationsForProject} (who <em>asked</em> to join, and what they wrote) is still owner
+   * only.
+   *
+   * <p>404 rather than an empty list for a project that does not exist, so a caller can tell "no
+   * members yet" from "no such project".
+   */
+  @Transactional(readOnly = true)
+  public List<ProjectMemberDto> getMembers(Integer projectId) {
+    if (!projectRepository.existsById(projectId)) {
+      throw new NotFoundException("Project not found with ID: " + projectId);
+    }
+    return applicationRepository
+        .findByProjectIdAndStatusForRoster(projectId, ApplicationStatus.ACCEPTED)
+        .stream()
+        .map(ProjectMemberDto::from)
         .toList();
   }
 

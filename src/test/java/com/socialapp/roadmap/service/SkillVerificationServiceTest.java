@@ -213,8 +213,9 @@ class SkillVerificationServiceTest {
       when(progressRepository.findByUserIdAndNodeId(USER_ID, NODE_ID)).thenReturn(Optional.empty());
 
       // When
-      skillVerificationService.submitVerificationRequest(
-          USER_ID, request(VerificationTier.SELF_VERIFIED, "https://example.com/proof"));
+      var result =
+          skillVerificationService.submitVerificationRequest(
+              USER_ID, request(VerificationTier.SELF_VERIFIED, "https://example.com/proof"));
 
       // Then
       UserRoadmapProgressEntity saved = captureSaved();
@@ -222,6 +223,10 @@ class SkillVerificationServiceTest {
       assertThat(saved.getVerifiedAt()).isNotNull();
       verify(reputationEventPublisher)
           .award(USER_ID, RepSourceType.ROADMAP_SELF_VERIFIED, USER_ID + ":" + NODE_ID);
+      // B21: the outcome is handed straight back, no follow-up read needed.
+      assertThat(result.getStatus()).isEqualTo(VerificationStatus.VERIFIED);
+      assertThat(result.getNodeId()).isEqualTo(NODE_ID);
+      assertThat(result.getTier()).isEqualTo(VerificationTier.SELF_VERIFIED);
     }
 
     @Test

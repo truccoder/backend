@@ -219,4 +219,52 @@ class ProjectQueryServiceTest {
           .isInstanceOf(ForbiddenException.class);
     }
   }
+
+  // =====================================================================
+  // getMembers
+  // =====================================================================
+
+  @Nested
+  @DisplayName("getMembers")
+  class GetMembersTests {
+
+    @Test
+    @DisplayName("should map every accepted application to a roster row — for any signed-in caller")
+    void shouldReturnRoster() {
+      // Given: unlike the application inbox this takes no caller and applies no ownership check
+      ProjectEntity p = project(PROJECT_ID);
+      ProjectApplicationEntity accepted = new ProjectApplicationEntity();
+      accepted.setId(80);
+      accepted.setProject(p);
+      accepted.setPosition(position(5, p));
+      accepted.setApplicant(user(STRANGER_ID));
+      accepted.setStatus(ApplicationStatus.ACCEPTED);
+
+      when(projectRepository.existsById(PROJECT_ID)).thenReturn(true);
+      when(applicationRepository.findByProjectIdAndStatusForRoster(
+              PROJECT_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(List.of(accepted));
+
+      // When
+      var result = projectQueryService.getMembers(PROJECT_ID);
+
+      // Then
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).getApplicationId()).isEqualTo(80);
+      assertThat(result.get(0).getUserId()).isEqualTo(STRANGER_ID);
+      assertThat(result.get(0).getUsername()).isEqualTo("user2");
+      assertThat(result.get(0).getPositionId()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("should 404 for a project that does not exist rather than return an empty roster")
+    void shouldThrowWhenProjectMissing() {
+      // Given
+      when(projectRepository.existsById(PROJECT_ID)).thenReturn(false);
+
+      // When / Then
+      assertThatThrownBy(() -> projectQueryService.getMembers(PROJECT_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+  }
 }

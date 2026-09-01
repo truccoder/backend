@@ -64,8 +64,20 @@ public class SkillVerificationService {
         .toList();
   }
 
+  /**
+   * Files or re-files a skill claim and returns the resulting progress row.
+   *
+   * <p>Returning the row rather than {@code void} (B21) is what lets the client show the outcome
+   * without a follow-up read: the four tiers resolve differently and some resolve immediately —
+   * {@code SELF_VERIFIED} writes {@code VERIFIED} in this same call, {@code AUTO_CERTIFIED} comes
+   * back either {@code VERIFIED} or {@code REJECTED} depending on the GitHub check, and only
+   * {@code MOD_VERIFIED}/{@code QUIZ_VERIFIED} land on {@code PENDING_APPROVAL}. The DTO is the
+   * public one ({@code RoadmapProgressDto}); it deliberately carries no proof fields, so this is
+   * safe to hand straight back to the claimant.
+   */
   @Transactional
-  public void submitVerificationRequest(Integer userId, SkillVerificationRequestDto dto) {
+  public RoadmapProgressDto submitVerificationRequest(
+      Integer userId, SkillVerificationRequestDto dto) {
     UserEntity user =
         userRepository.findById(userId).orElseThrow(() -> new NotFoundException("User not found"));
     RoadmapNodeEntity node =
@@ -111,6 +123,11 @@ public class SkillVerificationService {
     if (awardType != null) {
       awardForNode(userId, dto.getNodeId(), awardType);
     }
+
+    // Built from the in-memory row, not the save() return: every field the DTO reads (node, tier,
+    // status, verifiedAt) is already set above, and this keeps the mapping identical to
+    // getProgressForUser's.
+    return RoadmapProgressDto.from(progress);
   }
 
   /**
