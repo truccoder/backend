@@ -21,8 +21,8 @@ mọi môi trường — kể cả production, nơi không có `docker-compose.y
 |---|---|
 | `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` mỗi khi `NEO4J_SEED_ON_START=true` — file tự dọn dải 9001–9599 rồi `MERGE` lại |
 | `NewsfeedSeedInitializer` (ứng dụng) | xoá sạch khoá `feed:*` rồi fan-out lại, mỗi khi `NEWSFEED_REBUILD_ON_START=true` |
-| `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh |
-| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, tải ảnh thật (hoặc sinh file mẫu) rồi nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có |
+| `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh — có **thử lại** vài lần nếu MinIO chưa sẵn sàng |
+| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, lấy ảnh (ưu tiên **ảnh nướng sẵn trong image**, rồi mới tải mạng, rồi mới sinh ô màu) và nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có ảnh thật; ghi đè ô màu cũ khi `MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS=true` |
 
 `minio-seed-objects` + `minio-init` trong `docker-compose.yml` vẫn còn nhưng **chỉ là đường dev**:
 chúng làm đúng việc của `MinIOSeedObjectInitializer` (cộng cache ảnh ở `docker/minio/.cache/` để
@@ -70,14 +70,22 @@ thị rỗng — hoặc còn là của thế hệ seed cũ — thì bài chỉ t
 như trống, trong khi log vẫn báo `processed=2586` y như một lần chạy thành công. Con số cần nhìn là
 *số bảng tin*: khoảng 500 là đúng, vài chục nghĩa là đồ thị chưa sẵn sàng.
 
-Cờ này **xoá sạch khoá `feed:*` rồi mới fan-out lại**, nên bật thường trực ở máy dev là an toàn và
-chạy lại nhiều lần vẫn ra một kết quả. Nó *không* còn bỏ qua khi Redis đã có bảng tin: `rebuildAll`
-chỉ `ZADD` thêm, nên không dọn trước thì id của những bài mà `V80` vừa xoá nằm lại trong sorted set
-vĩnh viễn, chiếm chỗ của bài thật. Mặc định **tắt**, và production nên giữ nguyên — fan-out toàn bộ
-ở mỗi lần khởi động là cái giá lớn cho một thứ production không cần, và nếu Redis ở đó rỗng thật
-thì đó là sự cố cần người nhìn vào.
+`NEWSFEED_REBUILD_ON_START` **xoá sạch khoá `feed:*` rồi mới fan-out lại**, nên bật thường trực ở
+máy dev là an toàn và chạy lại nhiều lần vẫn ra một kết quả. Nó *không* còn bỏ qua khi Redis đã có
+bảng tin: `rebuildAll` chỉ `ZADD` thêm, nên không dọn trước thì id của những bài mà `V80` vừa xoá
+nằm lại trong sorted set vĩnh viễn. Mặc định **tắt**, và production **không** dùng cờ này — fan-out
+toàn bộ ở mỗi lần khởi động là cái giá lớn cho một thứ production hầu như không cần.
 
-Cách thủ công vẫn còn, và là cách duy nhất trên production:
+**Production dùng `NEWSFEED_REBUILD_IF_EMPTY` (mặc định `true` trong `application-prod.yml`).** Cờ
+này chỉ dựng lại — trên luồng nền, **không dọn** — khi `SCAN feed:*` ra đúng 0 khoá lúc khởi động.
+`feed:*` rỗng trên production nghĩa là database vừa nạp seed hoặc mất Redis; cả hai đều cần đúng
+một lần dựng lại. Deploy bình thường chỉ tốn một lượt `SCAN`. Tương tự, `NEO4J_SEED_ON_START` cũng
+mặc định `true` trên prod (toàn `MERGE`, ~vài giây) nên đồ thị bạn bè luôn sẵn sàng trước khi
+fan-out đọc tới. Nghĩa là **một deploy sạch trên prod không cần bước tay nào cho bảng tin** — xem
+`scripts/prod/fix-seed-media.md`.
+
+Cách thủ công vẫn còn, dùng khi cần dựng lại mà không khởi động lại (ví dụ demo cách lần seed quá
+một tuần, xem cạm bẫy TTL bên dưới):
 
 ```bash
 curl -XPOST http://localhost:8080/v1/api/admin/newsfeed/rebuild \

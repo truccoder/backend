@@ -12,6 +12,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -59,28 +61,36 @@ import nl.siegmann.epublib.epub.EpubWriter;
  * dụng: một cơ chế nằm trong ứng dụng đi theo ứng dụng tới mọi môi trường; một service trong
  * compose thì chỉ có ở nơi người ta nhớ chép nó sang.
  *
- * <p>Manifest ({@code db/seed/seed-manifest.tsv}) vì vậy nằm trong {@code src/main/resources} —
- * cùng chỗ với các file SQL mà nó phải khớp, sinh cùng một lần chạy bởi
- * {@code scripts/seed/generate_seed.py}, và được đóng vào jar nên không cần mount gì. Đây là port
- * Java của {@code generate-seed-objects.py}: đọc manifest, thử tải ảnh thật ở URL nguồn, mất mạng
- * hay 404 thì rơi về bộ sinh PNG/JPEG/PDF/EPUB bên dưới.
+ * <p><b>Ba nguồn nội dung, xét theo thứ tự.</b>
  *
- * <p><b>Mặc định TẮT</b>, cùng lý do với hai initializer kia: chỉ bật ở môi trường thực sự muốn
- * nạp seed. {@code application-prod.yml} bật nó; máy dev để {@code docker-compose} lo nên cờ vẫn
- * tắt. Cờ là điều kiện DUY NHẤT.
+ * <ol>
+ *   <li><b>Ảnh nướng sẵn</b> ({@code minio.seed-objects-dir}, mặc định rỗng). Dockerfile có một
+ *       stage chạy {@code generate-seed-objects.py} NGAY TRÊN GITHUB RUNNER — nơi đường ra
+ *       DiceBear/Picsum/Open Library sạch — rồi copy kết quả vào image. Có thư mục này thì
+ *       production dùng đúng bộ ảnh mà bản build tạo ra: tất định, offline, vài giây. Đây là cách
+ *       production nên chạy.
+ *   <li><b>Tải ảnh thật</b> tại URL nguồn trong manifest. Chỉ dùng khi (1) không có; là đường dev
+ *       và đường dự phòng nếu ảnh nướng sẵn thiếu.
+ *   <li><b>Sinh ô màu / file mẫu</b> khi cả hai đường trên thất bại. Một ô màu vẫn hơn một ảnh vỡ.
+ * </ol>
  *
- * <p><b>Chạy nền, không chặn khởi động.</b> Lần đầu trên một MinIO trắng phải tải ~980 ảnh — vài
- * phút, và mọi listener của {@code ApplicationReadyEvent} chạy TRƯỚC khi Spring đánh dấu
- * "sẵn sàng nhận traffic". Chặn ở đó nghĩa là healthcheck báo đỏ suốt ngần ấy phút. Vì vậy listener
- * chỉ khởi một luồng nền rồi trả về ngay. Các lần khởi động sau chỉ là ~1.100 lượt {@code statObject}
- * (đã có thì bỏ qua) — vẫn chạy, vẫn nền, vài chục giây.
+ * <p><b>Ô màu KHÔNG còn là vĩnh viễn.</b> Trước đây bộ khởi tạo bỏ qua mọi object đã tồn tại, nên
+ * một lần chạy đầu tồi trên VPS (nguồn công cộng bóp băng thông IP datacenter) đóng băng cả kho
+ * thành ô màu — không lần deploy nào sửa. Nay khi {@code minio.seed-objects-replace-placeholders}
+ * bật, object nào nhỏ hơn {@code MIN_REAL_IMAGE_BYTES} mà manifest có khai nguồn thật được coi là ô
+ * màu và thử lấy lại ảnh thật (một ảnh thật đã lưu luôn ≥ ngưỡng đó, nên không có dương tính giả).
  *
- * <p><b>Idempotent.</b> Mỗi object kiểm {@code MinIOService.objectExists} trước; đã có thì bỏ qua.
- * Hai key {@code khong-ton-tai} (fixture "ảnh vỡ" / "kho hỏng" mà frontend đã dịch sẵn thông điệp)
- * cố ý KHÔNG nằm trong manifest nên không bao giờ được tạo.
+ * <p><b>Mặc định TẮT</b> ({@code minio.seed-objects-on-start}), cùng lý do với hai initializer kia.
+ * {@code application-prod.yml} bật nó; máy dev để {@code docker-compose} lo.
  *
- * <p><b>Không bao giờ làm hỏng khởi động.</b> Mọi lỗi được ghi log rồi bỏ qua; một ảnh hỏng chỉ
- * rơi về bản dự phòng.
+ * <p><b>Chạy nền, không chặn khởi động.</b> Lần đầu trên một MinIO trắng, nếu phải tải mạng thì mất
+ * vài phút, và mọi listener {@code ApplicationReadyEvent} chạy TRƯỚC khi Spring đánh dấu "sẵn sàng".
+ * Vì vậy listener chỉ khởi một luồng nền rồi trả về ngay.
+ *
+ * <p><b>Idempotent.</b> Mỗi object kiểm kích thước trước; đã có ảnh thật thì bỏ qua. Hai key
+ * {@code khong-ton-tai} cố ý KHÔNG nằm trong manifest nên không bao giờ được tạo.
+ *
+ * <p><b>Không bao giờ làm hỏng khởi động.</b> Mọi lỗi được ghi log rồi bỏ qua.
  */
 @Slf4j
 @Component
@@ -111,12 +121,21 @@ public class MinIOSeedObjectInitializer {
   private static final int FETCH_WORKERS = 4;
 
   /**
-   * Ảnh tải về nhỏ hơn ngưỡng này bị coi là hỏng. Open Library trả HTTP 200 kèm một ảnh 1x1 khi
-   * không có bìa cho ISBN đó, nên chỉ kiểm mã trạng thái là không đủ.
+   * Ảnh tải về (hoặc file nướng sẵn) nhỏ hơn ngưỡng này bị coi là hỏng / là ô màu. Open Library
+   * trả HTTP 200 kèm một ảnh 1x1 khi không có bìa cho ISBN đó, nên chỉ kiểm mã trạng thái là không
+   * đủ; và mọi ô màu do lớp này sinh ra đều nằm xa dưới ngưỡng.
    */
   private static final int MIN_REAL_IMAGE_BYTES = 2000;
 
-  private static final Duration FETCH_TIMEOUT = Duration.ofSeconds(8);
+  /**
+   * 20 giây, không phải 8. Trên VPS, DiceBear render PNG và Open Library tra bìa có thể chậm hơn 8
+   * giây dưới tải — timeout ngắn biến một nguồn chậm thành một ô màu. Nhánh này chỉ chạy khi không
+   * có ảnh nướng sẵn, nên nới rộng ở đây không phạt đường production đã bake.
+   */
+  private static final Duration FETCH_TIMEOUT = Duration.ofSeconds(20);
+
+  /** Thử lại một lần: phần lớn lỗi ở các nguồn này là chập chờn (rate-limit tạm, reset kết nối). */
+  private static final int FETCH_ATTEMPTS = 2;
 
   private static final String USER_AGENT = "elitenexus-seed/1.0";
 
@@ -137,10 +156,26 @@ public class MinIOSeedObjectInitializer {
 
   /**
    * Cho phép tắt bước tải ảnh thật — mọi object thành ô màu / file mẫu. Test dùng để chạy offline
-   * và tất định; production để {@code true}.
+   * và tất định; production để {@code true} (nhưng thường không cần vì đã có ảnh nướng sẵn).
    */
   @Value("${minio.seed-objects-fetch-remote:true}")
   private boolean fetchRemote;
+
+  /**
+   * Thư mục chứa ảnh seed thật được NƯỚNG vào image lúc build (stage {@code seed-objects} trong
+   * Dockerfile). Có giá trị ⇒ file tìm thấy ở đây được dùng nguyên vẹn, không gọi mạng. Rỗng (mặc
+   * định) ⇒ giữ nguyên đường tải-từ-xa mà dev và test dùng.
+   */
+  @Value("${minio.seed-objects-dir:}")
+  private String bakedDir;
+
+  /**
+   * Cho phép ghi đè một ô màu đã nằm trong MinIO bằng ảnh thật khi lần này lấy được. Mặc định tắt
+   * để lần chạy thường chỉ là ~1.100 lượt kiểm-rồi-bỏ-qua; bật khi cần chữa một kho đã lỡ đóng băng
+   * thành ô màu (ví dụ sau một lần deploy đầu tải mạng thất bại).
+   */
+  @Value("${minio.seed-objects-replace-placeholders:false}")
+  private boolean replacePlaceholders;
 
   @Order(30)
   @EventListener(ApplicationReadyEvent.class)
@@ -151,6 +186,18 @@ public class MinIOSeedObjectInitializer {
     Thread worker = new Thread(this::seedObjects, "minio-seed-objects");
     worker.setDaemon(true);
     worker.start();
+  }
+
+  /** Bộ đếm cho một lượt đồng bộ. Gom lại để {@link #processRow} không nhận chục tham số. */
+  private static final class Stats {
+    final AtomicInteger uploaded = new AtomicInteger();
+    final AtomicInteger real = new AtomicInteger();
+    final AtomicInteger baked = new AtomicInteger();
+    final AtomicInteger generated = new AtomicInteger();
+    final AtomicInteger replaced = new AtomicInteger();
+    final AtomicInteger skipped = new AtomicInteger();
+    final AtomicInteger failed = new AtomicInteger();
+    final AtomicInteger unknownPrefix = new AtomicInteger();
   }
 
   /**
@@ -177,12 +224,7 @@ public class MinIOSeedObjectInitializer {
       }
     }
 
-    AtomicInteger uploaded = new AtomicInteger();
-    AtomicInteger real = new AtomicInteger();
-    AtomicInteger generated = new AtomicInteger();
-    AtomicInteger skipped = new AtomicInteger();
-    AtomicInteger failed = new AtomicInteger();
-    AtomicInteger unknownPrefix = new AtomicInteger();
+    Stats stats = new Stats();
 
     HttpClient http =
         HttpClient.newBuilder()
@@ -190,10 +232,13 @@ public class MinIOSeedObjectInitializer {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    boolean haveBaked = bakedDir != null && !bakedDir.isBlank();
     log.info(
-        "minio.seed-objects-on-start: {} object trong manifest{}",
+        "minio.seed-objects-on-start: {} object trong manifest{}{}{}",
         rows.size(),
-        fetchRemote ? "" : " (chế độ chỉ-placeholder)");
+        haveBaked ? " (ảnh nướng sẵn: " + bakedDir + ")" : "",
+        fetchRemote ? "" : " (chế độ chỉ-placeholder)",
+        replacePlaceholders ? " (thay ô màu bằng ảnh thật)" : "");
 
     ExecutorService pool = Executors.newFixedThreadPool(FETCH_WORKERS);
     try {
@@ -201,19 +246,7 @@ public class MinIOSeedObjectInitializer {
       for (int i = 0; i < rows.size(); i++) {
         int index = i;
         ManifestRow row = rows.get(i);
-        futures.add(
-            pool.submit(
-                () ->
-                    processRow(
-                        index,
-                        row,
-                        http,
-                        uploaded,
-                        real,
-                        generated,
-                        skipped,
-                        failed,
-                        unknownPrefix)));
+        futures.add(pool.submit(() -> processRow(index, row, http, stats)));
       }
       for (Future<?> f : futures) {
         f.get();
@@ -228,59 +261,73 @@ public class MinIOSeedObjectInitializer {
     }
 
     log.info(
-        "minio.seed-objects-on-start: xong — tải lên {} ({} ảnh thật, {} ảnh dự phòng), bỏ qua {}"
-            + " đã có, {} lỗi",
-        uploaded.get(),
-        real.get(),
-        generated.get(),
-        skipped.get(),
-        failed.get());
-    if (unknownPrefix.get() > 0) {
+        "minio.seed-objects-on-start: xong — tải lên {} ({} nướng sẵn, {} tải mới, {} ô màu; trong"
+            + " đó {} ghi đè ô màu cũ), bỏ qua {} đã có, {} lỗi",
+        stats.uploaded.get(),
+        stats.baked.get(),
+        stats.real.get(),
+        stats.generated.get(),
+        stats.replaced.get(),
+        stats.skipped.get(),
+        stats.failed.get());
+    if (stats.unknownPrefix.get() > 0) {
       log.error(
           "minio.seed-objects-on-start: {} object có prefix chưa khai trong BUCKET_OF_PREFIX —"
               + " những ảnh đó vẫn 404.",
-          unknownPrefix.get());
+          stats.unknownPrefix.get());
     }
   }
 
-  private void processRow(
-      int index,
-      ManifestRow row,
-      HttpClient http,
-      AtomicInteger uploaded,
-      AtomicInteger real,
-      AtomicInteger generated,
-      AtomicInteger skipped,
-      AtomicInteger failed,
-      AtomicInteger unknownPrefix) {
+  private void processRow(int index, ManifestRow row, HttpClient http, Stats stats) {
     String prefix = row.key().contains("/") ? row.key().substring(0, row.key().indexOf('/')) : "";
     String bucket = BUCKET_OF_PREFIX.get(prefix);
     if (bucket == null) {
-      unknownPrefix.incrementAndGet();
+      stats.unknownPrefix.incrementAndGet();
       log.error("minio.seed-objects-on-start: prefix '{}' chưa map, bỏ qua {}", prefix, row.key());
       return;
     }
 
     try {
-      if (minIOService.objectExists(bucket, row.key())) {
-        skipped.incrementAndGet();
+      long existingSize = minIOService.objectSize(bucket, row.key());
+      boolean present = existingSize >= 0;
+      boolean placeholderInPlace =
+          present && existingSize < MIN_REAL_IMAGE_BYTES && row.sourceUrl() != null;
+
+      if (present && !(placeholderInPlace && replacePlaceholders)) {
+        stats.skipped.incrementAndGet();
         return;
       }
 
-      byte[] data = null;
-      if (fetchRemote && row.sourceUrl() != null) {
+      byte[] data = loadBaked(row.key());
+      boolean fromBake = data != null;
+      if (data == null && fetchRemote && row.sourceUrl() != null) {
         data = fetch(http, row.sourceUrl());
       }
       boolean wasReal = data != null;
+
       if (!wasReal) {
+        if (present) {
+          // Đã có một ô màu và lần này vẫn không lấy được ảnh thật — đừng ghi đè bằng ô màu khác.
+          stats.skipped.incrementAndGet();
+          return;
+        }
         data = placeholder(row.key(), index);
       }
 
       minIOService.uploadBytes(bucket, row.key(), data, contentTypeOf(row.key()));
-      uploaded.incrementAndGet();
-      (wasReal ? real : generated).incrementAndGet();
+      stats.uploaded.incrementAndGet();
+      if (fromBake) {
+        stats.baked.incrementAndGet();
+      } else if (wasReal) {
+        stats.real.incrementAndGet();
+      } else {
+        stats.generated.incrementAndGet();
+      }
+      if (wasReal && present) {
+        stats.replaced.incrementAndGet();
+      }
     } catch (RuntimeException e) {
-      failed.incrementAndGet();
+      stats.failed.incrementAndGet();
       log.warn("minio.seed-objects-on-start: bỏ qua {} do lỗi: {}", row.key(), e.toString());
     }
   }
@@ -308,10 +355,43 @@ public class MinIOSeedObjectInitializer {
     return rows;
   }
 
+  // ── Ảnh nướng sẵn ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Đọc một object từ {@link #bakedDir} trên đĩa. Trả {@code null} khi thư mục không được cấu hình,
+   * file không có, hoặc file nhỏ hơn ngưỡng ảnh thật (nghĩa là bản build cũng chỉ có ô màu — để
+   * đường tải-từ-xa thử tiếp).
+   */
+  private byte[] loadBaked(String key) {
+    if (bakedDir == null || bakedDir.isBlank()) {
+      return null;
+    }
+    try {
+      Path path = Path.of(bakedDir, key.split("/"));
+      if (Files.isRegularFile(path) && Files.size(path) >= MIN_REAL_IMAGE_BYTES) {
+        return Files.readAllBytes(path);
+      }
+    } catch (IOException | RuntimeException e) {
+      log.debug("seed-objects-dir: không đọc được {} : {}", key, e.toString());
+    }
+    return null;
+  }
+
   // ── Tải ảnh thật ────────────────────────────────────────────────────────────────────────────
 
-  /** Tải một ảnh, trả bytes hoặc {@code null}. Không bao giờ ném ra ngoài. */
+  /** Tải một ảnh, thử tối đa {@link #FETCH_ATTEMPTS} lần. Trả bytes hoặc {@code null}. */
   private byte[] fetch(HttpClient http, String url) {
+    for (int attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+      byte[] data = fetchOnce(http, url);
+      if (data != null) {
+        return data;
+      }
+    }
+    return null;
+  }
+
+  /** Một lượt tải. Không bao giờ ném ra ngoài. */
+  private byte[] fetchOnce(HttpClient http, String url) {
     try {
       HttpRequest request =
           HttpRequest.newBuilder(URI.create(url))

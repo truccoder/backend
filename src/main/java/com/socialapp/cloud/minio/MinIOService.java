@@ -174,10 +174,25 @@ public class MinIOService {
    * {@link StorageException} like every other method here.
    */
   public boolean objectExists(String bucketName, String objectName) {
+    return objectSize(bucketName, objectName) >= 0;
+  }
+
+  /**
+   * Size of an object in bytes, or {@code -1} when it is absent (or its bucket is).
+   *
+   * <p>Used by seed reconciliation to tell a real stored image apart from the tiny solid-colour
+   * placeholder that stands in when a download failed: {@code MinIOSeedObjectInitializer} only ever
+   * stores a real image once it is at least {@code MIN_REAL_IMAGE_BYTES}, and every placeholder is
+   * far below that, so the size alone says which one is sitting in the bucket. "Absent" is a normal
+   * answer — MinIO signals it with a {@code NoSuchKey}/{@code NoSuchBucket} {@link
+   * ErrorResponseException} or a 404 — and maps to {@code -1}. Anything else is a real storage
+   * failure and becomes a {@link StorageException}.
+   */
+  public long objectSize(String bucketName, String objectName) {
     try {
-      minioClient.statObject(
-          StatObjectArgs.builder().bucket(bucketName).object(objectName).build());
-      return true;
+      return minioClient
+          .statObject(StatObjectArgs.builder().bucket(bucketName).object(objectName).build())
+          .size();
     } catch (ErrorResponseException e) {
       String code = e.errorResponse() == null ? null : e.errorResponse().code();
       boolean notFound =
@@ -186,7 +201,7 @@ public class MinIOService {
               || "NoSuchBucket".equals(code)
               || (e.response() != null && e.response().code() == 404);
       if (notFound) {
-        return false;
+        return -1;
       }
       throw new StorageException("Could not stat " + objectName + " in " + bucketName, e);
     } catch (Exception e) {

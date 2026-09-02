@@ -22,7 +22,16 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class BookStorageService {
+
+  /** Reaches MinIO for real work — here, removing an orphaned upload. Internal address in prod. */
   private final MinioClient minioClient;
+
+  /**
+   * Signs display/download URLs only. Built on the <b>public</b> MinIO address so the host inside
+   * the signature is the one the browser will use; see {@code MinIOConfig#minioPresignClient()}.
+   */
+  private final MinioClient minioPresignClient;
+
   private final com.socialapp.cloud.minio.MinIOService minIOService;
 
   private static final String BOOKS_BUCKET = "books";
@@ -148,7 +157,7 @@ public class BookStorageService {
 
   private String getPresignedUrl(String bucket, String objectKey, int expiry, TimeUnit expiryUnit) {
     try {
-      return minioClient.getPresignedObjectUrl(
+      return minioPresignClient.getPresignedObjectUrl(
           GetPresignedObjectUrlArgs.builder()
               .method(Method.GET)
               .bucket(bucket)

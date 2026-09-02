@@ -28,18 +28,27 @@ import lombok.extern.slf4j.Slf4j;
  * {@code docker compose up} được. Quên nó thì {@code /feed} trống trong khi {@code /posts/public}
  * đầy, và triệu chứng đó trông y hệt một lỗi frontend.
  *
- * <p><b>Vì sao mặc định TẮT.</b> Fan-out toàn bộ bài đã duyệt cho toàn bộ người dùng là công việc
- * nặng và tuyến tính theo số bài. Chạy nó ở mỗi lần khởi động production là trả một cái giá lớn để
- * mua một thứ production không cần: ở đó Redis không rỗng, và nếu có rỗng thì đó là sự cố cần
- * người nhìn vào, không phải thứ nên tự vá lúc khởi động.
+ * <p><b>Vì sao {@code newsfeed.rebuild-on-start} mặc định TẮT.</b> Fan-out toàn bộ bài đã duyệt cho
+ * toàn bộ người dùng là công việc nặng và tuyến tính theo số bài. Chạy nó ở MỖI lần khởi động
+ * production là trả một cái giá lớn cho một thứ production hầu như không cần. Cờ này (kèm bước dọn
+ * bên dưới) là đường của máy dev.
  *
- * <p><b>Vì sao KHÔNG còn điều kiện "Redis chưa có feed nào".</b> Điều kiện đó khiến bộ seed mới
- * không bao giờ tới được bảng tin trên một máy dev đã từng nạp seed: Redis là bind mount dưới
- * {@code ./.docker-data/redis} nên {@code docker compose down -v} không xoá nó, feed của thế hệ
- * trước vẫn còn, và lượt {@code SCAN} đầu tiên thấy có khoá rồi bỏ qua. Kết quả là {@code /feed}
- * trả về id của những bài mà {@code V80__seed_reset.sql} vừa xoá — hỏng im lặng, y như trường hợp
- * Neo4j ở {@code Neo4jSeedInitializer}. Cờ bây giờ là điều kiện duy nhất, và nó vốn đã mặc định
- * tắt.
+ * <p><b>Vì sao {@code newsfeed.rebuild-if-empty} thì production NÊN bật.</b> Đây là lưới an toàn
+ * riêng cho production: chỉ khi {@code SCAN feed:*} ra ĐÚNG 0 khoá lúc khởi động thì mới dựng lại
+ * một lần, trên luồng nền. Một {@code feed:*} rỗng trên production nghĩa là (a) database vừa nạp
+ * seed — bài seed {@code INSERT} thẳng vào Postgres, không đi qua đường đăng bài nên chưa từng
+ * fan-out — hoặc (b) mất Redis. Cả hai đều cần đúng một lần dựng lại, và không phải thứ nên bắt
+ * người vận hành nhớ gọi tay. Khác {@code rebuild-on-start}: KHÔNG dọn (chẳng có gì để dọn), KHÔNG
+ * chạy khi feed đã có bất cứ thứ gì, và chạy nền vì fan-out ~2.600 bài qua pooler có thể mất một
+ * hai phút — một lần deploy bình thường chỉ tốn đúng một lượt {@code SCAN}.
+ *
+ * <p><b>Vì sao KHÔNG còn điều kiện "Redis chưa có feed nào" trên đường {@code rebuild-on-start}.</b>
+ * Điều kiện đó khiến bộ seed mới không bao giờ tới được bảng tin trên một máy dev đã từng nạp seed:
+ * Redis là bind mount dưới {@code ./.docker-data/redis} nên {@code docker compose down -v} không xoá
+ * nó, feed của thế hệ trước vẫn còn, và lượt {@code SCAN} đầu tiên thấy có khoá rồi bỏ qua. Kết quả
+ * là {@code /feed} trả về id của những bài mà {@code V80__seed_reset.sql} vừa xoá — hỏng im lặng, y
+ * như trường hợp Neo4j ở {@code Neo4jSeedInitializer}. ({@code rebuild-if-empty} không dính bẫy này
+ * vì nó chỉ chạy khi feed rỗng hẳn.)
  *
  * <p><b>Phải XOÁ feed cũ trước, không chỉ dựng lại đè lên.</b> {@code rebuildAll()} chỉ {@code
  * ZADD} thêm; nó không biết gì về những thành viên đã có sẵn trong zset. Với bài của bộ seed hiện
@@ -71,7 +80,7 @@ public class NewsfeedSeedInitializer {
   private final StringRedisTemplate redisTemplate;
 
   /**
-   * Bật ở máy dev sau khi nạp seed:
+   * Đường của máy dev: xoá sạch {@code feed:*} rồi fan-out lại toàn bộ, mỗi lần khởi động.
    *
    * <pre>
    * NEWSFEED_REBUILD_ON_START=true ./gradlew bootRun
@@ -80,15 +89,32 @@ public class NewsfeedSeedInitializer {
   @Value("${newsfeed.rebuild-on-start:false}")
   private boolean rebuildOnStart;
 
+  /**
+   * Đường của production: chỉ dựng lại (nền, không dọn) khi {@code feed:*} rỗng hẳn lúc khởi động.
+   * {@code application-prod.yml} đặt {@code true}. Xem javadoc của lớp.
+   */
+  @Value("${newsfeed.rebuild-if-empty:false}")
+  private boolean rebuildIfEmpty;
+
   // Order đặt trên PHƯƠNG THỨC chứ không phải trên lớp — xem chú thích cùng chỗ ở
-  // Neo4jSeedInitializer. Số này phải LỚN HƠN số của nó.
+  // Neo4jSeedInitializer. Số này phải LỚN HƠN số của nó, nên đồ thị bạn bè trong Neo4j đã được nạp
+  // (đồng bộ, ở @Order(10)) trước khi fan-out đọc tới nó — kể cả khi bước dựng lại chạy nền.
   @Order(20)
   @EventListener(ApplicationReadyEvent.class)
-  public void rebuildFeeds() {
-    if (!rebuildOnStart) {
+  public void onApplicationReady() {
+    if (rebuildOnStart) {
+      rebuildFeeds();
       return;
     }
+    if (rebuildIfEmpty) {
+      Thread worker = new Thread(this::rebuildIfFeedIndexEmpty, "newsfeed-rebuild-if-empty");
+      worker.setDaemon(true);
+      worker.start();
+    }
+  }
 
+  /** Đường {@code rebuild-on-start}: dọn rồi dựng lại. Package-private để test gọi trực tiếp. */
+  void rebuildFeeds() {
     try {
       long purged = purgeFeeds();
       log.info("newsfeed.rebuild-on-start: đã xoá {} bảng tin cũ, đang dựng lại", purged);
@@ -115,6 +141,47 @@ public class NewsfeedSeedInitializer {
     } catch (RuntimeException e) {
       log.error(
           "newsfeed.rebuild-on-start: dựng lại bảng tin thất bại, ứng dụng vẫn khởi động."
+              + " Gọi POST /v1/api/admin/newsfeed/rebuild bằng tay nếu /feed trống.",
+          e);
+    }
+  }
+
+  /**
+   * Đường {@code rebuild-if-empty}: dựng lại đúng một lần khi {@code feed:*} rỗng hẳn. Chạy trên
+   * luồng nền (xem {@link #onApplicationReady}); package-private để test gọi trực tiếp.
+   *
+   * <p>Không dọn: {@code countFeeds() == 0} nghĩa là không có gì để dọn. Không có cửa sổ đua đáng
+   * lo — nếu một người dùng thật đăng bài giữa lượt {@code SCAN} và {@code rebuildAll()}, bài đó đã
+   * nằm trong feed và {@code rebuildAll()} chỉ {@code ZADD} lại đúng điểm cũ.
+   */
+  void rebuildIfFeedIndexEmpty() {
+    try {
+      long existing = countFeeds();
+      if (existing > 0) {
+        log.info("newsfeed.rebuild-if-empty: đã có {} bảng tin, không làm gì", existing);
+        return;
+      }
+
+      log.info("newsfeed.rebuild-if-empty: feed:* rỗng hẳn — dựng lại toàn bộ trên luồng nền");
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      long feeds = countFeeds();
+      log.info(
+          "newsfeed.rebuild-if-empty: xong, processed={}, skipped={}, số bảng tin={}",
+          result.processed(),
+          result.skipped(),
+          feeds);
+      if (result.processed() > 0 && feeds < 100) {
+        log.warn(
+            "newsfeed.rebuild-if-empty: chỉ {} bảng tin cho {} bài — gần như chắc chắn đồ thị bạn"
+                + " bè trong Neo4j còn rỗng lúc dựng lại. Kiểm neo4j.seed-on-start rồi khởi động"
+                + " lại.",
+            feeds,
+            result.processed());
+      }
+    } catch (RuntimeException e) {
+      log.error(
+          "newsfeed.rebuild-if-empty: dựng lại bảng tin thất bại, ứng dụng vẫn khởi động."
               + " Gọi POST /v1/api/admin/newsfeed/rebuild bằng tay nếu /feed trống.",
           e);
     }

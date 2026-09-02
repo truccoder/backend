@@ -28,6 +28,12 @@ import lombok.extern.slf4j.Slf4j;
  * {@code ensureBucketExists}, so the system repairs itself. What is lost on failure is the public
  * policy, which is why this logs at ERROR: images would upload and then 403 from inside an
  * {@code <img>} tag, which is confusing enough to be worth a loud line.
+ *
+ * <p><b>But it retries first.</b> "MinIO slow to start" is a transient, common state; giving up on
+ * the very first attempt is what left {@code post-media} private on a production boot and every
+ * seeded image 403'd until someone restarted the backend by hand. A few spaced attempts turn that
+ * race into a non-event. The connection now goes to {@code minio.internal-url} (the Docker-network
+ * address in prod), so this no longer waits on the public reverse proxy at all.
  */
 @Slf4j
 @Component
@@ -63,21 +69,65 @@ public class MinIOBucketInitializer {
    */
   private static final List<String> PRIVATE_BUCKETS = List.of("books", "book-covers");
 
+  /** How many times to re-try the whole bucket-preparation pass before logging the loud line. */
+  private static final int MAX_ATTEMPTS = 6;
+
+  /** Spacing between attempts. 6 × 5s covers a MinIO container that is up but not yet answering. */
+  private static final long RETRY_DELAY_MILLIS = 5_000;
+
   private final MinIOService minIOService;
 
+  /**
+   * Spawns the preparation on a background thread. The retry loop below sleeps between attempts,
+   * and every other {@code ApplicationReadyEvent} listener — seed-object upload, Neo4j, newsfeed —
+   * would queue behind that if it ran on the publishing thread.
+   */
   @EventListener(ApplicationReadyEvent.class)
-  public void prepareBuckets() {
+  public void onApplicationReady() {
+    Thread worker = new Thread(this::prepareBuckets, "minio-bucket-init");
+    worker.setDaemon(true);
+    worker.start();
+  }
+
+  /** Package-private so tests can drive it synchronously. */
+  void prepareBuckets() {
+    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (tryPrepare(attempt == MAX_ATTEMPTS)) {
+        return;
+      }
+      try {
+        Thread.sleep(RETRY_DELAY_MILLIS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
+  }
+
+  /**
+   * One full pass. Returns {@code true} when every bucket is ready and every public policy is set.
+   * On the last attempt ({@code loud}) a remaining failure is logged at ERROR; earlier failures are
+   * logged at DEBUG because a retry is coming.
+   */
+  private boolean tryPrepare(boolean loud) {
+    boolean allGood = true;
+
     for (String bucket : PUBLIC_READ_BUCKETS) {
       try {
         minIOService.ensureBucketExists(bucket);
         minIOService.ensurePublicReadPolicy(bucket);
         log.info("MinIO bucket '{}' is ready and world-readable", bucket);
       } catch (Exception e) {
-        log.error(
-            "Could not prepare MinIO bucket '{}'. Uploads will still create it, but objects may"
-                + " come back 403 until the public-read policy is applied.",
-            bucket,
-            e);
+        allGood = false;
+        if (loud) {
+          log.error(
+              "Could not prepare MinIO bucket '{}'. Uploads will still create it, but objects may"
+                  + " come back 403 until the public-read policy is applied.",
+              bucket,
+              e);
+        } else {
+          log.debug("MinIO bucket '{}' not ready yet, will retry: {}", bucket, e.toString());
+        }
       }
     }
 
@@ -86,12 +136,19 @@ public class MinIOBucketInitializer {
         minIOService.ensureBucketExists(bucket);
         log.info("MinIO bucket '{}' is ready (private, served through presigned URLs)", bucket);
       } catch (Exception e) {
-        log.error(
-            "Could not prepare MinIO bucket '{}'. GET /v1/api/books will return 503 until it"
-                + " exists, because signing a URL needs the bucket even when the object is absent.",
-            bucket,
-            e);
+        allGood = false;
+        if (loud) {
+          log.error(
+              "Could not prepare MinIO bucket '{}'. GET /v1/api/books will return 503 until it"
+                  + " exists, because signing a URL needs the bucket even when the object is absent.",
+              bucket,
+              e);
+        } else {
+          log.debug("MinIO bucket '{}' not ready yet, will retry: {}", bucket, e.toString());
+        }
       }
     }
+
+    return allGood;
   }
 }

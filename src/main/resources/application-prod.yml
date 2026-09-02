@@ -32,13 +32,38 @@ server:
 # Object seed (avatar, ảnh bìa, ảnh bài viết, file/bìa sách) mà db/seed trỏ tới nhưng SQL không
 # tạo được. Máy dev để docker-compose lo (minio-seed-objects + minio-init); production chạy compose
 # của repo DATN-infra, không có service đó — nên MinIOSeedObjectInitializer tự đọc
-# db/seed/seed-manifest.tsv trong jar, tải ảnh thật (hoặc sinh file mẫu) rồi nạp lên MinIO lúc
-# khởi động. Cùng logic đã đưa Neo4j/newsfeed seeding vào ứng dụng.
+# db/seed/seed-manifest.tsv trong jar rồi nạp lên MinIO lúc khởi động. Cùng logic đã đưa
+# Neo4j/newsfeed seeding vào ứng dụng.
 #
-# Chạy nền, idempotent (object đã có thì bỏ qua). Env MINIO_SEED_OBJECTS_ON_START ghi đè được để
-# tắt khẩn cấp mà không cần build lại image.
+# Chạy nền, idempotent (object đã có ảnh thật thì bỏ qua). Env MINIO_SEED_OBJECTS_ON_START ghi đè
+# được để tắt khẩn cấp mà không cần build lại image.
 minio:
   seed-objects-on-start: ${MINIO_SEED_OBJECTS_ON_START:true}
+
+  # Ảnh seed thật được NƯỚNG vào image lúc build (stage `seed-objects` trong Dockerfile chạy
+  # generate-seed-objects.py ngay trên runner, nơi đường ra các nguồn ảnh sạch). Initializer đọc
+  # từ đây trước; chỉ khi thiếu file mới tính tới việc tải mạng. Đây là thứ chấm dứt cảnh "deploy
+  # xong ảnh là ô màu": VPS không còn phải tự tải ~980 ảnh từ dịch vụ công cộng lúc khởi động.
+  seed-objects-dir: ${MINIO_SEED_OBJECTS_DIR:/app/seed-objects}
+
+  # Ghi đè ô màu cũ bằng ảnh thật khi lần chạy này lấy được (từ thư mục nướng sẵn hoặc tải mạng).
+  # Để `true` một lần khi cần chữa một kho đã lỡ đóng băng thành ô màu, rồi có thể trả về `false`.
+  seed-objects-replace-placeholders: ${MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS:true}
+
+# Đồ thị bạn bè sống trong Neo4j, không phải Postgres — Flyway không quản. Nạp seed xong mà không
+# nạp đồ thị thì hồ sơ hiện "đã là bạn" còn /friendships rỗng, VÀ fan-out bảng tin (đọc chính đồ
+# thị này) chỉ tới được người được tag nên tab Bạn bè cũng trống. Toàn bộ file cypher là MERGE nên
+# nạp lại mỗi lần khởi động là an toàn và rẻ (~500 node, vài nghìn cạnh, vài giây). Cùng lý lẽ đã
+# bật sẵn minio.seed-objects-on-start ở trên.
+neo4j:
+  seed-on-start: ${NEO4J_SEED_ON_START:true}
+
+# Bảng tin đọc DUY NHẤT từ Redis; bài seed INSERT thẳng vào Postgres nên chưa từng fan-out. Cờ này
+# KHÁC newsfeed.rebuild-on-start (đường của dev, luôn xoá-rồi-dựng): nó chỉ dựng lại — trên luồng
+# nền, không dọn — khi SCAN feed:* ra đúng 0 khoá. feed:* rỗng trên production = seed mới hoặc mất
+# Redis, cả hai đều cần đúng một lần dựng lại. Deploy bình thường chỉ tốn một lượt SCAN.
+newsfeed:
+  rebuild-if-empty: ${NEWSFEED_REBUILD_IF_EMPTY:true}
 
 spring:
   jpa:

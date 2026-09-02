@@ -174,6 +174,47 @@ class MinIOServiceTest {
   }
 
   // =====================================================================
+  // objectSize
+  // =====================================================================
+
+  @Nested
+  @DisplayName("objectSize")
+  class ObjectSizeTests {
+
+    @Test
+    @DisplayName("returns the stored size when the object is there")
+    void returnsSize_whenObjectIsThere() throws Exception {
+      StatObjectResponse response = mock(StatObjectResponse.class);
+      when(response.size()).thenReturn(4096L);
+      when(minioClient.statObject(any(StatObjectArgs.class))).thenReturn(response);
+
+      assertThat(minIOService.objectSize(BUCKET, OBJECT)).isEqualTo(4096L);
+    }
+
+    @Test
+    @DisplayName("returns -1 when MinIO answers NoSuchKey")
+    void returnsMinusOne_whenObjectIsAbsent() throws Exception {
+      ErrorResponse notFound =
+          new ErrorResponse(
+              "NoSuchKey", "The specified key does not exist.", BUCKET, OBJECT, null, null, null);
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ErrorResponseException(notFound, null, null));
+
+      assertThat(minIOService.objectSize(BUCKET, OBJECT)).isEqualTo(-1L);
+    }
+
+    @Test
+    @DisplayName("raises StorageException when the stat call itself fails")
+    void throwsStorageException_whenStatFails() throws Exception {
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ServerException("Internal error", 500, "trace-id"));
+
+      assertThatThrownBy(() -> minIOService.objectSize(BUCKET, OBJECT))
+          .isInstanceOf(StorageException.class);
+    }
+  }
+
+  // =====================================================================
   // ensurePublicReadPolicy
   // =====================================================================
 

@@ -14,6 +14,12 @@
 # *trước khi* có bất kỳ lần tải lên nào trong một môi trường.
 minio:
   url: ${MINIO_URL:http://localhost:9000}
+  # Địa chỉ app DÙNG ĐỂ GỌI MinIO (upload, stat, tạo bucket, đặt policy). Bỏ trống ⇒ dùng luôn
+  # minio.url. Production đặt về địa chỉ mạng nội bộ (http://minio:9000) để việc tạo bucket + đặt
+  # policy public-read KHÔNG phụ thuộc reverse proxy đã sẵn sàng hay chưa — lần khởi động đầu,
+  # Caddy chưa lên, lệnh đặt policy fail lặng lẽ và mọi ảnh seed trả 403. URL ký sẵn của sách vẫn
+  # ký theo minio.url (xem MinIOConfig#minioPresignClient).
+  internal-url: ${MINIO_INTERNAL_URL:}
   access-key: ${MINIO_ACCESS_KEY:minio_admin}
   secret-key: ${MINIO_SECRET_KEY:minio_admin_password}
 

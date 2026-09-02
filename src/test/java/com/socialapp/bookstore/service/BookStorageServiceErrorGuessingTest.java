@@ -15,7 +15,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
@@ -47,9 +46,20 @@ class BookStorageServiceErrorGuessingTest {
   private static final Integer AUTHOR_ID = 1;
 
   @Mock private MinioClient minioClient;
+
+  /** Signs display/download URLs (public address); see {@code MinIOConfig#minioPresignClient()}. */
+  @Mock private MinioClient minioPresignClient;
+
   @Mock private MinIOService minIOService;
 
-  @InjectMocks private BookStorageService bookStorageService;
+  private BookStorageService bookStorageService;
+
+  @org.junit.jupiter.api.BeforeEach
+  void setUp() {
+    // Built by hand rather than @InjectMocks: the two same-typed MinioClient params can only be
+    // told apart by name, which Mockito's constructor injection does not do.
+    bookStorageService = new BookStorageService(minioClient, minioPresignClient, minIOService);
+  }
 
   /**
    * For {@code uploadBook}. The stream is no longer read here — opening it, storing it and
@@ -263,7 +273,7 @@ class BookStorageServiceErrorGuessingTest {
     @DisplayName("shouldThrowStorageException_whenPresignedUrlGenerationTimesOut")
     void shouldThrowStorageException_whenPresignedUrlGenerationTimesOut() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new SocketTimeoutException("Read timed out"));
 
       // When / Then
@@ -277,7 +287,7 @@ class BookStorageServiceErrorGuessingTest {
     @DisplayName("shouldThrowStorageException_whenPresignedUrlGenerationHitsServerError")
     void shouldThrowStorageException_whenPresignedUrlGenerationHitsServerError() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new ServerException("Internal error", 500, "trace-id-xyz789"));
 
       // When / Then
@@ -293,7 +303,7 @@ class BookStorageServiceErrorGuessingTest {
         throws Exception {
       // Given — uploadCover no longer signs anything (B4), so the equivalent split is the
       // download path: the object is there, the presigned-URL round-trip is what fails
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new ConnectException("Connection refused"));
 
       // When / Then — the caller still only ever sees our own exception type

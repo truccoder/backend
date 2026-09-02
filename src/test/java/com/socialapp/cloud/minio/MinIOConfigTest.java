@@ -46,4 +46,37 @@ class MinIOConfigTest {
 
     assertThat(config.getUrl()).isNull();
   }
+
+  @Test
+  @DisplayName("getInternalUrl() falls back to the public URL when internal-url is unset")
+  void internalUrlFallsBackToPublic() {
+    MinIOConfig config = new MinIOConfig();
+
+    config.setUrl("https://files.elitenexus.id.vn");
+
+    assertThat(config.getInternalUrl()).isEqualTo("https://files.elitenexus.id.vn");
+  }
+
+  @Test
+  @DisplayName("getInternalUrl() falls back to the public URL when internal-url is blank")
+  void internalUrlFallsBackWhenBlank() {
+    MinIOConfig config = new MinIOConfig();
+
+    config.setUrl("https://files.elitenexus.id.vn");
+    config.setInternalUrl("   ");
+
+    assertThat(config.getInternalUrl()).isEqualTo("https://files.elitenexus.id.vn");
+  }
+
+  @Test
+  @DisplayName("getInternalUrl() uses internal-url when set, and strips its trailing slash")
+  void internalUrlUsedWhenSet() {
+    MinIOConfig config = new MinIOConfig();
+
+    config.setUrl("https://files.elitenexus.id.vn");
+    config.setInternalUrl("http://minio:9000/");
+
+    assertThat(config.getInternalUrl()).isEqualTo("http://minio:9000");
+    assertThat(config.getUrl()).isEqualTo("https://files.elitenexus.id.vn");
+  }
 }
