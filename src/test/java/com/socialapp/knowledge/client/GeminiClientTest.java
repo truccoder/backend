@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -16,12 +17,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.exception.ExternalRateLimitException;
 import com.socialapp.knowledge.config.GeminiProperties;
 
 import reactor.core.publisher.Mono;
@@ -128,6 +132,50 @@ class GeminiClientTest {
           .isInstanceOf(ExternalApiException.class)
           .hasMessage("Failed to generate content from Gemini")
           .hasCauseInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("should surface a Gemini 429 as ExternalRateLimitException (→ HTTP 429), not 503")
+    void shouldMapUpstream429_toRateLimitException() {
+      // Given — Gemini rejected the call with RESOURCE_EXHAUSTED. backend-plan B32: this must not
+      // read as a transient 503 the caller should retry — the shared free-tier key is spent.
+      stubGenerateContent(
+          Mono.error(
+              WebClientResponseException.create(
+                  429,
+                  "Too Many Requests",
+                  HttpHeaders.EMPTY,
+                  "{\"error\":{\"status\":\"RESOURCE_EXHAUSTED\"}}"
+                      .getBytes(StandardCharsets.UTF_8),
+                  StandardCharsets.UTF_8)));
+
+      // When / Then
+      assertThatThrownBy(() -> geminiClient.generateContent("prompt"))
+          .isInstanceOf(ExternalRateLimitException.class)
+          .hasMessage("Gemini quota or rate limit exceeded")
+          .hasCauseInstanceOf(WebClientResponseException.class);
+    }
+
+    @Test
+    @DisplayName(
+        "should keep any non-429 Gemini HTTP error as a generic ExternalApiException (503)")
+    void shouldMapOtherUpstreamStatuses_toGenericExternalApiException() {
+      // Given — a 503 from Gemini (overload / completion refused): transient, retry allowed, same
+      // 503 the caller has always seen. Not an ExternalRateLimitException.
+      stubGenerateContent(
+          Mono.error(
+              WebClientResponseException.create(
+                  503,
+                  "Service Unavailable",
+                  HttpHeaders.EMPTY,
+                  new byte[0],
+                  StandardCharsets.UTF_8)));
+
+      // When / Then
+      assertThatThrownBy(() -> geminiClient.generateContent("prompt"))
+          .isInstanceOf(ExternalApiException.class)
+          .isNotInstanceOf(ExternalRateLimitException.class)
+          .hasMessage("Failed to generate content from Gemini");
     }
 
     @Test

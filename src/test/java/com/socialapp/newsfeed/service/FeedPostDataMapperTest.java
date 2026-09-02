@@ -2,6 +2,7 @@ package com.socialapp.newsfeed.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -27,6 +28,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -66,6 +68,7 @@ class FeedPostDataMapperTest {
   private static UserEntity user(Integer id) {
     UserEntity user = new UserEntity();
     user.setId(id);
+    user.setUsername("author_" + id);
     user.setFullName("Author " + id);
     user.setEliteScore(0);
     return user;
@@ -90,6 +93,55 @@ class FeedPostDataMapperTest {
       // Then
       assertThat(data.getLikeCount()).isEqualTo(4);
       assertThat(data.getCommentCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("carries the author's username, so a feed card can link to their profile")
+    void carriesAuthorUsername() {
+      // Given — the public profile page is keyed by username and nothing maps an id to one, so
+      // without this field the author's name on a card rendered but led nowhere
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+
+      // When
+      FeedPostDataDto data = mapper.toFeedPostData(post);
+
+      // Then — read off the same UserEntity the other four author fields come from, so it costs
+      // no extra query
+      assertThat(data.getAuthorUsername()).isEqualTo("author_" + AUTHOR_ID);
+      assertThat(data.getAuthorFullName()).isEqualTo("Author " + AUTHOR_ID);
+    }
+
+    @Test
+    @DisplayName("carries the per-type breakdown beside the total")
+    void carriesReactionSummary() {
+      // Given - the reaction row lost its text labels, so a glyph and a number is all a reader
+      // has left. GET /reactions/summary could answer per post; ten cards meant ten requests.
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByType(10))
+          .thenReturn(Map.of(ReactionType.LIKE, 3L, ReactionType.INSIGHT, 1L));
+
+      // When
+      FeedPostDataDto data = mapper.toFeedPostData(post);
+
+      // Then
+      assertThat(data.getReactionSummary())
+          .containsEntry(ReactionType.LIKE, 3L)
+          .containsEntry(ReactionType.INSIGHT, 1L);
+    }
+
+    @Test
+    @DisplayName("sends an empty breakdown, not null, for a post nobody reacted to")
+    void emptySummaryRatherThanNull() {
+      // Given - null is reserved for cache entries written before the field existed, where the
+      // client genuinely does not know; "nobody has reacted" is a known answer
+      PostEntity post = post(10, AUTHOR_ID);
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByType(10)).thenReturn(Map.of());
+
+      // When / Then
+      assertThat(mapper.toFeedPostData(post).getReactionSummary()).isEmpty();
     }
 
     @Test
@@ -131,6 +183,25 @@ class FeedPostDataMapperTest {
     }
 
     @Test
+    @DisplayName("batches the reaction breakdown too, one group-by for the whole page")
+    void batchesReactionSummaries() {
+      // Given - the third aggregate. Left per-post it would be twenty more round trips on a page
+      // that already runs three queries in total.
+      when(userRepository.findAllById(List.of(AUTHOR_ID))).thenReturn(List.of(user(AUTHOR_ID)));
+      when(postReactionRepository.countByTypeForPostIds(List.of(10, 11)))
+          .thenReturn(Map.of(10, Map.of(ReactionType.CLAP, 2L)));
+
+      // When
+      List<FeedPostDataDto> page =
+          mapper.toFeedPostDataPage(List.of(post(10, AUTHOR_ID), post(11, AUTHOR_ID)));
+
+      // Then - a post absent from the map defaults to an empty breakdown, not to null
+      assertThat(page.get(0).getReactionSummary()).containsExactly(entry(ReactionType.CLAP, 2L));
+      assertThat(page.get(1).getReactionSummary()).isEmpty();
+      verify(postReactionRepository, never()).countByType(10);
+    }
+
+    @Test
     @DisplayName("skips a post whose author row is gone rather than inventing a placeholder")
     void skipsPostsWithMissingAuthor() {
       // Given: post 11 was written by a deleted account
@@ -162,10 +233,12 @@ class FeedPostDataMapperTest {
   @DisplayName("updatedAt")
   class EditedAt {
 
-    private FeedPostDataDto mapWithTimestamps(OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+    private FeedPostDataDto mapWithTimestamps(
+        OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime editedAt) {
       PostEntity post = post(10, AUTHOR_ID);
       post.setCreatedAt(createdAt);
       post.setUpdatedAt(updatedAt);
+      post.setEditedAt(editedAt);
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID)));
       return mapper.toFeedPostData(post);
     }
@@ -173,57 +246,47 @@ class FeedPostDataMapperTest {
     @Test
     @DisplayName("stays null for a post nobody has edited")
     void nullForUnedited() {
-      // Given — @CreationTimestamp and @UpdateTimestamp are two generators and both fire on the
-      // same INSERT, so an untouched post already carries an updated_at a few microseconds later.
-      // A straight isAfter() comparison would mark every post in the feed as edited.
+      // Given — editedAt null, updatedAt equal to createdAt (the ordinary case: one INSERT, no
+      // asynchronous write ever touched the row).
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, created.plusNanos(400_000));
+      FeedPostDataDto data = mapWithTimestamps(created, created, null);
 
       // Then
       assertThat(data.getUpdatedAt()).isNull();
     }
 
     @Test
-    @DisplayName("stays null exactly at the one-second threshold (boundary)")
-    void nullAtThreshold() {
-      // Given — BVA on EDIT_THRESHOLD: the comparison is strictly greater than
+    @DisplayName("stays null even when updatedAt drifts far from createdAt — B28")
+    void nullDespiteUpdatedAtDrift() {
+      // Given — this is the exact shape of B28 (docs/backend-plan.md): ModerationEventListener
+      // rewrites moderationStatus on the same row 1-2s after creation, bumping @UpdateTimestamp,
+      // on a post nobody has edited. A mapper reading updatedAt (or a threshold on it) would
+      // mislabel this as edited; reading editedAt does not.
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
+      OffsetDateTime moderationRewrite = created.plusSeconds(2);
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, created.plusSeconds(1));
+      FeedPostDataDto data = mapWithTimestamps(created, moderationRewrite, null);
 
       // Then
       assertThat(data.getUpdatedAt()).isNull();
     }
 
     @Test
-    @DisplayName("carries the timestamp once a real edit has landed (boundary: threshold + 1ms)")
+    @DisplayName("carries the timestamp once PostService#updatePost has set editedAt")
     void setForEdited() {
-      // Given — BVA just past the threshold. A real edit is a second request, minutes apart.
+      // Given
       OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
-      OffsetDateTime edited = created.plusSeconds(1).plusNanos(1_000_000);
+      OffsetDateTime edited = created.plusMinutes(5);
 
       // When
-      FeedPostDataDto data = mapWithTimestamps(created, edited);
+      FeedPostDataDto data = mapWithTimestamps(created, edited, edited);
 
       // Then — three things point at the body of a post (a skill proof, a stored explanation, the
       // reputation its reactions awarded); an edit that arrives unannounced invalidates all three
       assertThat(data.getUpdatedAt()).isEqualTo(edited);
-    }
-
-    @Test
-    @DisplayName("stays null for a row written before updated_at was populated")
-    void nullWhenColumnIsNull() {
-      // Given — EP: legacy row, updated_at NULL
-      OffsetDateTime created = OffsetDateTime.parse("2026-08-19T10:00:00Z");
-
-      // When
-      FeedPostDataDto data = mapWithTimestamps(created, null);
-
-      // Then
-      assertThat(data.getUpdatedAt()).isNull();
     }
   }
 }

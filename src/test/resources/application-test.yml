@@ -36,6 +36,10 @@ onesignal:
   app-id: test-app-id
   rest-api-key: test-rest-api-key
 
+security:
+  # Test-only key, base64 of 32 zero bytes. Never used anywhere real.
+  column-encryption-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
 gemini:
   api-key: test-gemini-api-key
 

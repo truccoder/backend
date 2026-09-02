@@ -105,10 +105,8 @@ public class GuestRateLimitFilter extends OncePerRequestFilter {
     response
         .getWriter()
         .write(
-            """
-            {"code":429,"error":"Too Many Requests",\
-            "message":"Too many requests from this address. Sign in for a higher limit.",\
-            "path":"%s"}"""
-                .formatted(request.getRequestURI()));
+            RateLimitErrorBody.tooManyRequests(
+                "Too many requests from this address. Sign in for a higher limit.",
+                request.getRequestURI()));
   }
 }

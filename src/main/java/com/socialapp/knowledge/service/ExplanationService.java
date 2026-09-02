@@ -1,7 +1,10 @@
 package com.socialapp.knowledge.service;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
@@ -11,21 +14,27 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.enums.LearningCategory;
+import com.socialapp.common.ratelimit.CostlyOperationProperties;
+import com.socialapp.common.ratelimit.FixedWindowRateLimiter;
 import com.socialapp.knowledge.client.GeminiClient;
 import com.socialapp.knowledge.dto.ExplanationResponseDto;
 import com.socialapp.knowledge.dto.KnowledgeLibraryResponseDto;
 import com.socialapp.knowledge.dto.SaveExplanationRequestDto;
 import com.socialapp.knowledge.entity.ExplanationEntity;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.entity.VaultContextSettingsEntity;
 import com.socialapp.knowledge.entity.VaultNoteEntity;
 import com.socialapp.knowledge.entity.enums.ExplanationStyle;
 import com.socialapp.knowledge.entity.enums.VaultPermission;
 import com.socialapp.knowledge.repository.ExplanationRepository;
 import com.socialapp.knowledge.repository.PersonalAccessTokenRepository;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.repository.VaultContextSettingsRepository;
 import com.socialapp.knowledge.repository.VaultNoteRepository;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.posts.service.PostVisibilityService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,25 +43,68 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class ExplanationService {
+
+  private static final String AI_RATE_LIMIT_KEY_PREFIX = "ratelimit:ai:explain:";
+
+  /** How many vault notes may be summarised into one prompt — see {@code loadVaultContext}. */
+  private static final int MAX_VAULT_NOTES_IN_CONTEXT = 50;
+
   private final GeminiClient geminiClient;
+  private final FixedWindowRateLimiter rateLimiter;
+  private final CostlyOperationProperties costlyOperationProperties;
   private final ExplanationRepository explanationRepository;
   private final UserProfessionalProfileRepository profileRepository;
   private final VaultNoteRepository vaultNoteRepository;
+  private final VaultContextSettingsRepository settingsRepository;
   private final PersonalAccessTokenRepository tokenRepository;
   private final PostRepository postRepository;
+  private final PostVisibilityService postVisibilityService;
   private final ObjectMapper objectMapper;
 
   /**
    * Generate explanation without saving. Returns result for user to decide whether to save.
    * Throws 428 if professional profile is not set up.
+   *
+   * <p><b>Deliberately not {@code @Transactional}.</b> The slow part of this method is {@code
+   * geminiClient.generateContent}, seconds of waiting on somebody else's model, and a transaction
+   * opened around the reads above it would hold its Hikari connection for that whole wait — a
+   * handful of concurrent explanations is then enough to starve the pool for every other request
+   * in the app. Nothing here needs one: the three reads are independent lookups, none of them
+   * needs a shared snapshot, each repository call is transactional on its own, and neither the
+   * visibility check nor the vault context touches a LAZY association — {@code
+   * PostVisibilityService.isVisibleTo} reads scalar columns, and {@code VaultNoteEntity.tags} and
+   * {@code links} are jsonb columns that arrive with the row.
    */
-  public ExplanationResponseDto explainPost(Integer userId, Integer postId, String feedbackNote) {
+  public ExplanationResponseDto explainPost(
+      Integer userId, Integer postId, String feedbackNote, String language) {
+    // AN OVERLOAD RATHER THAN A FIFTH ARGUMENT AT EVERY CALL SITE. "No opinion about vault
+    // context" is exactly what every existing caller means, and null is what that reads as
+    // downstream — so this is not a legacy shim, it is the shorter way to say the common thing.
+    return explainPost(userId, postId, feedbackNote, language, null);
+  }
+
+  public ExplanationResponseDto explainPost(
+      Integer userId,
+      Integer postId,
+      String feedbackNote,
+      String language,
+      Boolean useVaultContext) {
     PostEntity post =
         postRepository
             .findById(postId)
             .orElseThrow(
                 () ->
                     new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found: " + postId));
+
+    // This method returns the post body verbatim as originalContent AND sends it to Gemini, so it
+    // has to clear the same rule as every other read path. Existence alone was not enough: post
+    // ids are sequential (see PostQueryService), so any signed-in user could walk them and read
+    // the full text of PRIVATE, FRIENDS-only, PENDING or REJECTED posts — and have a third party
+    // read them too. Same 404-not-403 choice as PostReactionService#requireVisiblePost: a post you
+    // may not read must not be distinguishable from one that does not exist.
+    if (!postVisibilityService.isVisibleTo(post, userId)) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found: " + postId);
+    }
 
     UserProfessionalProfileEntity profile = profileRepository.findById(userId).orElse(null);
     if (Objects.isNull(profile)) {
@@ -61,19 +113,31 @@ public class ExplanationService {
           "Professional profile required. Please set up your profile first.");
     }
 
-    String vaultContext = loadVaultContext(userId);
-    String prompt = buildPrompt(post.getContent(), profile, feedbackNote, vaultContext);
+    requireAiBudget(userId);
+
+    // Not post.getContent(): a CODE_SNIPPET keeps its code in a jsonb detail block and an ARTICLE
+    // keeps its body in another, so content is routinely blank on exactly the posts worth
+    // explaining. explainableText() gathers every block a reader looks at — same fix moderation
+    // already made with moderatableText(). Used for both the prompt and originalContent so the
+    // card's "original" panel is not blank either.
+    String explainable = post.explainableText();
+    String vaultContext = loadVaultContext(userId, useVaultContext);
+    String prompt = buildPrompt(explainable, profile, feedbackNote, vaultContext, language);
     String geminiResponse = geminiClient.generateContent(prompt);
     GeminiExplanationResult parsed = parseGeminiResponse(geminiResponse);
 
     return ExplanationResponseDto.builder()
         .postId(postId)
-        .originalContent(post.getContent())
+        .originalContent(explainable)
         .explanationContent(parsed.explanation)
         .concepts(parsed.concepts)
         .prerequisites(parsed.prerequisites)
         .complexityScore(parsed.complexityScore)
-        .externalLinks(parsed.externalLinks)
+        // B34: a model that is not grounded produces links that do not resolve — non-ASCII
+        // spliced into the path, a fabricated deep path on a real host. Drop the broken ones
+        // here so the response, the card, and the saved copy all agree on what is followable.
+        .externalLinks(ExternalLinkSanitizer.followable(parsed.externalLinks))
+        .category(parsed.category)
         .build();
   }
 
@@ -90,8 +154,11 @@ public class ExplanationService {
             .explanationContent(request.getExplanationContent())
             .concepts(request.getConcepts())
             .prerequisites(request.getPrerequisites())
-            .externalLinks(request.getExternalLinks())
+            // Filtered again on the way in: the generate path already sanitises, but a client can
+            // POST here directly, and a broken link is just as unfollowable once it is persisted.
+            .externalLinks(ExternalLinkSanitizer.followable(request.getExternalLinks()))
             .complexityScore(request.getComplexityScore())
+            .category(request.getCategory())
             .version(nextVersion)
             .build();
 
@@ -108,7 +175,52 @@ public class ExplanationService {
     return KnowledgeLibraryResponseDto.builder().explanations(dtos).totalCount(dtos.size()).build();
   }
 
-  private String loadVaultContext(Integer userId) {
+  /**
+   * Refuses the call when this user has spent their AI budget for the window.
+   *
+   * <p>Keyed on the user rather than the IP: the endpoint requires a session, so the account is the
+   * accountable thing, and an IP key would let one person spread a loop across networks while
+   * punishing everyone behind a shared one.
+   *
+   * <p>Uses the same {@code FixedWindowRateLimiter} as the auth and guest limiters — including its
+   * fail-open behaviour, so a Redis outage degrades the ceiling rather than blocking study.
+   */
+  private void requireAiBudget(Integer userId) {
+    if (!costlyOperationProperties.isEnabled()) {
+      return;
+    }
+    boolean overLimit =
+        rateLimiter.isOverLimit(
+            AI_RATE_LIMIT_KEY_PREFIX + userId,
+            costlyOperationProperties.getAiRequests(),
+            costlyOperationProperties.getAiWindow());
+    if (overLimit) {
+      log.warn("AI explanation budget exhausted for user {}", userId);
+      throw new ResponseStatusException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          "You have requested a lot of explanations recently. Please try again later.");
+    }
+  }
+
+  /**
+   * The reader's own notes, summarised for the prompt — or {@code null} when they must not be used.
+   *
+   * <p>Three gates, in order of how cheap they are to check:
+   *
+   * <ol>
+   *   <li>{@code useVaultContext} — this request's own answer. {@code FALSE} and only {@code FALSE}
+   *       turns it off; {@code null} means the caller expressed no preference, which is not the
+   *       same as saying no.
+   *   <li>A {@code BIDIRECTIONAL} token must exist. This is the permission the notes arrived
+   *       under, so it is also the permission they may be read under.
+   *   <li>There must be notes.
+   * </ol>
+   */
+  private String loadVaultContext(Integer userId, Boolean useVaultContext) {
+    if (Boolean.FALSE.equals(useVaultContext)) {
+      return null;
+    }
+
     boolean hasBidirectionalAccess =
         tokenRepository.findByUserId(userId).stream()
             .anyMatch(t -> VaultPermission.BIDIRECTIONAL.equals(t.getVaultPermission()));
@@ -117,9 +229,32 @@ public class ExplanationService {
       return null;
     }
 
-    List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdWithTags(userId);
+    /*
+     * ORDERED, AND NO LONGER FILTERED BY "HAS TAGS" — two bugs that only showed up together.
+     *
+     * This used to call findByUserIdWithTags, whose `tags IS NOT NULL` clause SILENTLY DROPPED
+     * EVERY UNTAGGED NOTE. A reader who does not tag — which is most people, and the plugin does
+     * not require it — synced their whole vault and got no context at all, with nothing anywhere
+     * saying why. The tags were never the point either: they are one of three things sent, and a
+     * note contributes its filename and links whether or not it has any.
+     *
+     * The query also had no ORDER BY, so the 50-note slice below was 50 rows in whatever order
+     * Postgres felt like returning — which could change after a vacuum. "Which of my notes does
+     * the AI see?" had no answer anyone could give. Most-recently-edited is the ordering every
+     * reading of this code already assumed.
+     */
+    List<VaultNoteEntity> notes = vaultNoteRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+    notes = applyTagFilter(userId, notes);
     if (notes.isEmpty()) {
       return null;
+    }
+
+    // Capped. Every note here goes into the prompt of every /explain call, so an untrimmed vault
+    // multiplies the token cost of each request by its own size and eventually overruns the model's
+    // context window outright. Only filenames, tags and links are sent — not note bodies — so
+    // taking a slice costs little context and bounds the cost.
+    if (notes.size() > MAX_VAULT_NOTES_IN_CONTEXT) {
+      notes = notes.subList(0, MAX_VAULT_NOTES_IN_CONTEXT);
     }
 
     return notes.stream()
@@ -134,11 +269,57 @@ public class ExplanationService {
         .collect(Collectors.joining("\n"));
   }
 
+  /**
+   * Narrow the vault to the notes the reader said may be used.
+   *
+   * <p>The plugin pushes a WHOLE vault — daily logs, meeting notes, everything — and before this
+   * filter the only control anyone had was all-or-nothing. Someone who wanted the model to see
+   * their backend notes but not their journal had to stop syncing entirely.
+   *
+   * <p><b>Exclusions are applied after inclusions and always win.</b> A note tagged both
+   * {@code #tech} and {@code #private} is dropped. The other order would let a broad include
+   * quietly override a deliberate exclusion, and on a privacy control that is the direction of
+   * mistake that actually hurts.
+   *
+   * <p>Comparison is on lower-cased tags because {@code VaultNoteService.normalise} stores the
+   * settings that way; note tags come from the plugin unmodified, so the folding happens here.
+   */
+  private List<VaultNoteEntity> applyTagFilter(Integer userId, List<VaultNoteEntity> notes) {
+    VaultContextSettingsEntity settings = settingsRepository.findById(userId).orElse(null);
+    if (Objects.isNull(settings)) {
+      return notes;
+    }
+
+    Set<String> include = Set.copyOf(settings.getIncludeTags());
+    Set<String> exclude = Set.copyOf(settings.getExcludeTags());
+    if (include.isEmpty() && exclude.isEmpty()) {
+      return notes;
+    }
+
+    return notes.stream()
+        .filter(
+            note -> {
+              Set<String> tags =
+                  note.getTags().stream()
+                      .map(tag -> tag.toLowerCase(Locale.ROOT))
+                      .collect(Collectors.toSet());
+
+              // An empty include list means "no restriction", not "match nothing" — otherwise
+              // configuring only an exclusion would silently blank the whole vault.
+              if (!include.isEmpty() && tags.stream().noneMatch(include::contains)) {
+                return false;
+              }
+              return tags.stream().noneMatch(exclude::contains);
+            })
+        .toList();
+  }
+
   private String buildPrompt(
       String postContent,
       UserProfessionalProfileEntity profile,
       String feedbackNote,
-      String vaultContext) {
+      String vaultContext,
+      String language) {
     StringBuilder sb = new StringBuilder();
 
     sb.append(
@@ -151,8 +332,36 @@ public class ExplanationService {
     sb.append("3. Each annotation must reference which part of the original it explains\n");
     sb.append("4. Use analogies appropriate for the reader's experience level\n");
     sb.append("5. If a concept has prerequisites, list them explicitly\n");
-    sb.append("6. Respond in the same language as the original post\n");
-    sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n\n");
+    String targetLanguage = resolveLanguage(language);
+    if (Objects.isNull(targetLanguage)) {
+      sb.append("6. Respond in the same language as the original post\n");
+    } else {
+      // Overrides rule 6 rather than being appended after it: two instructions that can disagree
+      // ("match the post" and "answer in Vietnamese") leave the model to pick, and it picked the
+      // post's language often enough that the reader's choice looked ignored at random.
+      sb.append("6. Write EVERY field of your response entirely in ")
+          .append(targetLanguage)
+          .append(", whatever language the original post is written in. Do not translate the")
+          .append(" original post itself — it is quoted below for reference only.\n");
+    }
+    sb.append("7. Include 2-5 external links (blog posts, docs, videos) for deeper learning\n");
+    // backend-plan B34: the model was indenting sub-bullets by one space. CommonMark needs the
+    // indent to reach the width of the parent marker (two columns for "* "), so a one-space
+    // sub-item is parsed as a sibling and the whole list flattens to one level in remark-gfm.
+    sb.append(
+        "8. In \"explanation\", write valid CommonMark. Keep bullet lists to a single level"
+            + " wherever you can — prefer a flat list with a **bold lead-in** per item. If you"
+            + " genuinely must nest, indent each sub-item by exactly TWO spaces per level.\n");
+    // B34: the model invented links — a real host with a fabricated deep path, a title that did
+    // not match the page, non-ASCII spliced mid-URL, a different set every regeneration. The
+    // service drops the syntactically broken ones (sanitizeExternalLinks), but only the prompt
+    // can stop the plausible-looking wrong ones.
+    sb.append(
+        "9. Every \"externalLinks\" URL must be one you are confident is real and currently"
+            + " reachable: an official documentation page, a well-known engineering blog, or a"
+            + " conference talk. Use plain ASCII. Do NOT guess deep paths — if you are unsure of"
+            + " the exact page, link the site's root, and omit a link rather than invent one. The"
+            + " \"title\" must be the actual title of that page.\n\n");
 
     sb.append("=== READER PROFILE ===\n");
     sb.append("- Job title: ").append(profile.getJobTitle()).append("\n");
@@ -197,6 +406,7 @@ public class ExplanationService {
           "concepts": ["concept1", "concept2"],
           "prerequisites": ["prerequisite knowledge 1", "prerequisite knowledge 2"],
           "complexityScore": 3,
+          "category": "BACKEND",
           "externalLinks": [
             {"title": "Resource title", "url": "https://...", "reason": "Why this helps"}
           ]
@@ -207,7 +417,39 @@ public class ExplanationService {
         externalLinks should be real, reputable URLs (official docs, well-known blogs, conference talks).
         """);
 
+    // Danh sách hằng số sinh từ chính enum, không gõ tay vào text block ở trên: thêm một chủ đề
+    // mới mà quên sửa prompt thì model sẽ không bao giờ trả về nó, và lỗi đó im lặng tuyệt đối —
+    // mọi bài thuộc chủ đề mới chỉ lặng lẽ rơi vào OTHER.
+    String allowedCategories =
+        Arrays.stream(LearningCategory.values()).map(Enum::name).collect(Collectors.joining(", "));
+    sb.append("\"category\" must be exactly one of: ")
+        .append(allowedCategories)
+        .append(". Pick the single closest one; use OTHER only when none of the others fit.")
+        .append('\n');
+
     return sb.toString();
+  }
+
+  /**
+   * Turns a caller-supplied language tag into a language name the prompt can use, or {@code null}
+   * when the caller stated nothing usable.
+   *
+   * <p>The tag is resolved through {@link Locale} and it is the JDK's <em>English display name</em>
+   * that goes into the prompt, never the caller's own text. That is the second half of the
+   * validation on {@code ExplainRequestDto.language}: even a tag that satisfies the pattern only
+   * reaches Gemini as a word taken from the JDK's language table.
+   *
+   * <p>A well-formed tag the JDK has no name for ({@code "zz"}) comes back as the tag itself. That
+   * is left alone rather than rejected: the pattern has already limited it to letters, digits and
+   * hyphens, so nothing dangerous survives that far, and a request naming a language nobody can
+   * name is not worth a 400 when the model will make a reasonable job of a bare tag.
+   */
+  private String resolveLanguage(String language) {
+    if (Objects.isNull(language) || language.isBlank()) {
+      return null;
+    }
+    String displayName = Locale.forLanguageTag(language).getDisplayName(Locale.ENGLISH);
+    return displayName.isBlank() ? null : displayName;
   }
 
   private String explanationStyleInstruction(ExplanationStyle style) {
@@ -219,11 +461,67 @@ public class ExplanationService {
     };
   }
 
+  /**
+   * Turns Gemini's answer into the structured result, or fails with a 503 rather than handing back
+   * something unusable.
+   *
+   * <p>The model is asked for a bare JSON object, but it intermittently wraps it in a {@code
+   * ```json} fence, prefixes a sentence, or emits a trailing comma — and the old code, on any parse
+   * failure, dumped the entire raw string into {@code explanationContent}. The card then rendered
+   * {@code {"explanation": "…\n\n* **…**"}} verbatim, with the {@code \n} showing as two literal
+   * characters (FE's {@code docs/backend-plan.md} B40). Two lines of defence now:
+   *
+   * <ol>
+   *   <li>{@link #extractJsonObject} strips a fence and trims to the outermost braces before
+   *       parsing, which recovers the common "valid JSON with decoration" case;
+   *   <li>on a genuine parse failure, one repair round-trip asks the model to fix its own output;
+   * </ol>
+   *
+   * <p>If both fail we throw {@link HttpStatus#SERVICE_UNAVAILABLE} — the same contract as a Gemini
+   * outage (B32), which FE already renders as "try again" — instead of returning an envelope the
+   * reader would see as raw text.
+   */
   private GeminiExplanationResult parseGeminiResponse(String response) {
-    try {
-      JsonNode root = objectMapper.readTree(response);
+    GeminiExplanationResult parsed = tryReadStructured(response);
+    if (Objects.nonNull(parsed)) {
+      return parsed;
+    }
 
-      String explanation = root.path("explanation").asText("");
+    log.warn("Gemini explanation was not usable JSON; attempting one repair pass");
+    // A raw ExternalApiException / ExternalRateLimitException from this call propagates unchanged
+    // (429 stays 429 — see GeminiClient / B32); only a still-unparseable answer falls through.
+    String repairedResponse = geminiClient.generateContent(buildRepairPrompt(response));
+    GeminiExplanationResult repaired = tryReadStructured(repairedResponse);
+    if (Objects.nonNull(repaired)) {
+      return repaired;
+    }
+
+    log.warn("Gemini repair pass still did not yield usable JSON; returning 503");
+    throw new ResponseStatusException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "The explanation service returned an unreadable response. Please try again.");
+  }
+
+  /**
+   * Parses one candidate string into a result, or returns {@code null} when it is not a usable
+   * structured explanation (not an object, no {@code explanation} field, blank explanation, or
+   * malformed JSON). Never throws.
+   */
+  private GeminiExplanationResult tryReadStructured(String response) {
+    String json = extractJsonObject(response);
+    if (Objects.isNull(json)) {
+      return null;
+    }
+    try {
+      JsonNode root = objectMapper.readTree(json);
+      if (!root.isObject() || !root.hasNonNull("explanation")) {
+        return null;
+      }
+
+      String explanation = unwrapNestedEnvelope(root.path("explanation").asText(""));
+      if (explanation.isBlank()) {
+        return null;
+      }
       List<String> concepts =
           objectMapper.convertValue(
               root.path("concepts"),
@@ -233,6 +531,7 @@ public class ExplanationService {
               root.path("prerequisites"),
               objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
       int complexityScore = root.path("complexityScore").asInt(3);
+      LearningCategory category = parseCategory(root.path("category").asText("OTHER"));
 
       List<ExplanationResponseDto.ExternalLink> externalLinks = List.of();
       JsonNode linksNode = root.path("externalLinks");
@@ -247,10 +546,85 @@ public class ExplanationService {
       }
 
       return new GeminiExplanationResult(
-          explanation, concepts, prerequisites, complexityScore, externalLinks);
+          explanation, concepts, prerequisites, complexityScore, externalLinks, category);
     } catch (Exception e) {
-      log.warn("Failed to parse structured Gemini response, using raw text: {}", e.getMessage());
-      return new GeminiExplanationResult(response, List.of(), List.of(), 3, List.of());
+      log.warn("Failed to parse structured Gemini response: {}", e.getMessage());
+      return null;
+    }
+  }
+
+  /**
+   * Pulls the JSON object out of whatever the model actually returned: strips a leading/trailing
+   * {@code ```} / {@code ```json} fence, then trims to the span between the first {@code &#123;} and
+   * the last {@code &#125;}. Returns {@code null} when there is no brace pair to work with.
+   */
+  private static String extractJsonObject(String text) {
+    if (Objects.isNull(text)) {
+      return null;
+    }
+    String s = text.strip();
+    if (s.startsWith("```")) {
+      int firstNewline = s.indexOf('\n');
+      if (firstNewline >= 0) {
+        s = s.substring(firstNewline + 1);
+      }
+      int closingFence = s.lastIndexOf("```");
+      if (closingFence >= 0) {
+        s = s.substring(0, closingFence);
+      }
+      s = s.strip();
+    }
+    int start = s.indexOf('{');
+    int end = s.lastIndexOf('}');
+    if (start < 0 || end <= start) {
+      return null;
+    }
+    return s.substring(start, end + 1);
+  }
+
+  /**
+   * Handles the double-wrapped case — {@code {"explanation": "{\"explanation\": \"…real…\"}"}} —
+   * that FE currently unwinds client-side with {@code liftExplanationEnvelope}. Only unwraps when
+   * the whole field is itself a JSON object carrying an {@code explanation} key; otherwise returns
+   * the string untouched, so an explanation that merely quotes some JSON is left alone.
+   */
+  private String unwrapNestedEnvelope(String explanation) {
+    String trimmed = explanation.strip();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return explanation;
+    }
+    try {
+      JsonNode inner = objectMapper.readTree(trimmed);
+      if (inner.isObject() && inner.hasNonNull("explanation")) {
+        return inner.path("explanation").asText(explanation);
+      }
+    } catch (Exception ignored) {
+      // Not actually nested JSON — keep the original text.
+    }
+    return explanation;
+  }
+
+  private String buildRepairPrompt(String malformed) {
+    return "The text below was meant to be a single JSON object with the keys explanation,"
+        + " concepts, prerequisites, complexityScore, category and externalLinks, but it is"
+        + " malformed or wrapped in extra text. Return ONLY the corrected, valid, minified JSON"
+        + " object — no code fence, no commentary, no leading or trailing prose.\n\n"
+        + malformed;
+  }
+
+  /**
+   * Đọc nhãn chủ đề model trả về, hoặc {@code OTHER} nếu nó trả về thứ không có trong enum.
+   *
+   * <p>Không ném lỗi: một nhãn lạ chỉ làm hỏng cái tab, còn bản giải thích — thứ người dùng chờ
+   * và đã trả tiền model để có — thì vẫn dùng được nguyên vẹn. Cùng cách xử lý với {@code
+   * TrendingClassificationService.parseCategory}, nơi cũng là một nhãn do model đặt.
+   */
+  private LearningCategory parseCategory(String category) {
+    try {
+      return LearningCategory.valueOf(category);
+    } catch (IllegalArgumentException e) {
+      log.warn("Unknown learning category '{}' from Gemini, keeping OTHER", category);
+      return LearningCategory.OTHER;
     }
   }
 
@@ -266,6 +640,7 @@ public class ExplanationService {
         // the loss actually showed up, since that is where the user goes back to find them.
         .externalLinks(entity.getExternalLinks())
         .complexityScore(entity.getComplexityScore())
+        .category(entity.getCategory())
         .version(entity.getVersion())
         .createdAt(entity.getCreatedAt())
         .build();
@@ -276,5 +651,6 @@ public class ExplanationService {
       List<String> concepts,
       List<String> prerequisites,
       int complexityScore,
-      List<ExplanationResponseDto.ExternalLink> externalLinks) {}
+      List<ExplanationResponseDto.ExternalLink> externalLinks,
+      LearningCategory category) {}
 }

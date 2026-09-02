@@ -24,6 +24,20 @@ public interface ProjectPositionRepository extends JpaRepository<ProjectPosition
   Optional<ProjectPositionEntity> findByIdForUpdate(@Param("id") Integer id);
 
   /**
+   * One position with its project and the project's author loaded — what every owner-scoped
+   * position operation (edit, delete, change status) needs to run its ownership check without a
+   * lazy load, {@code open-in-view} being off.
+   */
+  @Query(
+      """
+      SELECT p FROM ProjectPositionEntity p
+      JOIN FETCH p.project pr
+      JOIN FETCH pr.author
+      WHERE p.id = :id
+      """)
+  Optional<ProjectPositionEntity> findByIdWithProjectAuthor(@Param("id") Integer id);
+
+  /**
    * Every position belonging to any of {@code projectIds}, in one query.
    *
    * <p>This is what keeps the project list at two queries instead of one per project: the caller

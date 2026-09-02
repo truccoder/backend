@@ -14,6 +14,7 @@ import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.BookReviewEntity;
 import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.repository.BookReviewRepository;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -56,6 +57,9 @@ public class BookReviewService {
               .type(NotificationType.BOOK_REVIEW)
               .title("New review on your book")
               .body(actorName(userId) + " reviewed \"" + book.getTitle() + "\"")
+              .messageKey(NotificationMessages.BOOK_REVIEW)
+              .messageArgs(
+                  NotificationMessages.args("actor", actorName(userId), "book", book.getTitle()))
               .referenceId(bookId)
               .referenceType("BOOK")
               .build());

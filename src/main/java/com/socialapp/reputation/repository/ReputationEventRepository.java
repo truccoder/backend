@@ -40,6 +40,23 @@ public interface ReputationEventRepository extends JpaRepository<ReputationEvent
       @Param("sourceType") RepSourceType sourceType,
       @Param("sourceId") String sourceId);
 
+  /**
+   * Deletes every event of one type whose {@code sourceId} starts with {@code prefix}. Rows
+   * deleted are returned.
+   *
+   * <p>For the case a single {@code (userId, sourceType, sourceId)} cannot express: a post
+   * accrues one {@code REACTION_RECEIVED} row per reactor, keyed {@code "{postId}:{reactorId}"},
+   * and when the post is deleted all of them have to go at once — see {@code
+   * ReputationService.revokeByPrefix}. {@code prefix} is caller-built from numeric ids, so it
+   * carries no {@code LIKE} wildcards to escape.
+   */
+  @Modifying
+  @Query(
+      "DELETE FROM ReputationEventEntity e "
+          + "WHERE e.sourceType = :sourceType AND e.sourceId LIKE CONCAT(:prefix, '%')")
+  int deleteBySourceTypeAndSourceIdPrefix(
+      @Param("sourceType") RepSourceType sourceType, @Param("prefix") String prefix);
+
   @Query("SELECT COALESCE(SUM(e.points), 0) FROM ReputationEventEntity e WHERE e.userId = :userId")
   int sumPointsByUserId(@Param("userId") Integer userId);
 
