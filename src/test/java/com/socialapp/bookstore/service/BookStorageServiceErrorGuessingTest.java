@@ -7,7 +7,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
@@ -16,7 +15,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
@@ -48,15 +46,29 @@ class BookStorageServiceErrorGuessingTest {
   private static final Integer AUTHOR_ID = 1;
 
   @Mock private MinioClient minioClient;
+
+  /** Signs display/download URLs (public address); see {@code MinIOConfig#minioPresignClient()}. */
+  @Mock private MinioClient minioPresignClient;
+
   @Mock private MinIOService minIOService;
 
-  @InjectMocks private BookStorageService bookStorageService;
+  private BookStorageService bookStorageService;
 
-  /** For {@code uploadBook}, which reads the stream via try-with-resources. */
-  private static MultipartFile mockBookFile(String filename, byte[] bytes) throws IOException {
+  @org.junit.jupiter.api.BeforeEach
+  void setUp() {
+    // Built by hand rather than @InjectMocks: the two same-typed MinioClient params can only be
+    // told apart by name, which Mockito's constructor injection does not do.
+    bookStorageService = new BookStorageService(minioClient, minioPresignClient, minIOService);
+  }
+
+  /**
+   * For {@code uploadBook}. The stream is no longer read here — opening it, storing it and
+   * translating MinIO's failures all live inside {@code MinIOService} now — so only the filename
+   * the object key is built from needs stubbing.
+   */
+  private static MultipartFile mockBookFile(String filename, byte[] bytes) {
     MultipartFile file = mock(MultipartFile.class);
     when(file.getOriginalFilename()).thenReturn(filename);
-    when(file.getInputStream()).thenReturn(new ByteArrayInputStream(bytes));
     return file;
   }
 
@@ -93,16 +105,22 @@ class BookStorageServiceErrorGuessingTest {
     void shouldThrowStorageException_whenBookFileStreamIsCorruptedMidRead() throws Exception {
       // Given — simulates a truncated/corrupted upload: the client's temp file storage fails
       // while the server tries to read it (distinct from a MinIO-side failure)
+      // Reading the stream moved into MinIOService, so that is where a truncated body now
+      // surfaces — and it arrives here already translated to StorageException, exactly like a
+      // MinIO-side failure. MinIOServiceErrorGuessingTest covers the read itself.
       MultipartFile corruptedFile = mock(MultipartFile.class);
       when(corruptedFile.getOriginalFilename()).thenReturn("corrupted.pdf");
-      when(corruptedFile.getInputStream())
-          .thenThrow(new IOException("Broken pipe: truncated multipart body"));
+      when(minIOService.uploadFile(anyString(), anyString(), any()))
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object",
+                  new IOException("Broken pipe: truncated multipart body")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, corruptedFile))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
 
     @Test
@@ -140,13 +158,15 @@ class BookStorageServiceErrorGuessingTest {
       // Given — the MinIO server accepted the connection but never responded in time
       MultipartFile file = mockBookFile("novel.pdf", new byte[] {1, 2, 3});
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new SocketTimeoutException("Read timed out"));
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object", new SocketTimeoutException("Read timed out")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(SocketTimeoutException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(SocketTimeoutException.class);
     }
 
     @Test
@@ -155,13 +175,15 @@ class BookStorageServiceErrorGuessingTest {
       // Given — MinIO host is unreachable (container down, DNS failure, firewall, etc.)
       MultipartFile file = mockBookFile("novel.pdf", new byte[] {1, 2, 3});
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new ConnectException("Connection refused"));
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object", new ConnectException("Connection refused")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(ConnectException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(ConnectException.class);
     }
 
     @Test
@@ -171,14 +193,18 @@ class BookStorageServiceErrorGuessingTest {
       MultipartFile file = mockBookFile("novel.pdf", new byte[] {1, 2, 3});
       when(minIOService.uploadFile(anyString(), anyString(), any()))
           .thenThrow(
-              new ServerException(
-                  "We encountered an internal error, please try again.", 500, "trace-id-abc123"));
+              new StorageException(
+                  "Could not store the object",
+                  new ServerException(
+                      "We encountered an internal error, please try again.",
+                      500,
+                      "trace-id-abc123")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(ServerException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(ServerException.class);
     }
 
     @Test
@@ -187,13 +213,16 @@ class BookStorageServiceErrorGuessingTest {
       // Given — any other checked failure from the MinIO SDK's exception hierarchy
       byte[] previewBytes = {1, 2, 3};
       when(minIOService.uploadBytes(anyString(), anyString(), any(), anyString()))
-          .thenThrow(new MinioException("Unexpected internal SDK failure"));
+          .thenThrow(
+              new StorageException(
+                  "Could not store the object",
+                  new MinioException("Unexpected internal SDK failure")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadPreview(AUTHOR_ID, previewBytes, "pdf"))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book preview file")
-          .hasCauseInstanceOf(MinioException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(MinioException.class);
     }
 
     @Test
@@ -202,12 +231,15 @@ class BookStorageServiceErrorGuessingTest {
       // Given — diagnosability matters: the original low-level exception must not be swallowed
       MultipartFile file = mockBookFile("novel.pdf", new byte[] {1, 2, 3});
       SocketTimeoutException original = new SocketTimeoutException("Read timed out");
-      when(minIOService.uploadFile(anyString(), anyString(), any())).thenThrow(original);
+      when(minIOService.uploadFile(anyString(), anyString(), any()))
+          .thenThrow(new StorageException("Could not store the object", original));
 
-      // When / Then
+      // When / Then — MinIOService is the one that translates now, and BookStorageService passes
+      // its exception through untouched, so the SDK's own exception is still reachable as the root
+      // cause. That is the property worth pinning: a timeout must stay diagnosable in the log.
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .cause()
+          .rootCause()
           .isSameAs(original);
     }
 
@@ -218,13 +250,14 @@ class BookStorageServiceErrorGuessingTest {
       // (e.g. certain low-level socket/SSL failures carry a null getMessage())
       MultipartFile file = mockBookFile("novel.pdf", new byte[] {1, 2, 3});
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException((String) null));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException((String) null)));
 
       // When / Then — the service's own wrapping message must still be intact, no NPE while
       // building the StorageException itself
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file");
+          .hasMessageContaining("Could not store");
     }
   }
 
@@ -240,7 +273,7 @@ class BookStorageServiceErrorGuessingTest {
     @DisplayName("shouldThrowStorageException_whenPresignedUrlGenerationTimesOut")
     void shouldThrowStorageException_whenPresignedUrlGenerationTimesOut() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new SocketTimeoutException("Read timed out"));
 
       // When / Then
@@ -254,7 +287,7 @@ class BookStorageServiceErrorGuessingTest {
     @DisplayName("shouldThrowStorageException_whenPresignedUrlGenerationHitsServerError")
     void shouldThrowStorageException_whenPresignedUrlGenerationHitsServerError() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new ServerException("Internal error", 500, "trace-id-xyz789"));
 
       // When / Then
@@ -270,7 +303,7 @@ class BookStorageServiceErrorGuessingTest {
         throws Exception {
       // Given — uploadCover no longer signs anything (B4), so the equivalent split is the
       // download path: the object is there, the presigned-URL round-trip is what fails
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new ConnectException("Connection refused"));
 
       // When / Then — the caller still only ever sees our own exception type

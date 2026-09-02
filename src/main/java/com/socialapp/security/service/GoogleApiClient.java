@@ -10,6 +10,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.utils.RedirectUri;
+
+import jakarta.annotation.PostConstruct;
 
 @Component
 public class GoogleApiClient {
@@ -27,6 +30,11 @@ public class GoogleApiClient {
 
   public GoogleApiClient(WebClient.Builder webClientBuilder) {
     this.webClient = webClientBuilder.build();
+  }
+
+  @PostConstruct
+  void normalizeRedirectUri() {
+    this.redirectUri = RedirectUri.normalize(this.redirectUri);
   }
 
   public String getOAuthUrl() {

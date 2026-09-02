@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 
 import io.netty.channel.ChannelOption;
+import io.netty.resolver.DefaultAddressResolverGroup;
 import lombok.RequiredArgsConstructor;
 import reactor.netty.http.client.HttpClient;
 
@@ -49,11 +50,21 @@ public class WebClientTimeoutConfig {
    * <p>Public and static so {@code GeminiConfig} can override just the response timeout while
    * keeping the same connect timeout, rather than dropping the customizer's connector entirely and
    * silently losing both.
+   *
+   * <p><b>Why {@code DefaultAddressResolverGroup}.</b> Reactor Netty defaults to its own
+   * non-blocking DNS resolver, which sends UDP queries straight at the nameservers in the OS
+   * config and does an A <em>and</em> an AAAA lookup for every host. On a network whose resolver
+   * is slow or silent on AAAA — a lot of home routers — the AAAA query times out, Netty retries,
+   * and the whole request fails with {@code UnknownHostException: Failed to resolve '<host>'}
+   * even though {@code curl} to the same host works (curl uses the OS resolver). Swapping in the
+   * JVM/OS resolver removes that failure mode; it blocks on lookups, but every call through here
+   * is already a {@code .block()} from a request thread.
    */
   public static ReactorClientHttpConnector connector(
       Duration connectTimeout, Duration responseTimeout) {
     HttpClient httpClient =
         HttpClient.create()
+            .resolver(DefaultAddressResolverGroup.INSTANCE)
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
             .responseTimeout(responseTimeout);
     return new ReactorClientHttpConnector(httpClient);

@@ -195,7 +195,7 @@ class EventControllerTest {
               .profilePictureUrl("https://cdn/avatar.png")
               .status(RsvpStatus.GOING)
               .build();
-      when(eventService.getAttendees(1, null)).thenReturn(List.of(attendee));
+      when(eventService.getAttendees(1, 1, null)).thenReturn(List.of(attendee));
 
       // When / Then — the identity fields are the point of the DTO: with the bare JPA entity the
       // caller got a userId it had no endpoint to resolve.
@@ -212,13 +212,13 @@ class EventControllerTest {
     @DisplayName("shouldPassStatusFilterToService_whenStatusParamIsSupplied")
     void shouldPassStatusFilterToService_whenStatusParamIsSupplied() throws Exception {
       // Given
-      when(eventService.getAttendees(1, RsvpStatus.NOT_GOING)).thenReturn(List.of());
+      when(eventService.getAttendees(1, 1, RsvpStatus.NOT_GOING)).thenReturn(List.of());
 
       // When / Then
       mockMvc
           .perform(authed(get(EVENTS_URL + "/1/attendees").param("status", "NOT_GOING")))
           .andExpect(status().isOk());
-      verify(eventService).getAttendees(1, RsvpStatus.NOT_GOING);
+      verify(eventService).getAttendees(1, 1, RsvpStatus.NOT_GOING);
     }
 
     @Test
@@ -250,7 +250,7 @@ class EventControllerTest {
     @DisplayName("shouldReturn200AndCount_happyPath")
     void shouldReturn200AndCount_happyPath() throws Exception {
       // Given
-      when(eventService.getGoingCount(1)).thenReturn(7);
+      when(eventService.getGoingCount(1, 1)).thenReturn(7);
 
       // When / Then
       mockMvc
@@ -304,21 +304,21 @@ class EventControllerTest {
     @DisplayName("shouldReturn200AndCalendarFile_happyPath")
     void shouldReturn200AndCalendarFile_happyPath() throws Exception {
       // Given
-      when(eventService.generateIcsFile(1)).thenReturn("BEGIN:VCALENDAR\nEND:VCALENDAR");
+      when(eventService.generateIcsFile(1, 1)).thenReturn("BEGIN:VCALENDAR\nEND:VCALENDAR");
 
       // When / Then
       mockMvc
           .perform(authed(get(EVENTS_URL + "/1/export.ics")))
           .andExpect(status().isOk())
           .andExpect(header().string("Content-Disposition", "attachment; filename=event.ics"))
-          .andExpect(header().stringValues("Content-Type", "text/calendar"));
+          .andExpect(header().stringValues("Content-Type", "text/calendar;charset=UTF-8"));
     }
 
     @Test
     @DisplayName("shouldReturn400_whenPostIsNotAnEvent")
     void shouldReturn400_whenPostIsNotAnEvent() throws Exception {
       // Given
-      when(eventService.generateIcsFile(1))
+      when(eventService.generateIcsFile(1, 1))
           .thenThrow(new ValidationException("Post is not an event"));
 
       // When / Then

@@ -1,173 +1,371 @@
-# db/seed — dữ liệu mẫu, chạy ở CẢ dev lẫn production
+# `db/seed` — dữ liệu demo
 
-Từ 2026-08-21 production cũng nạp thư mục này (cần dữ liệu demo trên môi trường thật).
-Thư mục **`db/seed-dev`** thì không — xem phần cuối.
+Thư mục này chứa **dữ liệu**, không chứa schema. Schema nằm ở `db/migration`.
 
-| Môi trường | `FLYWAY_LOCATIONS` |
+Bộ seed chạy ở **cả máy dev lẫn production** (quyết định 2026-08-21). Từ 2026-08-28 không còn thư
+mục `db/seed-dev` nữa — xem [Vì sao không còn `db/seed-dev`](#vì-sao-không-còn-dbseed-dev).
+
+```
+FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed
+```
+
+Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. **Production
+khai đúng dòng này**, không hơn không kém.
+
+## Bốn phần dữ liệu nằm ngoài Flyway
+
+Không còn bước gõ tay nào, và **cả bốn phần do chính ứng dụng lo** nên chúng đi theo ứng dụng tới
+mọi môi trường — kể cả production, nơi không có `docker-compose.yml` của repo này chạy.
+
+| Ai làm | Việc |
 |---|---|
-| mặc định (không cấu hình) | `classpath:db/migration` — chỉ schema |
-| máy dev | `classpath:db/migration,classpath:db/seed,classpath:db/seed-dev` |
-| production | `classpath:db/migration,classpath:db/seed` (đặt trong `application-prod.yml`) |
+| `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` mỗi khi `NEO4J_SEED_ON_START=true` — file tự dọn dải 9001–9599 rồi `MERGE` lại |
+| `NewsfeedSeedInitializer` (ứng dụng) | xoá sạch khoá `feed:*` rồi fan-out lại, mỗi khi `NEWSFEED_REBUILD_ON_START=true` |
+| `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh — có **thử lại** vài lần nếu MinIO chưa sẵn sàng |
+| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, lấy ảnh (ưu tiên **ảnh nướng sẵn trong image**, rồi mới tải mạng, rồi mới sinh ô màu) và nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có ảnh thật; ghi đè ô màu cũ khi `MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS=true` |
 
-## Bật seed ở máy dev
+`minio-seed-objects` + `minio-init` trong `docker-compose.yml` vẫn còn nhưng **chỉ là đường dev**:
+chúng làm đúng việc của `MinIOSeedObjectInitializer` (cộng cache ảnh ở `docker/minio/.cache/` để
+lần `up` sau chạy offline). Production không chạy compose của repo này nên đi qua lớp Java.
 
-```
-FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
-```
+Tất cả đều chạy lại được, nhưng **theo kiểu nạp đè chứ không phải bỏ qua**: bucket dùng
+`--ignore-existing`, ba bộ khởi tạo còn lại dọn/kiểm phần dữ liệu của mình trước khi dựng lại
+(`MinIOSeedObjectInitializer` kiểm từng object, đã có thì bỏ qua). Trước đây Neo4j/newsfeed đều
+bỏ qua khi thấy dữ liệu đã có, và đó chính là lý do một bộ seed mới nạp xong mà danh sách bạn bè
+lẫn bảng tin vẫn là của thế hệ trước.
 
-Đặt biến này trong run configuration của IDE hoặc trong shell trước khi chạy app. Sau đó chạy
-thêm hai bước không thuộc Flyway:
+> **Lần nạp ảnh ĐẦU TIÊN trên một MinIO trắng mất khoảng 5–6 phút, và đó không phải treo.**
+> Đo thực tế: 1.139 object, 979 cái cần tải từ mạng, **971 thành công (99,2%)** trong 340 giây.
+> Ở máy dev, script in tiến độ mỗi 200 object và cache ảnh vào `docker/minio/.cache/` (lần `up`
+> thứ hai chỉ mất 11 giây). Trên production, `MinIOSeedObjectInitializer` chạy nền và ghi log
+> dòng tổng kết; các lần khởi động sau chỉ là ~1.100 lượt `statObject` rồi bỏ qua.
+>
+> Số luồng tải cố ý để **4** ở cả hai đường. Đo trên 120 object: 4 luồng được 120/120 ảnh thật,
+> 12 luồng còn 101/120, 24 luồng chỉ còn 24/120 — nút thắt là giới hạn tốc độ theo nguồn, không
+> phải băng thông. Nhanh hơn để nhận về một bộ ô màu thì nhanh để làm gì.
+
+**Vì sao cả bốn phần nằm trong ứng dụng chứ không phải trong compose.** Trước đây chúng là service
+của `docker-compose.yml`. Máy dev vì thế luôn đúng, còn production — chạy compose của repo
+`DATN-infra`, nơi không có service tương ứng — thì không: đồ thị bạn bè **rỗng** dù Postgres có hàng
+nghìn lời mời đã chấp nhận, gian sách trả **503** vì bucket `books` chưa từng được tạo, và mọi
+avatar / ảnh bìa / ảnh bài viết **404** (trình duyệt hiện ảnh vỡ, tệ hơn để NULL). Tất cả đều hỏng
+im lặng ở đúng nơi không ai nhìn. Một cơ chế nằm trong ứng dụng thì đi theo ứng dụng; một service
+trong compose chỉ có ở nơi người ta nhớ chép nó sang.
+
+## Bước thứ ba: dựng lại bảng tin
+
+Bảng tin đọc **duy nhất** từ Redis và không bao giờ đọc bù từ Postgres. Bỏ qua bước này thì `/feed`
+trống trong khi `/posts/public` đầy — rất dễ nhầm thành lỗi frontend.
+
+Ở máy dev, để ứng dụng tự làm:
 
 ```bash
-docker exec -i neo4j cypher-shell -u neo4j -p neo4j_password < docker/neo4j/seed/friend-graph.cypher
-bash scripts/seed/load-minio-objects.sh
+NEO4J_SEED_ON_START=true NEWSFEED_REBUILD_ON_START=true \
+  FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
+  ./gradlew bootRun
 ```
 
-Bỏ bước Neo4j thì danh sách bạn bè rỗng dù lịch sử lời mời đầy đủ. Bỏ bước MinIO thì gian sách
-hiện đủ nhưng bấm tải hoặc xem thử sẽ lỗi vì object không tồn tại.
+**Bật kèm `NEO4J_SEED_ON_START` chứ đừng bật một mình.** Fan-out đọc đồ thị bạn bè trong Neo4j; đồ
+thị rỗng — hoặc còn là của thế hệ seed cũ — thì bài chỉ tới được người được gắn thẻ và bảng tin gần
+như trống, trong khi log vẫn báo `processed=2586` y như một lần chạy thành công. Con số cần nhìn là
+*số bảng tin*: khoảng 500 là đúng, vài chục nghĩa là đồ thị chưa sẵn sàng.
 
-## Tài khoản
+`NEWSFEED_REBUILD_ON_START` **xoá sạch khoá `feed:*` rồi mới fan-out lại**, nên bật thường trực ở
+máy dev là an toàn và chạy lại nhiều lần vẫn ra một kết quả. Nó *không* còn bỏ qua khi Redis đã có
+bảng tin: `rebuildAll` chỉ `ZADD` thêm, nên không dọn trước thì id của những bài mà `V80` vừa xoá
+nằm lại trong sorted set vĩnh viễn. Mặc định **tắt**, và production **không** dùng cờ này — fan-out
+toàn bộ ở mỗi lần khởi động là cái giá lớn cho một thứ production hầu như không cần.
 
-| | |
-|---|---|
-| Dải id | `9001`–`9060` |
-| Mật khẩu tài khoản thường | `12345678` |
-| Mật khẩu 2 tài khoản ADMIN | `SocialApp@Admin2026` |
-| Email | `<username>@seed.test` |
-| Quản trị viên | `admin_one@seed.test`, `admin_two@seed.test` (id 9059, 9060) |
+**Production dùng `NEWSFEED_REBUILD_IF_EMPTY` (mặc định `true` trong `application-prod.yml`).** Cờ
+này chỉ dựng lại — trên luồng nền, **không dọn** — khi `SCAN feed:*` ra đúng 0 khoá lúc khởi động.
+`feed:*` rỗng trên production nghĩa là database vừa nạp seed hoặc mất Redis; cả hai đều cần đúng
+một lần dựng lại. Deploy bình thường chỉ tốn một lượt `SCAN`. Tương tự, `NEO4J_SEED_ON_START` cũng
+mặc định `true` trên prod (toàn `MERGE`, ~vài giây) nên đồ thị bạn bè luôn sẵn sàng trước khi
+fan-out đọc tới. Nghĩa là **một deploy sạch trên prod không cần bước tay nào cho bảng tin** — xem
+`scripts/prod/fix-seed-media.md`.
 
-**Hai mật khẩu, và cả hai đều nằm trong repo.** `V51` gán mật khẩu bằng một `CASE`: tài khoản
-thường dùng `12345678`, hai tài khoản ADMIN dùng `SocialApp@Admin2026`.
-
-Việc tách ra chỉ chặn được một thứ: `12345678` là chuỗi đầu tiên mọi bot dò mật khẩu thử mà không
-cần đọc repo. Nó **không** chặn được người đọc được repo — họ vào được cả hai. Vì bộ seed này chạy
-cả trên production, muốn đóng hẳn đường đó thì đổi mật khẩu hai tài khoản ADMIN qua API ngay sau
-khi seed xong.
-
-Sinh hash mới cho mật khẩu khác (chỉ cần docker), rồi bỏ dấu `:` ở đầu chuỗi kết quả:
+Cách thủ công vẫn còn, dùng khi cần dựng lại mà không khởi động lại (ví dụ demo cách lần seed quá
+một tuần, xem cạm bẫy TTL bên dưới):
 
 ```bash
-docker run --rm httpd:alpine htpasswd -bnBC 10 "" 'mat-khau-cua-ban'
+curl -XPOST http://localhost:8080/v1/api/admin/newsfeed/rebuild \
+  -H "Authorization: Bearer <token của admin>"
 ```
 
-Email dùng TLD `.test` — RFC 2606 dành riêng cho thử nghiệm, không định tuyến được và không ai
-đăng ký được. Ở production điều đó có nghĩa là các tài khoản này **không nhận được mail**, nên
-không khôi phục mật khẩu qua email được — đổi mật khẩu rồi quên là mất đường vào chúng.
+> **Cạm bẫy về thời gian.** `POST_CACHE_TTL` là **7 ngày** còn `FEED_TTL` là 30 ngày, và `hasMore`
+> được đếm từ id chứ không từ post. Sau 7 ngày, payload hết hạn trong khi id vẫn nằm trong sorted
+> set: feed **rụng dần bài mà vẫn báo còn trang sau**. Nếu buổi demo cách lần seed quá một tuần,
+> **chạy lại `newsfeed/rebuild`** trước khi lên sân khấu.
 
-Đó cũng là lý do không dùng tên miền thật. Thế hệ seed trước dùng `@test.com` và
-`@socialapp.com`, cả hai đều do người khác sở hữu: ai kiểm soát hòm thư ở đó có thể bấm "quên mật
-khẩu" để chiếm tài khoản.
+## Tài khoản demo
 
-Cụm vai trò (khớp `friend-graph.cypher`):
-
-| Vai trò | Id | | Vai trò | Id |
-|---|---|---|---|---|
-| BACKEND | 9001–9010 | | DATA_ML | 9037–9042 |
-| FRONTEND | 9011–9018 | | SECURITY | 9043–9046 |
-| FULLSTACK | 9019–9024 | | QA | 9047–9052 |
-| MOBILE | 9025–9030 | | OTHER | 9053–9058 |
-| DEVOPS | 9031–9036 | | ADMIN | 9059–9060 |
-
-Vài trạng thái đặc biệt để thử các nhánh xử lý:
-
-- `backend_ngoc_quan` (9007) — **đang bị cấm**, đủ 2 vi phạm, lệnh cấm 7 ngày còn hiệu lực
-- `mobile_huu_nghia` (9028) — đã từng bị cấm, lệnh cấm đã hết hạn
-- 9007, 9013, 9028, 9051 — `email_verified = false`, dùng thử luồng xác thực email
-- 9003, 9014, 9029, 9058 — đăng nhập qua GITHUB, có bản ghi thống kê GitHub
-- 9008, 9021, 9039 — đăng nhập qua GOOGLE
-
-## Các file
-
-| File | Nội dung |
-|---|---|
-| `V50__seed_reset.sql` | Dọn thế hệ seed cũ. Database sạch thì là no-op. |
-| `V51__seed_users.sql` | 60 tài khoản, hồ sơ nghề nghiệp, tuỳ chọn thông báo |
-| `V52__seed_social_graph.sql` | 240 quan hệ bạn bè, 26 lời mời chờ, 8 chặn — **sinh tự động** |
-| `V53__seed_posts.sql` | 169 bài đủ 8 `PostType`, 30 hashtag, gắn thẻ người |
-| `V54__seed_engagement.sql` | 2278 cảm xúc, 741 bình luận (có lồng nhau), RSVP, bài nộp quiz |
-| `V55__seed_bookstore.sql` | 20 sách, 257 đánh giá, 215 giao dịch đủ 4 trạng thái |
-| `V56__seed_knowledge.sql` | 329 bản giải thích, 76 ghi chú vault |
-| `V57__seed_projects.sql` | 12 dự án, 16 vị trí tuyển, 29 đơn ứng tuyển |
-| `V58__seed_roadmaps.sql` | 5 lộ trình, 44 nút, 144 bản ghi tiến độ |
-| `V59__seed_moderation.sql` | 167 log kiểm duyệt, vi phạm, lệnh cấm, khiếu nại |
-| `V60__seed_reputation_and_notifications.sql` | 2367 sự kiện uy tín, 984 thông báo |
-| `V61__seed_trending_and_github.sql` | 12 tin xu hướng, thống kê GitHub |
-
-Và một file ở thư mục riêng, **không** chạy ở production:
-
-| File | Nội dung |
-|---|---|
-| `db/seed-dev/V63__seed_dev_tokens.sql` | 3 personal access token — credential dùng được ngay |
-
-Kết quả: **34/39 bảng** có dữ liệu (33 nếu không nạp `db/seed-dev`).
-
-## Năm bảng cố ý để trống
-
-Không phải bỏ sót:
-
-- `t_refresh_tokens`, `t_password_reset_tokens`, `t_magic_link_tokens`,
-  `t_email_verification_tokens` — vật phẩm tạm của luồng xác thực, sống vài phút tới vài ngày.
-  Một refresh token nằm sẵn trong file SQL là một credential dùng được đã commit vào repo, đúng
-  loại vấn đề mà bộ seed cũ mắc phải với mật khẩu admin.
-- `t_google_calendar_tokens` — chứa token OAuth thật của Google, không bịa được. Điền giá trị
-  giả thì tài khoản hiện "đã kết nối" nhưng mọi lần đồng bộ đều thất bại, và người thử tính năng
-  sẽ đi tìm lỗi trong code.
-
-## File sinh tự động — đừng sửa tay
-
-`V52__seed_social_graph.sql` và `docker/neo4j/seed/friend-graph.cypher` đều do
-`scripts/seed/generate_friend_graph.py` sinh ra, từ **một** tập cạnh duy nhất:
-
-```bash
-python scripts/seed/generate_friend_graph.py
-```
-
-Quan hệ bạn bè nằm ở hai nơi với hai vai trò khác nhau: Neo4j giữ cạnh `FRIENDS_WITH` và là thứ
-app thực sự đọc; Postgres chỉ giữ nhật ký lời mời. Hai bên lệch nhau thì **không có gì báo lỗi**
-— chỉ là hồ sơ hiện "đã là bạn" trong khi danh sách bạn bè không có người đó. Vì vậy chúng được
-sinh cùng một lượt thay vì viết tay hai lần.
-
-## `db/seed-dev` — chỉ máy dev, KHÔNG BAO GIỜ ở production
-
-`V63__seed_dev_tokens.sql` tạo 3 personal access token dùng được ngay cho
-`/v1/api/knowledge/sync/**` (endpoint này `permitAll` ở Spring Security và tự xác thực bằng chính
-token đó). Đó là lý do nó nằm ở thư mục riêng: nội dung demo thì vô hại ở mọi môi trường, còn một
-API token thì không.
-
-| Token | Tài khoản | Quyền |
+| id | Vai | Mật khẩu |
 |---|---|---|
-| `sk_seed_dev_vault_token_alpha` | 9003 | BIDIRECTIONAL, không hết hạn |
-| `sk_seed_dev_vault_token_beta` | 9021 | WRITE_ONLY, còn 90 ngày |
-| `sk_seed_dev_vault_token_gamma` | 9039 | BIDIRECTIONAL, **đã hết hạn** |
+| **9001** | Cao thủ — 95 bài, hạng `Expert` | `12qwaszx` |
+| **9002** | Người mới — chưa viết bài nào, 0 điểm | `12qwaszx` |
+| **9499** | ADMIN phụ | `1234qwer` |
+| **9500** | ADMIN chính | `1234qwer` |
 
-Đừng bao giờ thêm `classpath:db/seed-dev` vào `FLYWAY_LOCATIONS` của production.
+Email theo mẫu `<username>@elitenexus.test`. Username tra ở `scripts/seed/id-map.md`.
+
+**TLD `.test` là bắt buộc, không phải tuỳ chọn.** RFC 2606 dành riêng `.test` cho thử nghiệm: nó
+không định tuyến được và không ai đăng ký được. Bộ seed này chạy trên production với luồng đặt lại
+mật khẩu đang hoạt động, nên một tên miền **có thật** ở đây — kể cả `.vn` của chính dự án — đồng
+nghĩa với: ai kiểm soát hòm thư ở tên miền đó chiếm được cả 500 tài khoản. Thế hệ seed trước đã
+phải bỏ `@test.com` và `@socialapp.com` vì đúng lý do này.
+
+Hai hash BCrypt được `SeedPasswordHashTest` kiểm bằng chính `BCryptPasswordEncoder` mà đường đăng
+nhập dùng. Hash sai không làm migration đỏ và không làm test nào khác đỏ — chỗ phát hiện tự nhiên
+của lỗi đó là buổi bảo vệ đồ án.
+
+**Trên production, đổi mật khẩu hai tài khoản ADMIN qua API ngay sau khi seed xong.**
+
+## Dải id
+
+| Thực thể | Dải |
+|---|---|
+| `t_users` | 9001–9500 |
+| `t_hashtags` | 1001–1120 thường, 1201+ dấu fixture |
+| `t_roadmaps` | 2001–2012 |
+| `t_books` | 3001–3080 |
+| `t_projects` | 4001–4050 |
+| `t_posts` | 100001–102600, cộng 102998/102999 fixture |
+| `t_comments` | 200001+ |
+| `t_explanations` | 300001+ |
+
+Bảng đầy đủ, gồm cả id của từng bài fixture, nằm ở **`scripts/seed/id-map.md`** — file đó sinh tự
+động cùng lượt với bộ seed, và là thứ dùng để cập nhật `DATN-frontend/docs/demo-script.md`. Kịch
+bản demo trích dẫn id trên sân khấu; quên cập nhật là bấm vào một id không còn tồn tại, giữa buổi
+bảo vệ.
+
+## Vì sao dãy seed bắt đầu ở V80
+
+Flyway phân giải **một dãy version duy nhất** cho tất cả các location. Trùng số giữa `db/seed` và
+`db/migration` là **lỗi khởi động** (`Found more than one migration with version N`), không phải
+cảnh báo bỏ qua được.
+
+Tính tới 2026-08-28, `db/migration` đã dùng tới `V78` và `db/seed` từng có `V75`, `V79`. Số cao
+nhất đang tồn tại là **79** → bộ seed hiện tại bắt đầu ở **V80**. Hai số 75 và 79 bỏ trống sau khi
+xoá hai file đó, và điều đó không sao: Flyway không đòi dãy liền mạch.
+
+Dãy này đã bị chiếm mất **hai lần trong ba ngày**, nên `generate_seed.py` tự quét cả hai thư mục
+trước khi ghi và **dừng lại** nếu số nó định dùng đã có ở đâu đó. Đừng gỡ kiểm tra đó.
+
+## Sinh lại bộ seed
+
+```bash
+python scripts/seed/generate_seed.py
+```
+
+Script này sinh `V81`–`V90`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
+`db/seed/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
+tay. `V91` bỏ trống — xem "Vì sao không seed tin xu hướng" bên dưới.
+
+Đầu ra **tất định**: chạy lại cho `git diff` sạch nếu không đổi tham số. Đó không phải chi tiết
+phong cách — nó là thứ khiến việc sửa một dòng trong bộ seed review được, thay vì mỗi lần sinh lại
+là một diff 120.000 dòng.
+
+### Ba lớp tự canh trong generator
+
+Cả ba đều canh những thứ **không có test nào bắt được**:
+
+1. **Trùng số version** — xem mục trên.
+2. **Chuỗi `${...}` lọt vào SQL.** Flyway thay placeholder ở tầng *đọc file*, trước khi parse SQL,
+   nên một placeholder chưa khai giết migration **kể cả khi nó nằm trong một dòng comment**. Đã xảy
+   ra một lần ở `V51`, và một lần nữa trong lúc dựng bộ này — nội dung một câu hỏi quiz vô tình
+   chứa `${...}`. Chỉ `${minioUrl}` được phép.
+3. **Thiếu `SET LOCAL statement_timeout = 0`.** `application.yml` đặt `statement_timeout = 15s` lên
+   pool Hikari, và **Flyway dùng chung DataSource đó**. `SeedMigrationTest` mở JDBC thô nên không đi
+   qua Hikari — seed sẽ **xanh ở CI rồi chết ở production** giữa lúc migrate. `V81`–`V90` **luôn**
+   phải có dòng đó, cộng thêm mọi file sinh trên 2.000 hàng; generator từ chối xuất file nếu thiếu.
+   (`V87` và `V89` nhẹ hơn ngưỡng nên không tự kích hoạt — chúng nằm trong danh sách bắt buộc để
+   lệnh kiểm `grep -L … V8[2-9]*.sql V90*.sql` không báo đỏ ở hai file hoàn toàn lành, vì lần sau
+   người ta sẽ sửa lệnh grep chứ không sửa file.)
+
+`SET LOCAL` chứ **không** `SET`: Flyway bọc mỗi migration trong một giao dịch nên `LOCAL` tự hết
+hiệu lực khi commit. `SET` trần nới trần cho cả connection sau khi nó về pool, tức vô hiệu hoá một
+lớp bảo vệ có chủ đích ở một chỗ hoàn toàn không liên quan.
+
+## Hai điều dễ bị tưởng là lỗi
+
+**Xác minh kỹ năng qua GitHub luôn trả `false`.** Không tài khoản nào được liên kết GitHub và
+`t_github_stats` để trống hẳn (quyết định 25/08). `SkillVerificationService.verifyViaExternalApi`
+tra bảng đó, không có hàng nào thì nhánh này luôn trả `false` và **mọi yêu cầu xác minh kỹ năng rơi
+về duyệt tay**. Với buổi demo đây lại là điều tốt — hàng đợi quản trị có việc thật. Đừng đi tìm lỗi
+trong hàm đó.
+
+**Các chủ đề ở Kho lưu trữ lệch hẳn nhau, và `CAREER` chỉ có đúng một hàng.** `category` của bản
+giải thích bám nội dung thật của từng bộ `concepts`, mà bốn trong mười hai bộ nói về phía máy chủ —
+nên `BACKEND` đông hơn hẳn phần còn lại. Rải chúng ra chín tab cho cân sẽ tạo một màn hình demo đẹp
+hơn và một cơ sở dữ liệu nói dối. Hàng `CAREER` duy nhất là **cố ý**: đó là ca chứng minh bộ lọc
+thật sự lọc, và vì nó không nằm ở trang đầu nên cũng là ca kiểm phân trang duy nhất đáng giá ở màn
+này.
+
+## Vì sao không seed tin xu hướng
+
+`t_trending_items` **không** có dữ liệu seed (từng có, ở `V91`, đã bỏ). `TrendingCrawlScheduler`
+crawl HN/dev.to/GitHub Trending mỗi giờ và tự lấp bảng ngay khi BE chạy — kể cả trên production.
+33 tin "seed-N" trỏ `tin-tuc.example.test` chỉ là dữ liệu giả nằm chờ bị ghi đè trong giờ đầu, và
+trong lúc chờ nó hiện ngay trên trang chủ như dữ liệu mẫu chưa dọn — production seed xong mà chưa
+kịp crawl lần đầu thì người dùng thấy thẳng link `.test` không bấm được.
+
+`/v1/api/trending` trả rỗng cho tới khi crawler chạy lần đầu tiên. Với buổi demo: chạy app đủ lâu
+trước khi lên sân khấu, hoặc gọi thủ công job crawl nếu cần trending có ngay. Số `V91` để trống,
+không dồn `V92` xuống — xem "Vì sao dãy seed bắt đầu ở V80" phía trên, dãy version không cần liền
+mạch.
+
+## MoMo trong buổi demo
+
+`MomoProperties.requestType` mặc định là **`payWithATM`** — màn hình thẻ, dễ quay video. Trên
+sandbox nó đậu ở resultCode 7002 vĩnh viễn và không bao giờ tự settle, nên ở profile `dev` hãy gọi
+`POST /v1/api/payments/{transactionRef}/dev-settle` để đưa đơn về `COMPLETED`.
+
+> **Production BẮT BUỘC đặt `MOMO_REQUEST_TYPE=captureWallet`.** `dev-settle` là `@Profile("dev")`
+> nên không tồn tại ở đó; để nguyên mặc định thì mọi đơn hàng thật đậu `PENDING` mãi mãi, và không
+> có gì báo lỗi — đơn vẫn tạo được, người mua vẫn được chuyển sang MoMo.
+
+Bộ seed có **đúng một** giao dịch `PENDING` mới tinh, để chạy được nhánh từ chối mua lại
+(`PENDING_PAYMENT_STALE_MINUTES = 15`). Nó cố ý nằm ở một quyển **không** thuộc kịch bản demo:
+một hàng `PENDING` mới trên quyển đang trình bày sẽ chặn người demo bấm mua.
+
+## Đồ thị bạn bè: hai kho, một tập cạnh
+
+`V82__seed_social_graph.sql` và `docker/neo4j/seed/friend-graph.cypher` được sinh **cùng một lượt,
+từ một tập cạnh duy nhất**.
+
+Quan hệ bạn bè nằm ở hai nơi với hai vai trò khác nhau: Neo4j giữ cạnh `FRIENDS_WITH` và là thứ app
+thực sự đọc; Postgres chỉ giữ nhật ký lời mời. Hai bên lệch nhau thì **không có gì báo lỗi** — chỉ
+là hồ sơ hiện "đã là bạn" trong khi danh sách bạn bè không có người đó.
+
+## Vì sao không còn `db/seed-dev`
+
+Thư mục đó ra đời ngày 2026-08-21 để giữ ba personal access token — credential dùng được ngay cho
+`/v1/api/knowledge/sync/**`, một endpoint `permitAll` tự xác thực bằng chính chuỗi token. Nghĩa là
+ai đọc repo là ghi được vào vault của tài khoản tương ứng.
+
+Nay ba token đó **bỏ hẳn, không chuyển đi đâu cả**: `POST /v1/api/tokens` cho người dùng tự tạo
+token trong vài giây, nên ba token seed sẵn chỉ tiết kiệm được ngần ấy thời gian, đổi lại là ba
+credential nằm công khai trong repo. Bỏ token đi thì lý do tách thư mục biến mất theo.
+
+**Mất hai fixture, ghi lại để không ai tưởng là bỏ sót:** token `WRITE_ONLY` và token **đã hết
+hạn** (dùng để chạy nhánh từ chối của `PersonalAccessTokenService.verify`). API không tạo được token
+hết hạn, nên nhánh đó từ nay chỉ còn unit test canh.
+
+Hệ quả: `t_personal_access_tokens` là một trong **7 bảng cố ý để trống** — cùng 4 bảng token xác
+thực (`V71` xoá sạch chúng ở mỗi lần migrate), `t_google_calendar_tokens`, và `t_github_stats`.
 
 ## Quy ước khi thêm dữ liệu
 
-- Số version tiếp tục từ `V64`. Ba thư mục `db/migration`, `db/seed` và `db/seed-dev` dùng CHUNG
-  một dãy version, nên không được giẫm số của nhau: `V62` là schema
-  (`V62__create_post_reports.sql`), `V63` là `db/seed-dev/V63__seed_dev_tokens.sql`. Thêm file mới
-  ở bất kỳ thư mục nào thì lấy số kế tiếp còn trống rồi cập nhật dòng này.
-- Seed phải đứng sau mọi migration schema **tạo bảng mà seed ghi vào**. Một migration số cao hơn
-  seed chỉ an toàn khi nó tạo bảng mới (như `V62`); nếu nó sửa bảng mà seed đã đổ dữ liệu thì
-  phải đánh số thấp hơn dải seed.
-- Id tường minh theo dải: người dùng `9001+`, bài viết `5001+`, bình luận `6001+`/`7001+`,
-  sách `3001+`, dự án `4001+`, lộ trình `2001+`, hashtag `1001+`. File nào cấp id tường minh thì
-  **bắt buộc** gọi `setval` ở cuối, nếu không bản ghi đầu tiên tạo qua API sẽ đụng khoá chính —
-  lỗi chỉ lộ ra khi có người bấm nút, không phải lúc nạp seed.
-- Khi lấy mẫu ngẫu nhiên bằng phép chia dư, điều kiện lọc và biểu thức chọn giá trị phải dùng
-  **hai modulo nguyên tố cùng nhau**. Dùng chung một modulo thì hai biểu thức tương quan và tập
-  kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55`, làm mất hẳn hai trạng thái thanh toán.
-- **Không đặt credential dùng được vào `db/seed`.** Thư mục đó chạy trên production. Token, khoá
-  API, hay bất cứ thứ gì đăng nhập được mà không cần mật khẩu thì thuộc về `db/seed-dev`.
-- Không seed cột trỏ tới object MinIO trừ khi `scripts/seed/load-minio-objects.sh` có nạp file
-  tương ứng. Ảnh đại diện, ảnh bài viết, banner dự án đều để `NULL` vì lý do này.
+- **Không sửa file đã apply lên production — kể cả comment.** Flyway tính checksum trên toàn bộ nội
+  dung file, dòng `--` cũng tính, và `application-prod.yml` bật `validate-on-migrate: true`. Thêm
+  đúng 5 dòng ghi chú vào `V61` (commit `d6f6dd1`) đã làm production không khởi động được. Cần đổi
+  dữ liệu thì thêm file mới với số version cao hơn.
+- **Đừng sửa tay `V81`–`V90`.** Chúng sinh tự động; sửa tay sẽ bị ghi đè ở lần chạy generator kế
+  tiếp. Sửa `scripts/seed/generate_seed.py` rồi chạy lại.
+- **Bộ seed đã được RE-BASELINE ngày 2026-08-30.** `V88` nay mang `parent_node_id` (cây lộ trình),
+  và toàn bộ `V81`–`V92` được sinh lại một lượt — nên **checksum của chúng khác với bản `f9aeea7`
+  đang chạy trên production**. Deploy nào ship bản này PHẢI drop schema production trước khi
+  migrate, nếu không `validate-on-migrate` chặn khởi động ở `V88`. Các bước cụ thể (kèm sao lưu):
+  **`scripts/prod/rebaseline-seed.sql`**. Trước 2026-08-30, cây lộ trình nằm ở `V95` — một `UPDATE`
+  chạy sau `V88` — vì lúc đó chưa re-baseline được; `V95` nay đã xoá.
+- **Lấy mẫu ngẫu nhiên phải dùng hai modulo nguyên tố cùng nhau** cho điều kiện lọc và cho biểu thức
+  chọn giá trị. Dùng chung một modulo làm kết quả chỉ rơi vào vài nhánh — đã xảy ra ở `V55` cũ, làm
+  mất hẳn hai trạng thái thanh toán.
+- **Không đặt credential dùng được vào thư mục này.** Nó chạy trên production.
+- **Không seed cột trỏ tới object MinIO trừ khi manifest có khai key đó.** Một cột trỏ tới object
+  không tồn tại thì **tệ hơn `NULL`**: URL vẫn dựng được nên trình duyệt hiện ảnh vỡ, chứ không rơi
+  về fallback. `banner_url` của dự án để `NULL` vì lý do này.
+- **Mỗi loại ảnh mới là năm chỗ phải sửa cùng lúc**: nguồn trong `generate_seed.py` (`want_image` +
+  `BUCKET_OF_PREFIX`), thư mục prefix, dòng `mc cp` trong `docker-compose.yml`, và
+  `BUCKET_OF_PREFIX` + `placeholder()` trong `MinIOSeedObjectInitializer.java` (đường production).
+  Bỏ sót một chỗ thì hỏng im lặng.
+- **URL ảnh phải có đủ segment bucket**: `<minio.url>/<bucket>/<key>`, đúng như `MediaService`
+  dựng. Manifest chỉ giữ `<key>` — `minio-init` (dev) và `MinIOSeedObjectInitializer` (prod) đều
+  nạp object với key nguyên vẹn vào bucket tra ở `BUCKET_OF_PREFIX`, còn `want_image` ghép
+  `<bucket>` vào URL. Thiếu khúc bucket thì MinIO trả **403**, URL vẫn hợp lệ, và không có gì báo
+  lỗi.
+- **Giá trị của cột `@Enumerated(EnumType.STRING)` phải là hằng CÓ THẬT của enum Java.** Những cột
+  ấy là `varchar` không có `CHECK`, nên một nhãn tự chế đi qua Flyway êm ru rồi nổ ở Hibernate lúc
+  **đọc** — tức ở tầng ứng dụng, sau khi seed đã xanh. Ngày 28/08 có sáu cột dính cùng lúc, và hai
+  cái đắt nhất: `explanation_style = 'ANALOGY'` (enum viết `ANALOGY_HEAVY`) làm **256/500 tài
+  khoản không đăng nhập được**, còn `t_notifications.channel = 'IN_APP'` (enum chỉ có
+  `PUSH`/`EMAIL`/`BOTH`) làm `GET /notifications` trả **500 cho mọi tài khoản**. Cả sáu đều là
+  chuỗi nghe rất hợp lý — đó chính là lý do không ai đọc ra khi review. Ca kiểm
+  `everyEnumeratedColumnParsesBackIntoItsJavaEnum` trong `SeedMigrationTest` quét việc này bằng
+  reflection nên **cột enum mới tự vào tầm ngắm**, không phải nhớ cập nhật danh sách.
+  Và khi enum của ứng dụng không có giá trị mình cần: **bộ seed đi theo ứng dụng**, không thêm
+  hằng vào enum cho tiện — mọi hằng mới đều nới hợp đồng OpenAPI mà frontend sinh client từ đó.
+- **Hình dạng bên trong cột `jsonb` phải khớp kiểu Java mà entity khai.** Cùng một lớp lỗi với
+  enum, khác cơ chế: Postgres chỉ đòi JSON *hợp lệ*, nên một mảng chuỗi nằm ở chỗ đáng lẽ là mảng
+  đối tượng vẫn chèn được và mọi assertion SQL vẫn xanh. `t_explanations.external_links` từng mang
+  `["https://…"]` trong khi kiểu là `List<ExternalLink>` (`{title, url, reason}`), và cả màn Kho
+  lưu trữ trả 500. Bẫy riêng ở đây: **`t_vault_notes.links` đúng là `List<String>`** — hai cột
+  cùng tên gọi "links", hai kiểu khác nhau. Ca kiểm
+  `everyJsonColumnDeserialisesIntoItsJavaType` đọc **mọi hàng** của **mọi cột `jsonb`** và thử
+  dựng lại đúng kiểu Java, cũng bằng reflection.
+
+## Thời gian chạy
+
+Toàn bộ seed nạp trong khoảng **25 giây** trên Testcontainers. `SeedMigrationTest` nằm trong
+`./gradlew build` bình thường và cộng ngần ấy vào mỗi lần build — build "đứng" một lúc ở đúng một
+test là **bình thường, không phải treo**.
+
+Đổi lấy việc không phát hiện một file seed hỏng ở production là đánh đổi đúng: không một test nào
+khác chạy bộ seed.
 
 ## Database đã lỡ chạy seed cũ
 
-`flyway_schema_history` vẫn còn V20/V21/V25/V29/V30 trong khi file không còn resolve được.
-`spring.flyway.ignore-migration-patterns: "*:missing"` trong `application.yml` xử lý việc đó, và
-`V50__seed_reset.sql` dọn các hàng dữ liệu cũ. Không cần sửa bảng history bằng tay.
+`V80__seed_reset.sql` dọn sạch cả hai thế hệ trước (dải id 9001–9599, các tên miền email cũ, và ba
+bảng tham chiếu `t_users` **không** có `ON DELETE CASCADE`: `t_comments.author_id`,
+`t_projects.author_id`, `t_project_applications.applicant_id`). Trên database sạch nó là no-op.
 
-Với **production**, các tài khoản do seed cũ tạo ra vẫn còn trong database — chạy
-`scripts/prod/remediate-seed-accounts.sql` để rà và vô hiệu hoá chúng.
+Muốn làm lại từ đầu hoàn toàn:
+
+```bash
+docker compose down -v      # -v cho named volume minio-seed-objects
+rm -rf .docker-data         # và cái này cho BỐN kho dữ liệu — xem ghi chú ngay dưới
+python scripts/seed/generate_seed.py
+docker compose up -d
+NEO4J_SEED_ON_START=true NEWSFEED_REBUILD_ON_START=true \
+  FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed \
+  ./gradlew bootRun
+```
+
+**`docker compose down -v` một mình không xoá dữ liệu nào cả.** Postgres, Neo4j, Redis và MinIO
+đều là *bind mount* dưới `./.docker-data/`; named volume duy nhất trong cả `docker-compose.yml` là
+`minio-seed-objects`, và `-v` chỉ dọn đúng cái đó. Không có `rm -rf .docker-data` thì cả bốn kho
+giữ nguyên dữ liệu của thế hệ seed trước. Postgres không lộ ra vì `V80` tự dọn; ba kho kia thì
+không có ai dọn hộ.
+
+**Hai biến môi trường, không phải một.** `NEO4J_SEED_ON_START` nạp đồ thị bạn bè — Flyway không
+quản Neo4j. Thiếu nó thì `/friendships` rỗng trong khi hồ sơ vẫn hiện "đã là bạn", và vì fan-out
+bảng tin đọc chính đồ thị đó nên `/feed` cũng gần như trống theo. Cả hai cờ đều nạp đè: chúng dọn
+dữ liệu cũ của mình trước khi dựng lại, nên chạy lại nhiều lần vẫn ra một kết quả.
+
+### Chat (Stream)
+
+Dữ liệu chat **không** nằm trong `docker compose up` vì mỗi lần chạy tiêu quota SaaS thật:
+
+```bash
+STREAM_API_KEY=... STREAM_API_SECRET=... MINIO_URL=http://localhost:9000 \
+  node scripts/seed/seed-stream-chat.mjs --reset
+```
+
+**`--reset` là bắt buộc mỗi khi nạp lại seed, không phải tuỳ chọn.** Id người dùng phía Stream
+chính là id số bên Postgres, và các thế hệ seed đều nằm trong dải 9001+ nên trùm lên nhau: bỏ
+`--reset` thì người mới id 9005 thừa kế nguyên phòng và tin nhắn của người cũ id 9005 — đúng
+triệu chứng "đổi tài khoản mà chat vẫn y như cũ". `V80` không với tới Stream được, và cũng không
+có bước nào khác trong repo chạm tới nó.
+
+`--reset` **xoá cứng** người dùng 9001–9599 cùng phòng của họ trên Stream. App Stream phải bật
+*permanent user deletion* (xoá mềm không giải phóng id, nên script sẽ dừng và báo thay vì âm thầm
+lùi về xoá mềm). **Đừng chạy vào một app Stream có người dùng thật.**
+
+`MINIO_URL` đổ vào `${minioUrl}` trong `chat-plan.json`, đúng vai trò mà
+`spring.flyway.placeholders.minioUrl` làm cho các file `.sql`. Mặc định đã là
+`http://localhost:9000` nên máy dev có thể bỏ qua; sai giá trị thì avatar trong chat vỡ mà không
+có gì báo.
+
+Script đọc `scripts/seed/chat-plan.json` (sinh cùng lượt với `V82`), nên phòng 1-1 chỉ tồn tại
+giữa những người **đã là bạn** — một sai lệch mà Stream không bao giờ báo, vì với Stream đó là một
+phòng hợp lệ. Chạy thử không cần key: `node scripts/seed/seed-stream-chat.mjs --reset --dry-run`.

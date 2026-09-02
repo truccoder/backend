@@ -28,17 +28,21 @@ public class ReputationAwardListener {
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void handleReputationEvent(ReputationAwardEvent event) {
     try {
-      if (event.isRevoke()) {
+      if (event.getSourceIdPrefix() != null) {
+        reputationService.revokeByPrefix(
+            event.getUserId(), event.getSourceType(), event.getSourceIdPrefix());
+      } else if (event.isRevoke()) {
         reputationService.revoke(event.getUserId(), event.getSourceType(), event.getSourceId());
       } else {
         reputationService.award(event.getUserId(), event.getSourceType(), event.getSourceId());
       }
     } catch (Exception e) {
       log.error(
-          "Failed to process reputation event: user={} source={} id={} revoke={}",
+          "Failed to process reputation event: user={} source={} id={} prefix={} revoke={}",
           event.getUserId(),
           event.getSourceType(),
           event.getSourceId(),
+          event.getSourceIdPrefix(),
           event.isRevoke(),
           e);
     }
