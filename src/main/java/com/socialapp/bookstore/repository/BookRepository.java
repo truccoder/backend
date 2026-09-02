@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.socialapp.bookstore.entity.BookEntity;
+import com.socialapp.common.enums.LearningCategory;
 
 public interface BookRepository extends JpaRepository<BookEntity, Integer> {
 
@@ -19,19 +20,57 @@ public interface BookRepository extends JpaRepository<BookEntity, Integer> {
   List<BookEntity> findByPostIdIn(List<Integer> postIds);
 
   /**
-   * One cursor page of the whole library, newest first.
+   * One cursor page of the whole library, newest first, optionally narrowed to one topic.
    *
    * <p>Cursor is the book id, not {@code createdAt} — see {@code BookPageResponseDto} for why. The
    * caller asks for {@code limit + 1} rows and uses the presence of the extra one to answer {@code
    * hasMore} without a second {@code COUNT(*)} over the table.
+   *
+   * <p>{@code category} null nghĩa là không lọc. Bộ lọc nằm trong chính câu truy vấn này chứ
+   * không ở phía trên: trang chỉ có tối đa 50 hàng, nên lọc sau khi cắt trang là lọc trên một
+   * mẫu ngẫu nhiên — một chủ đề có sách nhưng không có cuốn nào ở trang đầu sẽ hiện ra rỗng, và
+   * cuộn tiếp cũng không cứu được vì mỗi trang lại rỗng theo cùng một kiểu.
+   *
+   * <p>Cùng dạng {@code :param IS NULL OR ...} với {@code cursor} ngay bên cạnh: Hibernate suy ra
+   * kiểu của tham số từ vế so sánh và bind nó là varchar (cột {@code @Enumerated(STRING)}), nên
+   * Postgres không rơi vào lỗi "could not determine data type" như với native query.
+   * {@code idx_books_category_id} ở V78 phục vụ đúng cặp lọc-rồi-sắp-xếp này.
    */
   @Query(
       """
       SELECT b FROM BookEntity b
       WHERE (:cursor IS NULL OR b.id < :cursor)
+        AND (:category IS NULL OR b.category = :category)
       ORDER BY b.id DESC
       """)
-  List<BookEntity> findLibraryPage(@Param("cursor") Integer cursor, Pageable pageable);
+  List<BookEntity> findLibraryPage(
+      @Param("cursor") Integer cursor,
+      @Param("category") LearningCategory category,
+      Pageable pageable);
+
+  /**
+   * One cursor page of the books {@code buyerId} has completed a purchase for, newest-purchased
+   * catalogue-id first — see {@link com.socialapp.bookstore.service.BookService#getPurchasedPage}
+   * for why this is not "everything the buyer can read" and does not need a free-book branch.
+   *
+   * <p>{@code t_book_purchases} has no JPA association back to {@code BookEntity} (see {@link
+   * com.socialapp.bookstore.entity.BookPurchaseEntity}: {@code bookId} is a bare column), so the
+   * join is a subquery rather than a path expression. Same {@code limit + 1} / id-descending
+   * cursor contract as {@link #findLibraryPage}.
+   */
+  @Query(
+      """
+      SELECT b FROM BookEntity b
+      WHERE b.id IN (
+          SELECT p.bookId FROM BookPurchaseEntity p
+          WHERE p.buyerId = :buyerId
+            AND p.paymentStatus = com.socialapp.bookstore.entity.enums.PaymentStatus.COMPLETED
+        )
+        AND (:cursor IS NULL OR b.id < :cursor)
+      ORDER BY b.id DESC
+      """)
+  List<BookEntity> findPurchasedPage(
+      @Param("buyerId") Integer buyerId, @Param("cursor") Integer cursor, Pageable pageable);
 
   /**
    * <p>{@code f_unaccent} is the IMMUTABLE wrapper from {@code

@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -49,7 +48,7 @@ class KnowledgeSyncServiceTest {
 
   @InjectMocks private KnowledgeSyncService knowledgeSyncService;
 
-  @Captor private ArgumentCaptor<VaultNoteEntity> noteCaptor;
+  @Captor private ArgumentCaptor<List<VaultNoteEntity>> notesCaptor;
 
   private static PersonalAccessTokenEntity tokenEntity(VaultPermission permission) {
     return PersonalAccessTokenEntity.builder().userId(USER_ID).vaultPermission(permission).build();
@@ -153,17 +152,23 @@ class KnowledgeSyncServiceTest {
       // Given
       when(tokenService.validateTokenAndGetEntity(RAW_TOKEN))
           .thenReturn(tokenEntity(VaultPermission.BIDIRECTIONAL));
-      when(vaultNoteRepository.findByUserIdAndFilename(USER_ID, "f.md"))
-          .thenReturn(Optional.empty());
+      // The whole batch is looked up in one query now, and written with one saveAll.
+      when(vaultNoteRepository.findByUserIdAndFilenameIn(USER_ID, List.of("f.md")))
+          .thenReturn(List.of());
 
       // When
       knowledgeSyncService.push(RAW_TOKEN, requestWithNote("f.md"));
 
       // Then
-      verify(vaultNoteRepository).save(noteCaptor.capture());
-      assertThat(noteCaptor.getValue().getUserId()).isEqualTo(USER_ID);
-      assertThat(noteCaptor.getValue().getFilename()).isEqualTo("f.md");
-      assertThat(noteCaptor.getValue().getContent()).isEqualTo("content");
+      verify(vaultNoteRepository).saveAll(notesCaptor.capture());
+      assertThat(notesCaptor.getValue())
+          .singleElement()
+          .satisfies(
+              saved -> {
+                assertThat(saved.getUserId()).isEqualTo(USER_ID);
+                assertThat(saved.getFilename()).isEqualTo("f.md");
+                assertThat(saved.getContent()).isEqualTo("content");
+              });
     }
 
     @Test
@@ -174,14 +179,15 @@ class KnowledgeSyncServiceTest {
           .thenReturn(tokenEntity(VaultPermission.BIDIRECTIONAL));
       VaultNoteEntity existing =
           VaultNoteEntity.builder().id(5).userId(USER_ID).filename("f.md").content("old").build();
-      when(vaultNoteRepository.findByUserIdAndFilename(USER_ID, "f.md"))
-          .thenReturn(Optional.of(existing));
+      when(vaultNoteRepository.findByUserIdAndFilenameIn(USER_ID, List.of("f.md")))
+          .thenReturn(List.of(existing));
 
       // When
       knowledgeSyncService.push(RAW_TOKEN, requestWithNote("f.md"));
 
-      // Then
-      verify(vaultNoteRepository).save(existing);
+      // Then — the same managed row is updated in place, not replaced
+      verify(vaultNoteRepository).saveAll(notesCaptor.capture());
+      assertThat(notesCaptor.getValue()).containsExactly(existing);
       assertThat(existing.getContent()).isEqualTo("content");
     }
   }

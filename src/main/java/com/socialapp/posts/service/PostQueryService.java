@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.hashtags.HashtagNormalizer;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.newsfeed.service.FeedPostDataMapper;
@@ -111,12 +112,21 @@ public class PostQueryService {
    * <p>The block set is applied in the query rather than to the page after it is read, so {@code
    * limit} keeps meaning "this many posts" and the cursor cannot skip past rows the caller never
    * received.
+   *
+   * <p>{@code hashtag} is optional — it is what makes a hashtag badge on a post clickable (B31).
+   * It is folded through {@link HashtagNormalizer} so the caller can pass {@code #ReactHooks} or
+   * the bare stored name and reach the same rows; a value that folds to nothing is treated as no
+   * filter.
    */
   @Transactional(readOnly = true)
-  public PostPageResponseDto getPublicFeed(Integer viewerId, Integer cursor, int limit) {
+  public PostPageResponseDto getPublicFeed(
+      Integer viewerId, Integer cursor, String hashtag, int limit) {
     return toPage(
         postRepository.findPublicFeed(
-            excludedAuthorIds(viewerId), cursor, PageRequest.of(0, limit + 1)),
+            excludedAuthorIds(viewerId),
+            cursor,
+            HashtagNormalizer.normalize(hashtag),
+            PageRequest.of(0, limit + 1)),
         limit);
   }
 

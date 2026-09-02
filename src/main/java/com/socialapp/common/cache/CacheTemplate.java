@@ -111,7 +111,21 @@ public class CacheTemplate<T> {
   public Map<String, T> getOrLoadAll(
       Collection<String> keys, Function<Collection<String>, Map<String, T>> batchLoader) {
     List<String> keyList = new ArrayList<>(keys);
-    List<String> jsonValues = redis.opsForValue().multiGet(keyList);
+
+    // Wrapped, because every other method on this class treats a Redis failure as a miss and this
+    // one used to let it through. That made a Redis blip break exactly the batch read paths — feed
+    // and profile hydration — with 500s, while the single-key paths beside them kept working: the
+    // hardest kind of outage to diagnose, because it only half breaks.
+    List<String> jsonValues;
+    try {
+      jsonValues = redis.opsForValue().multiGet(keyList);
+    } catch (Exception e) {
+      log.warn(
+          "Cache MGET failed for {} key(s); treating all as misses: {}",
+          keyList.size(),
+          e.getMessage());
+      jsonValues = null;
+    }
 
     Map<String, T> result = new HashMap<>(keyList.size());
     List<String> misses = new ArrayList<>();

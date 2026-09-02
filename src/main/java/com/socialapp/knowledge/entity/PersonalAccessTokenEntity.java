@@ -31,6 +31,14 @@ public class PersonalAccessTokenEntity {
 
   private String tokenHash;
 
+  /**
+   * The first characters of the raw token, e.g. {@code "sk_7tDWi2xy"} — the only remaining way to
+   * tell two tokens apart once the raw value has left the create dialog, since only
+   * {@link #tokenHash} is otherwise stored. {@code null} for tokens created before this column
+   * existed; there is no way to recover a prefix for those from a hash.
+   */
+  private String tokenPrefix;
+
   private String name;
 
   private OffsetDateTime lastUsedAt;

@@ -1,5 +1,6 @@
 package com.socialapp.posts.controller;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import org.springframework.http.HttpHeaders;
@@ -33,12 +34,13 @@ public class EventController {
   @GetMapping("/{postId}/attendees")
   public List<EventAttendeeDto> getAttendees(
       @PathVariable Integer postId, @RequestParam(required = false) RsvpStatus status) {
-    return eventService.getAttendees(postId, status);
+    return eventService.getAttendees(SecurityUtils.getCurrentUserId(), postId, status);
   }
 
   @GetMapping("/{postId}/attendees/count")
   public AttendeeCountResponse getAttendeeCount(@PathVariable Integer postId) {
-    return new AttendeeCountResponse(eventService.getGoingCount(postId));
+    return new AttendeeCountResponse(
+        eventService.getGoingCount(SecurityUtils.getCurrentUserId(), postId));
   }
 
   @PostMapping("/{postId}/add-to-calendar")
@@ -48,11 +50,11 @@ public class EventController {
 
   @GetMapping("/{postId}/export.ics")
   public ResponseEntity<byte[]> exportIcs(@PathVariable Integer postId) {
-    String ics = eventService.generateIcsFile(postId);
+    String ics = eventService.generateIcsFile(SecurityUtils.getCurrentUserId(), postId);
     return ResponseEntity.ok()
         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=event.ics")
-        .contentType(MediaType.parseMediaType("text/calendar"))
-        .body(ics.getBytes());
+        .contentType(MediaType.parseMediaType("text/calendar;charset=UTF-8"))
+        .body(ics.getBytes(StandardCharsets.UTF_8));
   }
 
   @GetMapping("/google/auth-url")

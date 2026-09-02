@@ -5,7 +5,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -21,13 +23,21 @@ import com.socialapp.newsfeed.service.NewsfeedService;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.dto.CommentPageResponseDto;
 import com.socialapp.posts.dto.CommentResponseDto;
 import com.socialapp.posts.dto.CreateCommentRequestDto;
 import com.socialapp.posts.dto.UpdateCommentRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
 import com.socialapp.posts.entity.PostEntity;
+import com.socialapp.posts.entity.QnaDetails;
+import com.socialapp.posts.entity.enums.PostType;
+import com.socialapp.posts.entity.enums.ReactionType;
+import com.socialapp.posts.repository.CommentReactionRepository;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostRepository;
+import com.socialapp.reputation.RepLevel;
+import com.socialapp.reputation.entity.enums.RepSourceType;
+import com.socialapp.reputation.event.ReputationEventPublisher;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -37,12 +47,15 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class CommentService {
   private final CommentRepository commentRepository;
+  private final CommentReactionRepository commentReactionRepository;
   private final PostRepository postRepository;
   private final UserBanService userBanService;
   private final UserRepository userRepository;
   private final NotificationService notificationService;
   private final NewsfeedService newsfeedService;
   private final BlockQueryService blockQueryService;
+  private final PostVisibilityService postVisibilityService;
+  private final ReputationEventPublisher reputationEventPublisher;
 
   /**
    * The comments on a post, as {@code viewerId} is allowed to see them.
@@ -57,44 +70,120 @@ public class CommentService {
    * announced itself would invite retaliation.
    */
   @Transactional(readOnly = true)
-  public List<CommentResponseDto> getComments(Integer viewerId, Integer postId) {
-    verifyPostExists(postId);
+  public CommentPageResponseDto getComments(
+      Integer viewerId, Integer postId, Integer cursor, int limit) {
+    requireVisiblePost(viewerId, postId);
+
+    // limit + 1: the extra root answers hasMore without a second COUNT, and is dropped before the
+    // page is returned. Same trick as PostQueryService.
+    List<CommentEntity> roots =
+        commentRepository.findRootCommentsForPage(postId, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = roots.size() > limit;
+    List<CommentEntity> pageRoots = hasMore ? roots.subList(0, limit) : roots;
+
+    // The cursor comes from the last root READ, before block filtering removes any of them.
+    // Taking it after filtering would rewind to an earlier comment whenever the last root on a
+    // page happened to be from a blocked author, and the client would fetch the same page forever.
+    Integer nextCursor = hasMore ? pageRoots.get(pageRoots.size() - 1).getId() : null;
+
+    List<CommentEntity> replies =
+        pageRoots.isEmpty()
+            ? List.of()
+            : commentRepository.findByParentIdInOrderByCreatedAtAsc(
+                pageRoots.stream().map(CommentEntity::getId).toList());
 
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(viewerId);
     List<CommentEntity> comments =
-        commentRepository.findByPostIdOrderByCreatedAtAsc(postId).stream()
+        Stream.concat(pageRoots.stream(), replies.stream())
             .filter(comment -> !blockedIds.contains(comment.getAuthorId()))
             .toList();
+
+    return new CommentPageResponseDto(hydrate(comments, viewerId), nextCursor, hasMore);
+  }
+
+  /**
+   * Turns comment rows into response DTOs, loading everything they need in batches.
+   *
+   * <p>Four queries for the whole page rather than a set per comment: authors, like counts,
+   * reaction breakdowns and the viewer's own reactions. Counting inside the mapping loop would be
+   * an N+1 on exactly the endpoint a busy post hits hardest.
+   */
+  private List<CommentResponseDto> hydrate(List<CommentEntity> comments, Integer viewerId) {
     Set<Integer> authorIds =
         comments.stream().map(CommentEntity::getAuthorId).collect(Collectors.toSet());
     Map<Integer, UserEntity> authorsById =
         userRepository.findAllById(authorIds).stream()
             .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
 
-    return comments.stream().map(comment -> toResponseDto(comment, authorsById)).toList();
+    List<Integer> commentIds = comments.stream().map(CommentEntity::getId).toList();
+    Map<Integer, Long> likeCounts = commentReactionRepository.countByCommentIds(commentIds);
+    Map<Integer, Map<ReactionType, Long>> reactionSummaries =
+        commentReactionRepository.countByTypeForCommentIds(commentIds);
+    Map<Integer, ReactionType> myReactions =
+        commentReactionRepository.findMyReactions(viewerId, commentIds);
+
+    return comments.stream()
+        .map(
+            comment ->
+                toResponseDto(comment, authorsById, likeCounts, reactionSummaries, myReactions))
+        .toList();
   }
 
   private CommentResponseDto toResponseDto(
-      CommentEntity comment, Map<Integer, UserEntity> authorsById) {
-    UserEntity author = authorsById.get(comment.getAuthorId());
-    return CommentResponseDto.builder()
-        .id(comment.getId())
-        .postId(comment.getPostId())
-        .authorId(comment.getAuthorId())
-        .authorFullName(author != null ? author.getFullName() : null)
-        .authorProfilePictureUrl(author != null ? author.getProfilePictureUrl() : null)
+      CommentEntity comment,
+      Map<Integer, UserEntity> authorsById,
+      Map<Integer, Long> likeCounts,
+      Map<Integer, Map<ReactionType, Long>> reactionSummaries,
+      Map<Integer, ReactionType> myReactions) {
+    CommentResponseDto.CommentResponseDtoBuilder builder =
+        CommentResponseDto.builder()
+            .id(comment.getId())
+            .postId(comment.getPostId())
+            .authorId(comment.getAuthorId());
+    return withAuthor(builder, authorsById.get(comment.getAuthorId()))
         .content(comment.getContent())
         .parentId(comment.getParentId())
         .createdAt(comment.getCreatedAt())
         .updatedAt(comment.getUpdatedAt())
+        .likeCount(likeCounts.getOrDefault(comment.getId(), 0L).intValue())
+        // An empty map, never null: a comment nobody has reacted to has a known breakdown — it is
+        // empty — and null would be indistinguishable from "not loaded" on the client.
+        .reactionSummary(reactionSummaries.getOrDefault(comment.getId(), Map.of()))
+        .myReaction(myReactions.get(comment.getId()))
         .build();
+  }
+
+  /**
+   * Fills in every field derived from the commenter's row, or none of them.
+   *
+   * <p>Extracted for the reason {@code SearchService#withAuthor} was: one {@code author != null}
+   * ternary per field reads as five independent decisions and PMD counts them as five, which puts
+   * the caller over both the cognitive-complexity and the NPath threshold. There is one decision
+   * here — the author row was loaded or it was not — and in the second case every author field
+   * stays null together.
+   *
+   * <p>A missing row is not an error. A comment outlives the account that wrote it, and a thread
+   * that renders with one blank byline is better than one that throws.
+   */
+  private static CommentResponseDto.CommentResponseDtoBuilder withAuthor(
+      CommentResponseDto.CommentResponseDtoBuilder builder, UserEntity author) {
+    if (author == null) {
+      return builder;
+    }
+    return builder
+        .authorUsername(author.getUsername())
+        .authorFullName(author.getFullName())
+        .authorProfilePictureUrl(author.getProfilePictureUrl())
+        .authorEliteScore(author.getEliteScore())
+        .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()));
   }
 
   @Transactional
   public void createComment(Integer authorId, Integer postId, CreateCommentRequestDto request) {
     checkBanStatus(authorId);
     validateContent(request.getContent());
-    PostEntity post = findPostOrThrow(postId);
+    PostEntity post = requireVisiblePost(authorId, postId);
 
     if (request.getParentId() != null) {
       validateParentComment(request.getParentId(), postId);
@@ -109,7 +198,71 @@ public class CommentService {
     refreshCachedCommentCount(postId);
 
     notifyPostAuthor(post, authorId);
+    // After save, because the notification carries the comment id and the id only exists once the
+    // row does.
+    notifyMentionedUsers(post, comment, authorId);
     trackCommentInteraction(post, authorId);
+  }
+
+  /**
+   * Tells the people named with {@code @handle} in a comment that they were named.
+   *
+   * <p>The other half of a tag. The clients write the handle into the body when someone taps Reply
+   * and render it as a link to that profile, so the mention was already real and already
+   * clickable — it just reached nobody, and the person addressed found out only if they happened
+   * to reopen the post.
+   *
+   * <p>Three filters, each closing a different way this could go wrong:
+   *
+   * <ul>
+   *   <li><b>The handle must exist.</b> {@code MentionScanner} reports what looks like a mention;
+   *       only the user table can say whether anybody holds it. Handles matching nobody are
+   *       dropped silently — writing {@code @nobody} is a comment, not an error.
+   *   <li><b>Not the author.</b> Naming yourself in your own comment is not news.
+   *   <li><b>Not the post's author, when they are already being told.</b> {@code notifyPostAuthor}
+   *       has just sent them a POST_COMMENTED for this same comment; a mention on top would be two
+   *       bells for one event. Only skipped when that notification actually went out — an author
+   *       commenting under their own post gets no POST_COMMENTED, so a mention of them there is
+   *       the only signal and must survive.
+   * </ul>
+   *
+   * <p>Blocks need no filter here: {@code NotificationService.send} already suppresses delivery in
+   * both directions, so a mention cannot be used to reach somebody who blocked you.
+   */
+  private void notifyMentionedUsers(PostEntity post, CommentEntity comment, Integer authorId) {
+    Set<String> handles = MentionScanner.scan(comment.getContent());
+    if (handles.isEmpty()) {
+      return;
+    }
+
+    // notifyPostAuthor above sends POST_COMMENTED to the post's author unless they are the
+    // commenter — so this is exactly when a mention of them would be the second bell for one act.
+    boolean postAuthorAlreadyNotified = !post.getAuthorId().equals(authorId);
+
+    for (UserEntity mentioned : userRepository.findAllByUsernameLowerIn(handles)) {
+      if (mentioned.getId().equals(authorId)) {
+        continue;
+      }
+      if (postAuthorAlreadyNotified && mentioned.getId().equals(post.getAuthorId())) {
+        continue;
+      }
+      notificationService.send(
+          SendNotificationRequest.builder()
+              .recipientId(mentioned.getId())
+              .actorId(authorId)
+              .type(NotificationType.USER_MENTIONED)
+              .title("You were mentioned in a comment")
+              .body(actorName(authorId) + " mentioned you in a comment")
+              // The COMMENT id, not the post id: a thread can run to hundreds of replies, and the
+              // point of the notification is to open at the one that named you.
+              .referenceId(comment.getId())
+              .referenceType("COMMENT")
+              // And the post it lives under, because no client route is keyed by comment id — the
+              // reference above says which reply, this says which page to open it on. Free here:
+              // the post is already a parameter.
+              .postId(post.getId())
+              .build());
+    }
   }
 
   /**
@@ -146,14 +299,48 @@ public class CommentService {
 
   @Transactional
   public void deleteComment(Integer actorId, Integer postId, Integer commentId) {
-    verifyPostExists(postId);
+    PostEntity post =
+        postRepository
+            .findById(postId)
+            .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
 
     CommentEntity comment = findCommentOrThrow(commentId);
     verifyBelongsToPost(comment, postId);
     verifyAuthor(actorId, comment);
 
+    unresolveIfAcceptedAnswer(post, comment);
+
     commentRepository.delete(comment);
     refreshCachedCommentCount(postId);
+  }
+
+  /**
+   * If the comment being deleted is its post's accepted answer, unpick it: clear {@code
+   * acceptedAnswerId}, mark the QNA unresolved again, refresh the feed cache, and revoke the
+   * {@code ACCEPTED_ANSWER} points.
+   *
+   * <p>Without this a deleted accepted answer left the post labelled "resolved" and pointing at a
+   * comment id that no longer exists — and {@code PostService.acceptAnswer} refuses to run while
+   * {@code acceptedAnswerId} is set, so the author could never pick a replacement. Mirrors {@code
+   * PostService.unacceptAnswer}; the revoke is a no-op when no award was made (an author
+   * accepting their own answer earns nothing).
+   */
+  private void unresolveIfAcceptedAnswer(PostEntity post, CommentEntity comment) {
+    if (post.getPostType() != PostType.QNA || post.getQnaDetails() == null) {
+      return;
+    }
+    QnaDetails qnaDetails = post.getQnaDetails();
+    if (!comment.getId().equals(qnaDetails.getAcceptedAnswerId())) {
+      return;
+    }
+
+    qnaDetails.setAcceptedAnswerId(null);
+    qnaDetails.setIsResolved(false);
+    postRepository.save(post);
+    newsfeedService.updateCachedQnaDetails(post.getId(), qnaDetails);
+
+    reputationEventPublisher.revoke(
+        comment.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, comment.getId().toString());
   }
 
   /**
@@ -209,6 +396,25 @@ public class CommentService {
     return postRepository
         .findById(postId)
         .orElseThrow(() -> new NotFoundException("Post not found with ID: " + postId));
+  }
+
+  /**
+   * The post, but only if {@code viewerId} is allowed to read it.
+   *
+   * <p>Existence used to be the only check here, which left a comment thread readable — and
+   * writable — on a PRIVATE post by anyone who guessed its id. That is a worse leak than it first
+   * looks: the thread carries comment bodies plus every commenter's name and avatar, and posting
+   * into it fires a notification at an author who never shared the post with that reader.
+   *
+   * <p>404, not 403, matching {@code PostReactionService#requireVisiblePost}: a post you may not
+   * read must not be distinguishable from one that does not exist.
+   */
+  private PostEntity requireVisiblePost(Integer viewerId, Integer postId) {
+    PostEntity post = findPostOrThrow(postId);
+    if (!postVisibilityService.isVisibleTo(post, viewerId)) {
+      throw new NotFoundException("Post not found with ID: " + postId);
+    }
+    return post;
   }
 
   private void checkBanStatus(Integer userId) {

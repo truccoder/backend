@@ -26,8 +26,10 @@ public class ProjectResponseDto {
   private String title;
   private String description;
   private String bannerUrl;
+  private List<String> tags;
   private ProjectStatus status;
   private Integer authorId;
+  private String authorUsername;
   private String authorFullName;
   private String authorProfilePictureUrl;
   private List<ProjectPositionResponseDto> positions;
@@ -48,8 +50,13 @@ public class ProjectResponseDto {
         .title(project.getTitle())
         .description(project.getDescription())
         .bannerUrl(project.getBannerUrl())
+        .tags(project.getTags())
         .status(project.getStatus())
         .authorId(project.getAuthor() == null ? null : project.getAuthor().getId())
+        // authorUsername mirrors B13's feed fix: /u/{username} is keyed on the handle and there is
+        // no id->username endpoint, so without this the owner's name and avatar on a project card
+        // have nowhere to link. The author is already join-fetched everywhere this DTO is built.
+        .authorUsername(project.getAuthor() == null ? null : project.getAuthor().getUsername())
         .authorFullName(project.getAuthor() == null ? null : project.getAuthor().getFullName())
         .authorProfilePictureUrl(
             project.getAuthor() == null ? null : project.getAuthor().getProfilePictureUrl())

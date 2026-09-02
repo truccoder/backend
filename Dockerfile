@@ -46,8 +46,18 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 # thì gộp cả Redis, Neo4j và MinIO — một cú chớp của Redis sẽ làm container bị đánh dấu unhealthy
 # dù phần lớn API vẫn chạy tốt.
 #
-# start-period 90s vì lần khởi động đầu phải chạy Flyway trên 44 migration.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+# start-period dài vì LẦN KHỞI ĐỘNG ĐẦU TIÊN trên một database trống phải chạy Flyway qua 54
+# migration CỘNG khoảng 15 MB dữ liệu seed — application-prod.yml có `classpath:db/seed`, nên
+# production nạp cả bộ 500 người dùng chứ không chỉ schema. Đo trên Testcontainers cục bộ là ~25
+# giây; qua pooler của Supabase thì chậm hơn nhiều lần.
+#
+# Trong start-period, một lần kiểm thất bại KHÔNG tính vào retries và container vẫn ở trạng thái
+# "starting". Nên đặt rộng tay ở đây không làm chậm gì khi mọi thứ nhanh: container chuyển sang
+# healthy ngay ở lần kiểm thành công đầu tiên. Đặt hẹp thì ngược lại — container bị đánh dấu
+# unhealthy giữa lúc Flyway vẫn đang chạy đúng, và deploy quay lui một bản hoàn toàn lành lặn.
+#
+# 240s nằm gọn trong ngân sách 300s mà .github/workflows/deploy.yml chờ.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=240s --retries=3 \
   CMD curl -fsS http://localhost:8080/actuator/health/readiness || exit 1
 
 # Dạng shell, không dùng exec form, để $JAVA_OPTS được khai triển. Dùng `exec` để java trở thành

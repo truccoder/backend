@@ -19,15 +19,19 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.matchmaking.dto.ProjectPositionRequestDTO;
 import com.socialapp.matchmaking.dto.ProjectRequestDTO;
+import com.socialapp.matchmaking.dto.UpdateProjectRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectApplicationEntity;
 import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.entity.enums.ApplicationStatus;
 import com.socialapp.matchmaking.entity.enums.PositionStatus;
+import com.socialapp.matchmaking.entity.enums.ProjectStatus;
 import com.socialapp.matchmaking.repository.ProjectApplicationRepository;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 import com.socialapp.matchmaking.repository.ProjectRepository;
@@ -51,11 +55,15 @@ class ProjectServiceTest {
   private static final Integer POSITION_ID = 10;
   private static final Integer APPLICATION_ID = 100;
 
+  /** Matches the id {@link #project} stamps on every fixture. */
+  private static final Integer PROJECT_ID = 1;
+
   @Mock private ProjectRepository projectRepository;
   @Mock private ProjectPositionRepository positionRepository;
   @Mock private ProjectApplicationRepository applicationRepository;
   @Mock private UserRepository userRepository;
   @Mock private ReputationEventPublisher reputationEventPublisher;
+  @Mock private com.socialapp.notifications.services.NotificationService notificationService;
 
   @InjectMocks private ProjectService projectService;
 
@@ -217,7 +225,44 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.applyToPosition(APPLICANT_ID, POSITION_ID, "hire me"))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse an application to the applicant's own project")
+    void shouldThrowValidationException_whenApplyingToOwnProject() {
+      // Given — the project author is the one applying. Left open, this is the whole of a
+      // reputation-minting loop: apply to your own position, accept yourself, collect
+      // PROJECT_APPLICATION_ACCEPTED, repeat for a new position. The ledger cannot de-duplicate
+      // it because its idempotency key is the application id and each loop creates a fresh one.
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      when(userRepository.findById(OWNER_ID)).thenReturn(Optional.of(user(OWNER_ID)));
+      when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position));
+
+      // When / Then
+      assertThatThrownBy(() -> projectService.applyToPosition(OWNER_ID, POSITION_ID, "hire me"))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("your own project");
+      verify(applicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should refuse an application when the project itself is not open")
+    void shouldThrowConflict_whenProjectNotOpen() {
+      // Given: an OPEN position on a project the owner has since CLOSED. The owner is not made to
+      // walk every role shut before closing a project, so the position status alone is not enough.
+      ProjectEntity project = project(OWNER_ID);
+      project.setStatus(ProjectStatus.CLOSED);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      when(userRepository.findById(APPLICANT_ID)).thenReturn(Optional.of(user(APPLICANT_ID)));
+      when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position));
+
+      // When / Then
+      assertThatThrownBy(() -> projectService.applyToPosition(APPLICANT_ID, POSITION_ID, "hi"))
+          .isInstanceOf(ConflictException.class)
+          .hasMessageContaining("Project is not open");
+      verify(applicationRepository, never()).save(any());
     }
 
     @Test
@@ -289,8 +334,30 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should not award reputation when the owner accepts their own application")
+    void shouldNotAwardReputation_whenApplicantIsTheOwner() {
+      // Given — a row where the applicant and the project owner are the same person.
+      // applyToPosition now refuses to create one, so this covers the second guard: even if such a
+      // row reaches acceptApplication by another route, the points must not be granted. The accept
+      // itself still succeeds — it is the self-crediting that is refused, not the state change.
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, OWNER_ID, ApplicationStatus.PENDING);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
+      when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      // When
+      projectService.acceptApplication(OWNER_ID, APPLICATION_ID);
+
+      // Then
+      verify(reputationEventPublisher, never()).award(any(), any(), any());
     }
 
     @Test
@@ -306,7 +373,7 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.acceptApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
     }
 
@@ -356,6 +423,16 @@ class ProjectServiceTest {
       verify(reputationEventPublisher)
           .award(
               APPLICANT_ID, RepSourceType.PROJECT_APPLICATION_ACCEPTED, APPLICATION_ID.toString());
+      // The decision reaches the applicant rather than ending in silence (mirrors skill verify).
+      verify(notificationService)
+          .send(
+              org.mockito.ArgumentMatchers.argThat(
+                  r ->
+                      r.getRecipientId().equals(APPLICANT_ID)
+                          && r.getType()
+                              == com.socialapp.notifications.entity.enums.NotificationType
+                                  .PROJECT_APPLICATION_ACCEPTED
+                          && r.getActorId() == null));
     }
 
     @Test
@@ -452,7 +529,7 @@ class ProjectServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> projectService.rejectApplication(OWNER_ID, APPLICATION_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(applicationRepository, never()).save(any());
     }
 
@@ -474,6 +551,570 @@ class ProjectServiceTest {
       assertThat(result.getStatus()).isEqualTo(ApplicationStatus.REJECTED);
       assertThat(position.getStatus()).isEqualTo(PositionStatus.OPEN);
       verify(positionRepository, never()).save(any());
+      verify(notificationService)
+          .send(
+              org.mockito.ArgumentMatchers.argThat(
+                  r ->
+                      r.getRecipientId().equals(APPLICANT_ID)
+                          && r.getType()
+                              == com.socialapp.notifications.entity.enums.NotificationType
+                                  .PROJECT_APPLICATION_REJECTED));
+    }
+  }
+
+  // =====================================================================
+  // updateProject
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updateProject")
+  class UpdateProjectTests {
+
+    private UpdateProjectRequestDTO request() {
+      UpdateProjectRequestDTO dto = new UpdateProjectRequestDTO();
+      dto.setTitle("New title");
+      dto.setDescription("New description");
+      dto.setBannerUrl("https://cdn/x.png");
+      dto.setTags(List.of("mobile"));
+      return dto;
+    }
+
+    @Test
+    @DisplayName("should 404 when the project does not exist")
+    void shouldThrowNotFound_whenMissing() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.empty());
+
+      assertThatThrownBy(() -> projectService.updateProject(OWNER_ID, PROJECT_ID, request()))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should 403 when the caller is not the owner")
+    void shouldThrowForbidden_whenNotOwner() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+
+      assertThatThrownBy(() -> projectService.updateProject(999, PROJECT_ID, request()))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should 409 when the project is already completed")
+    void shouldThrowConflict_whenCompleted() {
+      ProjectEntity project = project(OWNER_ID);
+      project.setStatus(ProjectStatus.COMPLETED);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+
+      assertThatThrownBy(() -> projectService.updateProject(OWNER_ID, PROJECT_ID, request()))
+          .isInstanceOf(ConflictException.class);
+      verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should overwrite title, description, banner and tags")
+    void shouldOverwriteFields() {
+      ProjectEntity project = project(OWNER_ID);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+      when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectEntity saved = projectService.updateProject(OWNER_ID, PROJECT_ID, request());
+
+      assertThat(saved.getTitle()).isEqualTo("New title");
+      assertThat(saved.getDescription()).isEqualTo("New description");
+      assertThat(saved.getBannerUrl()).isEqualTo("https://cdn/x.png");
+      assertThat(saved.getTags()).containsExactly("mobile");
+    }
+  }
+
+  // =====================================================================
+  // updateStatus
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updateStatus")
+  class UpdateStatusTests {
+
+    @Test
+    @DisplayName("should 403 when the caller is not the owner")
+    void shouldThrowForbidden_whenNotOwner() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+
+      assertThatThrownBy(() -> projectService.updateStatus(999, PROJECT_ID, ProjectStatus.CLOSED))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should be a no-op when the project already has the target status")
+    void shouldNoOp_whenAlreadyInTargetStatus() {
+      ProjectEntity project = project(OWNER_ID); // defaults to OPEN
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+
+      ProjectEntity result = projectService.updateStatus(OWNER_ID, PROJECT_ID, ProjectStatus.OPEN);
+
+      assertThat(result).isSameAs(project);
+      verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should refuse to move a completed project out of that state")
+    void shouldThrowConflict_whenLeavingCompleted() {
+      ProjectEntity project = project(OWNER_ID);
+      project.setStatus(ProjectStatus.COMPLETED);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+
+      assertThatThrownBy(
+              () -> projectService.updateStatus(OWNER_ID, PROJECT_ID, ProjectStatus.OPEN))
+          .isInstanceOf(ConflictException.class);
+      verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should move an open project to closed")
+    void shouldCloseAnOpenProject() {
+      ProjectEntity project = project(OWNER_ID);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+      when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectEntity result =
+          projectService.updateStatus(OWNER_ID, PROJECT_ID, ProjectStatus.CLOSED);
+
+      assertThat(result.getStatus()).isEqualTo(ProjectStatus.CLOSED);
+    }
+  }
+
+  // =====================================================================
+  // deleteProject
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deleteProject")
+  class DeleteProjectTests {
+
+    @Test
+    @DisplayName("should 403 when the caller is not the owner")
+    void shouldThrowForbidden_whenNotOwner() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+
+      assertThatThrownBy(() -> projectService.deleteProject(999, PROJECT_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verify(projectRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should revoke each accepted member's reputation before deleting the project")
+    void shouldRevokeReputationThenDelete() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.FILLED);
+      ProjectApplicationEntity member =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.ACCEPTED);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+      when(applicationRepository.findByProjectIdAndStatusForRoster(
+              PROJECT_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(List.of(member));
+
+      projectService.deleteProject(OWNER_ID, PROJECT_ID);
+
+      verify(reputationEventPublisher)
+          .revoke(
+              APPLICANT_ID, RepSourceType.PROJECT_APPLICATION_ACCEPTED, APPLICATION_ID.toString());
+      verify(projectRepository).delete(project);
+    }
+  }
+
+  // =====================================================================
+  // addPosition
+  // =====================================================================
+
+  @Nested
+  @DisplayName("addPosition")
+  class AddPositionTests {
+
+    private ProjectPositionRequestDTO request(Integer quantity) {
+      ProjectPositionRequestDTO dto = new ProjectPositionRequestDTO();
+      dto.setTitle("Frontend Developer");
+      dto.setDescription("React");
+      dto.setRequiredSkills(List.of("react"));
+      dto.setQuantity(quantity);
+      return dto;
+    }
+
+    @Test
+    @DisplayName("should 403 when the caller is not the owner")
+    void shouldThrowForbidden_whenNotOwner() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+
+      assertThatThrownBy(() -> projectService.addPosition(999, PROJECT_ID, request(1)))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should 409 when the project is completed")
+    void shouldThrowConflict_whenCompleted() {
+      ProjectEntity project = project(OWNER_ID);
+      project.setStatus(ProjectStatus.COMPLETED);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+
+      assertThatThrownBy(() -> projectService.addPosition(OWNER_ID, PROJECT_ID, request(1)))
+          .isInstanceOf(ConflictException.class);
+      verify(positionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should default quantity to 1 and attach the position to the project")
+    void shouldDefaultQuantityAndAttach() {
+      ProjectEntity project = project(OWNER_ID);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+      when(positionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectPositionEntity saved = projectService.addPosition(OWNER_ID, PROJECT_ID, request(null));
+
+      assertThat(saved.getQuantity()).isEqualTo(1);
+      assertThat(saved.getProject()).isSameAs(project);
+      assertThat(saved.getTitle()).isEqualTo("Frontend Developer");
+    }
+  }
+
+  // =====================================================================
+  // updatePosition
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updatePosition")
+  class UpdatePositionTests {
+
+    private ProjectPositionRequestDTO request(Integer quantity) {
+      ProjectPositionRequestDTO dto = new ProjectPositionRequestDTO();
+      dto.setTitle("Backend Developer");
+      dto.setDescription("Spring");
+      dto.setRequiredSkills(List.of("java"));
+      dto.setQuantity(quantity);
+      return dto;
+    }
+
+    @Test
+    @DisplayName("should 403 when the caller does not own the position's project")
+    void shouldThrowForbidden_whenNotOwner() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 2, PositionStatus.OPEN)));
+
+      assertThatThrownBy(() -> projectService.updatePosition(999, POSITION_ID, request(2)))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse a quantity below the seats already filled")
+    void shouldThrowConflict_whenQuantityBelowAcceptedCount() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 3, PositionStatus.OPEN)));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(2L);
+
+      assertThatThrownBy(() -> projectService.updatePosition(OWNER_ID, POSITION_ID, request(1)))
+          .isInstanceOf(ConflictException.class);
+      verify(positionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should reopen a filled position when its quantity is raised")
+    void shouldReopen_whenFilledAndQuantityRaised() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.FILLED);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(1L);
+      when(positionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectPositionEntity saved =
+          projectService.updatePosition(OWNER_ID, POSITION_ID, request(2));
+
+      assertThat(saved.getStatus()).isEqualTo(PositionStatus.OPEN);
+      assertThat(saved.getQuantity()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("should fill an open position when its quantity is lowered to the accepted count")
+    void shouldFill_whenOpenAndQuantityLoweredToAcceptedCount() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 5, PositionStatus.OPEN);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(2L);
+      when(positionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectPositionEntity saved =
+          projectService.updatePosition(OWNER_ID, POSITION_ID, request(2));
+
+      assertThat(saved.getStatus()).isEqualTo(PositionStatus.FILLED);
+    }
+
+    @Test
+    @DisplayName("should keep the existing quantity when the request omits it")
+    void shouldKeepQuantity_whenRequestQuantityNull() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 4, PositionStatus.OPEN);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(0L);
+      when(positionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectPositionEntity saved =
+          projectService.updatePosition(OWNER_ID, POSITION_ID, request(null));
+
+      assertThat(saved.getQuantity()).isEqualTo(4);
+    }
+  }
+
+  // =====================================================================
+  // updatePositionStatus
+  // =====================================================================
+
+  @Nested
+  @DisplayName("updatePositionStatus")
+  class UpdatePositionStatusTests {
+
+    @Test
+    @DisplayName("should reject FILLED as a target — it is not settable by hand")
+    void shouldThrowValidation_whenTargetIsFilled() {
+      assertThatThrownBy(
+              () ->
+                  projectService.updatePositionStatus(OWNER_ID, POSITION_ID, PositionStatus.FILLED))
+          .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    @DisplayName("should 403 when the caller does not own the position's project")
+    void shouldThrowForbidden_whenNotOwner() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 1, PositionStatus.OPEN)));
+
+      assertThatThrownBy(
+              () -> projectService.updatePositionStatus(999, POSITION_ID, PositionStatus.CLOSED))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should refuse reopening a position that is already at capacity")
+    void shouldThrowConflict_whenReopeningAtCapacity() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 1, PositionStatus.CLOSED)));
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(1L);
+
+      assertThatThrownBy(
+              () -> projectService.updatePositionStatus(OWNER_ID, POSITION_ID, PositionStatus.OPEN))
+          .isInstanceOf(ConflictException.class);
+      verify(positionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should close an open position")
+    void shouldCloseAnOpenPosition() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 2, PositionStatus.OPEN);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position));
+      when(positionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+      ProjectPositionEntity saved =
+          projectService.updatePositionStatus(OWNER_ID, POSITION_ID, PositionStatus.CLOSED);
+
+      assertThat(saved.getStatus()).isEqualTo(PositionStatus.CLOSED);
+    }
+  }
+
+  // =====================================================================
+  // deletePosition
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deletePosition")
+  class DeletePositionTests {
+
+    @Test
+    @DisplayName("should 403 when the caller does not own the position's project")
+    void shouldThrowForbidden_whenNotOwner() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 1, PositionStatus.OPEN)));
+
+      assertThatThrownBy(() -> projectService.deletePosition(999, POSITION_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verify(positionRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should refuse deletion while a member is accepted into the position")
+    void shouldThrowConflict_whenAcceptedMemberExists() {
+      ProjectEntity project = project(OWNER_ID);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position(project, 1, PositionStatus.FILLED)));
+      when(applicationRepository.existsByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(true);
+
+      assertThatThrownBy(() -> projectService.deletePosition(OWNER_ID, POSITION_ID))
+          .isInstanceOf(ConflictException.class);
+      verify(positionRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should clear non-membership applications then delete the position")
+    void shouldClearApplicationsThenDelete() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      when(positionRepository.findByIdWithProjectAuthor(POSITION_ID))
+          .thenReturn(Optional.of(position));
+      when(applicationRepository.existsByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(false);
+
+      projectService.deletePosition(OWNER_ID, POSITION_ID);
+
+      verify(applicationRepository).deleteByPositionId(POSITION_ID);
+      verify(positionRepository).delete(position);
+    }
+  }
+
+  // =====================================================================
+  // removeMember
+  // =====================================================================
+
+  @Nested
+  @DisplayName("removeMember")
+  class RemoveMemberTests {
+
+    @Test
+    @DisplayName("should 403 when the caller is not the project owner")
+    void shouldThrowForbidden_whenNotOwner() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+
+      assertThatThrownBy(() -> projectService.removeMember(999, PROJECT_ID, APPLICANT_ID))
+          .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    @DisplayName("should 404 when the user is not an accepted member")
+    void shouldThrowNotFound_whenNoMembership() {
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID))
+          .thenReturn(Optional.of(project(OWNER_ID)));
+      when(applicationRepository.findByProjectAndApplicantAndStatus(
+              PROJECT_ID, APPLICANT_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(List.of());
+
+      assertThatThrownBy(() -> projectService.removeMember(OWNER_ID, PROJECT_ID, APPLICANT_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should flag REMOVED, revoke reputation, and reopen a freed filled position")
+    void shouldRemoveRevokeAndReopen() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.FILLED);
+      ProjectApplicationEntity membership =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.ACCEPTED);
+      when(projectRepository.findByIdWithAuthor(PROJECT_ID)).thenReturn(Optional.of(project));
+      when(applicationRepository.findByProjectAndApplicantAndStatus(
+              PROJECT_ID, APPLICANT_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(List.of(membership));
+      when(positionRepository.findByIdForUpdate(POSITION_ID)).thenReturn(Optional.of(position));
+      when(applicationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+      // after this membership flips to REMOVED, no ACCEPTED rows remain for the position
+      when(applicationRepository.countByPositionIdAndStatus(
+              POSITION_ID, ApplicationStatus.ACCEPTED))
+          .thenReturn(0L);
+
+      projectService.removeMember(OWNER_ID, PROJECT_ID, APPLICANT_ID);
+
+      assertThat(membership.getStatus()).isEqualTo(ApplicationStatus.REMOVED);
+      verify(reputationEventPublisher)
+          .revoke(
+              APPLICANT_ID, RepSourceType.PROJECT_APPLICATION_ACCEPTED, APPLICATION_ID.toString());
+      assertThat(position.getStatus()).isEqualTo(PositionStatus.OPEN);
+      verify(positionRepository).save(position);
+      verify(notificationService)
+          .send(
+              org.mockito.ArgumentMatchers.argThat(
+                  r ->
+                      r.getRecipientId().equals(APPLICANT_ID)
+                          && r.getType()
+                              == com.socialapp.notifications.entity.enums.NotificationType
+                                  .PROJECT_MEMBER_REMOVED));
+    }
+  }
+
+  // =====================================================================
+  // withdrawApplication
+  // =====================================================================
+
+  @Nested
+  @DisplayName("withdrawApplication")
+  class WithdrawApplicationTests {
+
+    @Test
+    @DisplayName("should 404 when the application does not exist")
+    void shouldThrowNotFound_whenMissing() {
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.empty());
+
+      assertThatThrownBy(() -> projectService.withdrawApplication(APPLICANT_ID, APPLICATION_ID))
+          .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("should 403 when the caller is not the applicant")
+    void shouldThrowForbidden_whenNotApplicant() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+
+      assertThatThrownBy(() -> projectService.withdrawApplication(999, APPLICATION_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verify(applicationRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should refuse to withdraw an application the owner has already decided")
+    void shouldThrowConflict_whenNotPending() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.ACCEPTED);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+
+      assertThatThrownBy(() -> projectService.withdrawApplication(APPLICANT_ID, APPLICATION_ID))
+          .isInstanceOf(ConflictException.class);
+      verify(applicationRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("should delete a pending application belonging to the caller")
+    void shouldDelete_whenPendingAndOwnApplication() {
+      ProjectEntity project = project(OWNER_ID);
+      ProjectPositionEntity position = position(project, 1, PositionStatus.OPEN);
+      ProjectApplicationEntity application =
+          application(APPLICATION_ID, project, position, APPLICANT_ID, ApplicationStatus.PENDING);
+      when(applicationRepository.findById(APPLICATION_ID)).thenReturn(Optional.of(application));
+
+      projectService.withdrawApplication(APPLICANT_ID, APPLICATION_ID);
+
+      verify(applicationRepository).delete(application);
     }
   }
 }
