@@ -461,11 +461,67 @@ public class ExplanationService {
     };
   }
 
+  /**
+   * Turns Gemini's answer into the structured result, or fails with a 503 rather than handing back
+   * something unusable.
+   *
+   * <p>The model is asked for a bare JSON object, but it intermittently wraps it in a {@code
+   * ```json} fence, prefixes a sentence, or emits a trailing comma — and the old code, on any parse
+   * failure, dumped the entire raw string into {@code explanationContent}. The card then rendered
+   * {@code {"explanation": "…\n\n* **…**"}} verbatim, with the {@code \n} showing as two literal
+   * characters (FE's {@code docs/backend-plan.md} B40). Two lines of defence now:
+   *
+   * <ol>
+   *   <li>{@link #extractJsonObject} strips a fence and trims to the outermost braces before
+   *       parsing, which recovers the common "valid JSON with decoration" case;
+   *   <li>on a genuine parse failure, one repair round-trip asks the model to fix its own output;
+   * </ol>
+   *
+   * <p>If both fail we throw {@link HttpStatus#SERVICE_UNAVAILABLE} — the same contract as a Gemini
+   * outage (B32), which FE already renders as "try again" — instead of returning an envelope the
+   * reader would see as raw text.
+   */
   private GeminiExplanationResult parseGeminiResponse(String response) {
-    try {
-      JsonNode root = objectMapper.readTree(response);
+    GeminiExplanationResult parsed = tryReadStructured(response);
+    if (Objects.nonNull(parsed)) {
+      return parsed;
+    }
 
-      String explanation = root.path("explanation").asText("");
+    log.warn("Gemini explanation was not usable JSON; attempting one repair pass");
+    // A raw ExternalApiException / ExternalRateLimitException from this call propagates unchanged
+    // (429 stays 429 — see GeminiClient / B32); only a still-unparseable answer falls through.
+    String repairedResponse = geminiClient.generateContent(buildRepairPrompt(response));
+    GeminiExplanationResult repaired = tryReadStructured(repairedResponse);
+    if (Objects.nonNull(repaired)) {
+      return repaired;
+    }
+
+    log.warn("Gemini repair pass still did not yield usable JSON; returning 503");
+    throw new ResponseStatusException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "The explanation service returned an unreadable response. Please try again.");
+  }
+
+  /**
+   * Parses one candidate string into a result, or returns {@code null} when it is not a usable
+   * structured explanation (not an object, no {@code explanation} field, blank explanation, or
+   * malformed JSON). Never throws.
+   */
+  private GeminiExplanationResult tryReadStructured(String response) {
+    String json = extractJsonObject(response);
+    if (Objects.isNull(json)) {
+      return null;
+    }
+    try {
+      JsonNode root = objectMapper.readTree(json);
+      if (!root.isObject() || !root.hasNonNull("explanation")) {
+        return null;
+      }
+
+      String explanation = unwrapNestedEnvelope(root.path("explanation").asText(""));
+      if (explanation.isBlank()) {
+        return null;
+      }
       List<String> concepts =
           objectMapper.convertValue(
               root.path("concepts"),
@@ -492,10 +548,68 @@ public class ExplanationService {
       return new GeminiExplanationResult(
           explanation, concepts, prerequisites, complexityScore, externalLinks, category);
     } catch (Exception e) {
-      log.warn("Failed to parse structured Gemini response, using raw text: {}", e.getMessage());
-      return new GeminiExplanationResult(
-          response, List.of(), List.of(), 3, List.of(), LearningCategory.OTHER);
+      log.warn("Failed to parse structured Gemini response: {}", e.getMessage());
+      return null;
     }
+  }
+
+  /**
+   * Pulls the JSON object out of whatever the model actually returned: strips a leading/trailing
+   * {@code ```} / {@code ```json} fence, then trims to the span between the first {@code &#123;} and
+   * the last {@code &#125;}. Returns {@code null} when there is no brace pair to work with.
+   */
+  private static String extractJsonObject(String text) {
+    if (Objects.isNull(text)) {
+      return null;
+    }
+    String s = text.strip();
+    if (s.startsWith("```")) {
+      int firstNewline = s.indexOf('\n');
+      if (firstNewline >= 0) {
+        s = s.substring(firstNewline + 1);
+      }
+      int closingFence = s.lastIndexOf("```");
+      if (closingFence >= 0) {
+        s = s.substring(0, closingFence);
+      }
+      s = s.strip();
+    }
+    int start = s.indexOf('{');
+    int end = s.lastIndexOf('}');
+    if (start < 0 || end <= start) {
+      return null;
+    }
+    return s.substring(start, end + 1);
+  }
+
+  /**
+   * Handles the double-wrapped case — {@code {"explanation": "{\"explanation\": \"…real…\"}"}} —
+   * that FE currently unwinds client-side with {@code liftExplanationEnvelope}. Only unwraps when
+   * the whole field is itself a JSON object carrying an {@code explanation} key; otherwise returns
+   * the string untouched, so an explanation that merely quotes some JSON is left alone.
+   */
+  private String unwrapNestedEnvelope(String explanation) {
+    String trimmed = explanation.strip();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return explanation;
+    }
+    try {
+      JsonNode inner = objectMapper.readTree(trimmed);
+      if (inner.isObject() && inner.hasNonNull("explanation")) {
+        return inner.path("explanation").asText(explanation);
+      }
+    } catch (Exception ignored) {
+      // Not actually nested JSON — keep the original text.
+    }
+    return explanation;
+  }
+
+  private String buildRepairPrompt(String malformed) {
+    return "The text below was meant to be a single JSON object with the keys explanation,"
+        + " concepts, prerequisites, complexityScore, category and externalLinks, but it is"
+        + " malformed or wrapped in extra text. Return ONLY the corrected, valid, minified JSON"
+        + " object — no code fence, no commentary, no leading or trailing prose.\n\n"
+        + malformed;
   }
 
   /**

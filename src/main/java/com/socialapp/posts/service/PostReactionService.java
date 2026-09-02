@@ -15,6 +15,7 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -237,13 +238,16 @@ public class PostReactionService {
     if (post.getAuthorId().equals(reactorId)) {
       return;
     }
+    String actor = actorName(reactorId);
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(post.getAuthorId())
             .actorId(reactorId)
             .type(NotificationType.POST_LIKED)
             .title("New reaction on your post")
-            .body(actorName(reactorId) + " reacted to your post")
+            .body(actor + " reacted to your post")
+            .messageKey(NotificationMessages.POST_LIKED)
+            .messageArgs(NotificationMessages.args("actor", actor))
             .referenceId(post.getId())
             .referenceType("POST")
             .build());

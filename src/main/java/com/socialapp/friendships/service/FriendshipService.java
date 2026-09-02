@@ -38,6 +38,7 @@ import com.socialapp.friendships.repository.FriendshipRepository;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.knowledge.service.ProfileMatchScorer;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -117,6 +118,8 @@ public class FriendshipService {
             .type(NotificationType.FRIEND_REQUEST)
             .title("New friend request")
             .body(actorName(actorId) + " sent you a friend request")
+            .messageKey(NotificationMessages.FRIEND_REQUEST)
+            .messageArgs(NotificationMessages.args("actor", actorName(actorId)))
             .referenceId(entity.getId())
             .referenceType("FRIEND_REQUEST")
             .build());
@@ -180,6 +183,8 @@ public class FriendshipService {
             .type(NotificationType.FRIEND_ACCEPTED)
             .title("Friend request accepted")
             .body(actorName(actorId) + " accepted your friend request")
+            .messageKey(NotificationMessages.FRIEND_ACCEPTED)
+            .messageArgs(NotificationMessages.args("actor", actorName(actorId)))
             .referenceId(request.getId())
             .referenceType("FRIEND_REQUEST")
             .build());

@@ -1109,19 +1109,69 @@ class ExplanationServiceTest {
     }
 
     @Test
-    @DisplayName("should fall back to the raw response text when it is not valid JSON")
-    void shouldFallBackToRawText_whenResponseInvalidJson() {
-      // Given
+    @DisplayName("should recover a JSON object wrapped in a ```json fence and prose (B40)")
+    void shouldRecoverFencedJson() {
+      // Given — the exact decoration the model intermittently adds around an otherwise valid object
       stubHappyPathUpTo(profile(null, null));
-      when(geminiClient.generateContent(anyString())).thenReturn("not json at all");
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn(
+              "Here is the explanation:\n```json\n{\"explanation\": \"real body\","
+                  + " \"category\": \"BACKEND\"}\n```");
 
       // When
       ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
 
       // Then
-      assertThat(result.getExplanationContent()).isEqualTo("not json at all");
-      assertThat(result.getComplexityScore()).isEqualTo(3);
-      assertThat(result.getConcepts()).isEmpty();
+      assertThat(result.getExplanationContent()).isEqualTo("real body");
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.BACKEND);
+    }
+
+    @Test
+    @DisplayName("should unwrap a double-encoded explanation envelope (B40)")
+    void shouldUnwrapNestedEnvelope() {
+      // Given — the model returned {"explanation": "<the whole JSON object again as a string>"}
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn(
+              "{\"explanation\": \"{\\\"explanation\\\": \\\"line one\\\\nline two\\\"}\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then — the inner body, with a real newline, not the raw envelope
+      assertThat(result.getExplanationContent()).isEqualTo("line one\nline two");
+    }
+
+    @Test
+    @DisplayName(
+        "should repair once, then 503 rather than return raw text, when JSON is unusable (B40)")
+    void shouldRepairThen503_whenResponseInvalidJson() {
+      // Given — first call and the repair round-trip both come back unusable
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString())).thenReturn("not json at all");
+
+      // When / Then
+      assertThatThrownBy(() -> explanationService.explainPost(USER_ID, POST_ID, null, null))
+          .isInstanceOf(ResponseStatusException.class)
+          .hasMessageContaining("503");
+
+      // The first call plus exactly one repair attempt
+      verify(geminiClient, org.mockito.Mockito.times(2)).generateContent(anyString());
+    }
+
+    @Test
+    @DisplayName("should return the repaired object when the repair pass fixes the JSON (B40)")
+    void shouldReturnRepairedObject() {
+      // Given — broken first, valid on the repair pass
+      stubHappyPathUpTo(profile(null, null));
+      when(geminiClient.generateContent(anyString()))
+          .thenReturn("{ oops not json", "{\"explanation\": \"fixed body\"}");
+
+      // When
+      ExplanationResponseDto result = explanationService.explainPost(USER_ID, POST_ID, null, null);
+
+      // Then
+      assertThat(result.getExplanationContent()).isEqualTo("fixed body");
     }
   }
 }

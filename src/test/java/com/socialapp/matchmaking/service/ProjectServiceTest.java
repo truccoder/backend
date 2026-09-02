@@ -76,6 +76,7 @@ class ProjectServiceTest {
   private static ProjectEntity project(Integer authorId) {
     ProjectEntity project = new ProjectEntity();
     project.setId(1);
+    project.setTitle("Elite Nexus mobile app");
     project.setAuthor(user(authorId));
     project.setApplications(new ArrayList<>());
     return project;

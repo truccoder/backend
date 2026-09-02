@@ -36,12 +36,14 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.PostPageResponseDto;
+import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
@@ -128,19 +130,25 @@ class PostControllerTest {
   class CreatePostTests {
 
     @Test
-    @DisplayName("shouldReturn200_whenPayloadIsValid_happyPath")
-    void shouldReturn200_whenPayloadIsValid_happyPath() throws Exception {
+    @DisplayName("shouldReturn201WithPostId_whenPayloadIsValid_happyPath")
+    void shouldReturn201WithPostId_whenPayloadIsValid_happyPath() throws Exception {
       // Given
       String requestJson =
           """
           { "content": "Hello world", "visibility": "PUBLIC" }
           """;
+      PostEntity saved = new PostEntity();
+      saved.setId(42);
+      saved.setModerationStatus(ModerationStatus.PENDING_MODERATION);
+      when(postService.createPost(eq(currentUser.getId()), any())).thenReturn(saved);
 
       // When / Then
       mockMvc
           .perform(
               authed(post(POSTS_URL)).contentType(MediaType.APPLICATION_JSON).content(requestJson))
-          .andExpect(status().isOk());
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.postId").value(42))
+          .andExpect(jsonPath("$.moderationStatus").value("PENDING_MODERATION"));
 
       verify(postService).createPost(eq(currentUser.getId()), any());
     }
@@ -170,8 +178,8 @@ class PostControllerTest {
   class CreateBookPostTests {
 
     @Test
-    @DisplayName("shouldReturn200_whenMetadataAndFileAreValid_happyPath")
-    void shouldReturn200_whenMetadataAndFileAreValid_happyPath() throws Exception {
+    @DisplayName("shouldReturn201WithPostId_whenMetadataAndFileAreValid_happyPath")
+    void shouldReturn201WithPostId_whenMetadataAndFileAreValid_happyPath() throws Exception {
       // Given
       MockMultipartFile metadata =
           new MockMultipartFile(
@@ -182,11 +190,17 @@ class PostControllerTest {
       MockMultipartFile bookFile =
           new MockMultipartFile(
               "file", "book.pdf", MediaType.APPLICATION_PDF_VALUE, new byte[] {1, 2, 3});
+      PostEntity saved = new PostEntity();
+      saved.setId(7);
+      saved.setModerationStatus(ModerationStatus.APPROVED);
+      when(postService.createBookPost(eq(currentUser.getId()), any(), any(), any()))
+          .thenReturn(saved);
 
       // When / Then
       mockMvc
           .perform(authed(multipart(BOOK_POSTS_URL).file(metadata).file(bookFile)))
-          .andExpect(status().isOk());
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.postId").value(7));
 
       verify(postService).createBookPost(eq(currentUser.getId()), any(), any(), any());
     }

@@ -12,6 +12,7 @@ import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.github.repository.GithubStatsRepository;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -308,6 +309,11 @@ public class SkillVerificationService {
                 verified
                     ? "Your claim for \"" + skill + "\" was verified"
                     : "Your claim for \"" + skill + "\" was not verified")
+            .messageKey(
+                verified
+                    ? NotificationMessages.SKILL_VERIFIED
+                    : NotificationMessages.SKILL_REJECTED)
+            .messageArgs(NotificationMessages.args("skill", skill))
             .referenceId(progress.getNode().getId())
             .referenceType("ROADMAP_NODE")
             .build());

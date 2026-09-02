@@ -20,6 +20,7 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -238,6 +239,7 @@ public class CommentService {
     // notifyPostAuthor above sends POST_COMMENTED to the post's author unless they are the
     // commenter — so this is exactly when a mention of them would be the second bell for one act.
     boolean postAuthorAlreadyNotified = !post.getAuthorId().equals(authorId);
+    String actor = actorName(authorId);
 
     for (UserEntity mentioned : userRepository.findAllByUsernameLowerIn(handles)) {
       if (mentioned.getId().equals(authorId)) {
@@ -252,7 +254,9 @@ public class CommentService {
               .actorId(authorId)
               .type(NotificationType.USER_MENTIONED)
               .title("You were mentioned in a comment")
-              .body(actorName(authorId) + " mentioned you in a comment")
+              .body(actor + " mentioned you in a comment")
+              .messageKey(NotificationMessages.USER_MENTIONED)
+              .messageArgs(NotificationMessages.args("actor", actor))
               // The COMMENT id, not the post id: a thread can run to hundreds of replies, and the
               // point of the notification is to open at the one that named you.
               .referenceId(comment.getId())
@@ -427,13 +431,16 @@ public class CommentService {
     if (post.getAuthorId().equals(commenterId)) {
       return;
     }
+    String actor = actorName(commenterId);
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(post.getAuthorId())
             .actorId(commenterId)
             .type(NotificationType.POST_COMMENTED)
             .title("New comment on your post")
-            .body(actorName(commenterId) + " commented on your post")
+            .body(actor + " commented on your post")
+            .messageKey(NotificationMessages.POST_COMMENTED)
+            .messageArgs(NotificationMessages.args("actor", actor))
             .referenceId(post.getId())
             .referenceType("POST")
             .build());

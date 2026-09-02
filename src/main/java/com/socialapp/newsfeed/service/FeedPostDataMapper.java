@@ -103,6 +103,7 @@ public class FeedPostDataMapper {
         .authorLevelName(RepLevel.displayNameForScore(author.getEliteScore()))
         .content(post.getContent())
         .visibility(post.getVisibility())
+        .moderationStatus(post.getModerationStatus())
         .googlePlaceId(post.getGooglePlaceId())
         .locationType(post.getLocationType())
         .locationDetails(post.getLocationDetails())

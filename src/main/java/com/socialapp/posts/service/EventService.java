@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -104,16 +105,19 @@ public class EventService {
             .orElse("Someone");
     String eventTitle = Objects.toString(post.getEventDetails().getEventTitle(), "your event");
 
+    boolean going = RsvpStatus.GOING.equals(status);
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(hostId)
             .actorId(attendeeId)
             .type(NotificationType.EVENT_RSVP)
             .title("New RSVP for your event")
-            .body(
-                attendeeName
-                    + (RsvpStatus.GOING.equals(status) ? " is going to " : " is interested in ")
-                    + eventTitle)
+            .body(attendeeName + (going ? " is going to " : " is interested in ") + eventTitle)
+            .messageKey(
+                going
+                    ? NotificationMessages.EVENT_RSVP_GOING
+                    : NotificationMessages.EVENT_RSVP_INTERESTED)
+            .messageArgs(NotificationMessages.args("actor", attendeeName, "event", eventTitle))
             .referenceId(post.getId())
             .referenceType("POST")
             .build());

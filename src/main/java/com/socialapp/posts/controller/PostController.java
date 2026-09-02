@@ -1,5 +1,6 @@
 package com.socialapp.posts.controller;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -7,8 +8,10 @@ import org.springframework.web.multipart.MultipartFile;
 import com.socialapp.common.utils.Constants;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.CreatePostRequestDto;
+import com.socialapp.posts.dto.CreatePostResponseDto;
 import com.socialapp.posts.dto.PostPageResponseDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
+import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
 import com.socialapp.security.util.SecurityUtils;
@@ -25,9 +28,19 @@ public class PostController {
   private final PostService postService;
   private final PostQueryService postQueryService;
 
+  /**
+   * Returns the created post's id and moderation status instead of {@code void}, so the composer
+   * can navigate straight to the permalink it just published and know whether to render the post or
+   * a "pending review" state — FE's {@code docs/backend-plan.md} B39.
+   */
   @PostMapping
-  public void createPost(@Valid @RequestBody CreatePostRequestDto request) {
-    postService.createPost(SecurityUtils.getCurrentUserId(), request);
+  @ResponseStatus(HttpStatus.CREATED)
+  public CreatePostResponseDto createPost(@Valid @RequestBody CreatePostRequestDto request) {
+    PostEntity post = postService.createPost(SecurityUtils.getCurrentUserId(), request);
+    return CreatePostResponseDto.builder()
+        .postId(post.getId())
+        .moderationStatus(post.getModerationStatus())
+        .build();
   }
 
   /**
@@ -58,11 +71,17 @@ public class PostController {
   }
 
   @PostMapping(value = "/books", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public void createBookPost(
+  @ResponseStatus(HttpStatus.CREATED)
+  public CreatePostResponseDto createBookPost(
       @Valid @RequestPart("metadata") CreatePostRequestDto request,
       @RequestPart("file") MultipartFile bookFile,
       @RequestPart(value = "cover", required = false) MultipartFile coverFile) {
-    postService.createBookPost(SecurityUtils.getCurrentUserId(), request, bookFile, coverFile);
+    PostEntity post =
+        postService.createBookPost(SecurityUtils.getCurrentUserId(), request, bookFile, coverFile);
+    return CreatePostResponseDto.builder()
+        .postId(post.getId())
+        .moderationStatus(post.getModerationStatus())
+        .build();
   }
 
   @PutMapping("/{postId}")

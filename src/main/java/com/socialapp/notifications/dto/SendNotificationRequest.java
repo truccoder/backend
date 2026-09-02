@@ -20,6 +20,16 @@ public class SendNotificationRequest {
   private NotificationType type;
   private String title;
   private String body;
+
+  /**
+   * Structured, language-agnostic form of {@link #body} — a {@code NotificationMessages} key and
+   * its args. When set, the stored row and the API carry it alongside the English {@code body}
+   * (which is still what push/email send). See B40 in {@code docs/backend-plan.md}.
+   */
+  private String messageKey;
+
+  private Map<String, String> messageArgs;
+
   private Integer referenceId;
   private String referenceType;
 

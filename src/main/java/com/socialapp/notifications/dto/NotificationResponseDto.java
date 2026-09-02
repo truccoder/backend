@@ -1,6 +1,7 @@
 package com.socialapp.notifications.dto;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.socialapp.notifications.entity.enums.NotificationChannel;
@@ -21,6 +22,23 @@ public class NotificationResponseDto {
   private NotificationType type;
   private String title;
   private String body;
+
+  /**
+   * The client-rendered, localisable form of {@link #body}: a template key from {@code
+   * NotificationMessages} (e.g. {@code "POST_LIKED"}) and its interpolation args (e.g. {@code
+   * {"actor": "Ada"}}). FE looks the key up in its own i18n bundle and fills the args, so the line
+   * follows the UI language instead of being frozen English — see B40 in {@code
+   * docs/backend-plan.md}.
+   *
+   * <p>Both are omitted (not null) for notifications stored before this existed; a client that sees
+   * no {@code messageKey} falls back to {@link #body} verbatim, which is the old behaviour.
+   */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  private String messageKey;
+
+  @JsonInclude(JsonInclude.Include.NON_EMPTY)
+  private Map<String, String> messageArgs;
+
   private Integer referenceId;
   private String referenceType;
 

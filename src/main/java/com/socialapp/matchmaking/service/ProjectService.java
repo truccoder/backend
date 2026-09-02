@@ -22,6 +22,7 @@ import com.socialapp.matchmaking.entity.enums.ProjectStatus;
 import com.socialapp.matchmaking.repository.ProjectApplicationRepository;
 import com.socialapp.matchmaking.repository.ProjectPositionRepository;
 import com.socialapp.matchmaking.repository.ProjectRepository;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -206,12 +207,18 @@ public class ProjectService {
    */
   private void notifyApplicant(
       ProjectApplicationEntity application, NotificationType type, String title, String body) {
+    String messageKey =
+        NotificationType.PROJECT_APPLICATION_ACCEPTED.equals(type)
+            ? NotificationMessages.PROJECT_APPLICATION_ACCEPTED
+            : NotificationMessages.PROJECT_APPLICATION_REJECTED;
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(application.getApplicant().getId())
             .type(type)
             .title(title)
             .body(body)
+            .messageKey(messageKey)
+            .messageArgs(NotificationMessages.args("project", application.getProject().getTitle()))
             .referenceId(application.getProject().getId())
             .referenceType("PROJECT")
             .build());
@@ -503,6 +510,8 @@ public class ProjectService {
             .type(NotificationType.PROJECT_MEMBER_REMOVED)
             .title("Removed from a project")
             .body("You were removed from the team on \"" + project.getTitle() + "\"")
+            .messageKey(NotificationMessages.PROJECT_MEMBER_REMOVED)
+            .messageArgs(NotificationMessages.args("project", project.getTitle()))
             .referenceId(projectId)
             .referenceType("PROJECT")
             .build());

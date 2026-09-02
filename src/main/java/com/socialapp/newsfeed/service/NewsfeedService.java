@@ -31,6 +31,7 @@ import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
 import com.socialapp.newsfeed.entity.enums.InteractionType;
 import com.socialapp.newsfeed.repository.UserInteractionRepository;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -266,6 +267,7 @@ public class NewsfeedService {
     if (CollectionUtils.isEmpty(taggedUserIds)) {
       return;
     }
+    String actor = displayName(author);
     for (Integer taggedUserId : taggedUserIds) {
       if (taggedUserId.equals(post.getAuthorId())) {
         continue;
@@ -276,7 +278,9 @@ public class NewsfeedService {
               .actorId(post.getAuthorId())
               .type(NotificationType.POST_TAGGED)
               .title("You were tagged in a post")
-              .body(displayName(author) + " tagged you in a post")
+              .body(actor + " tagged you in a post")
+              .messageKey(NotificationMessages.POST_TAGGED)
+              .messageArgs(NotificationMessages.args("actor", actor))
               .referenceId(post.getId())
               .referenceType("POST")
               .build());

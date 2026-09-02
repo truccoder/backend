@@ -79,21 +79,28 @@ public class PostService {
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
   private static final Pattern HASHTAG_PATTERN = Pattern.compile("#(\\w+)");
 
+  /**
+   * @return the saved post — its generated id and moderation status are what the composer needs to
+   *     navigate to what it just published (B39). The entity is returned rather than {@code void}
+   *     purely so the controller can read those two fields.
+   */
   @Transactional
-  public void createPost(Integer authorId, CreatePostRequestDto request) {
+  public PostEntity createPost(Integer authorId, CreatePostRequestDto request) {
     if (PostType.BOOK.equals(request.getPostType())) {
       throw new ValidationException(
           "Use POST /v1/api/posts/books to create a post with an attached book");
     }
-    buildAndSavePost(authorId, request);
+    return buildAndSavePost(authorId, request);
   }
 
   /**
    * Creates a post with an attached book in one call, so callers don't need to create a post
    * first just to obtain a postId to pass into book creation.
+   *
+   * @return the saved post, for the same reason as {@link #createPost}.
    */
   @Transactional
-  public void createBookPost(
+  public PostEntity createBookPost(
       Integer authorId,
       CreatePostRequestDto request,
       MultipartFile bookFile,
@@ -125,6 +132,8 @@ public class PostService {
           authorId);
       newsfeedService.fanOutPost(post.getId());
     }
+
+    return post;
   }
 
   private PostEntity buildAndSavePost(Integer authorId, CreatePostRequestDto request) {

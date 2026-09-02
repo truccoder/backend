@@ -14,6 +14,7 @@ import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -326,6 +327,10 @@ public class MomoService {
             .type(NotificationType.BOOK_PURCHASED)
             .title("Your book was purchased")
             .body(buyerName(purchase.getBuyerId()) + " purchased \"" + book.getTitle() + "\"")
+            .messageKey(NotificationMessages.BOOK_PURCHASED)
+            .messageArgs(
+                NotificationMessages.args(
+                    "actor", buyerName(purchase.getBuyerId()), "book", book.getTitle()))
             .referenceId(book.getId())
             .referenceType("BOOK")
             .build());

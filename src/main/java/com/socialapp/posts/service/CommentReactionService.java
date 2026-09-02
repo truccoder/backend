@@ -14,6 +14,7 @@ import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.UserBanService;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -209,13 +210,16 @@ public class CommentReactionService {
     if (comment.getAuthorId().equals(reactorId)) {
       return;
     }
+    String actor = actorName(reactorId);
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(comment.getAuthorId())
             .actorId(reactorId)
             .type(NotificationType.COMMENT_LIKED)
             .title("New reaction on your comment")
-            .body(actorName(reactorId) + " reacted to your comment")
+            .body(actor + " reacted to your comment")
+            .messageKey(NotificationMessages.COMMENT_LIKED)
+            .messageArgs(NotificationMessages.args("actor", actor))
             .referenceId(comment.getId())
             .referenceType("COMMENT")
             .postId(comment.getPostId())

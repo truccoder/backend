@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
@@ -54,6 +55,19 @@ public class FeedPostDataDto {
 
   private String content;
   private PostVisibility visibility;
+
+  /**
+   * Where this post stands with moderation. Only ever anything other than {@code APPROVED} on the
+   * permalink read by the post's own author — {@code PostVisibilityService} 404s a not-yet-approved
+   * post to everyone else, and every feed entry is approved by the time it is fanned out. It lets
+   * the composer tell "published" from "still pending review" (and from {@code REJECTED}) right
+   * after creating a post, without polling the feed — FE's {@code docs/backend-plan.md} B39.
+   *
+   * <p>Null on feed cache entries written before this field existed; treat that as {@code
+   * APPROVED}, since an entry only reaches the cache once it is.
+   */
+  private ModerationStatus moderationStatus;
+
   private String googlePlaceId;
   private LocationType locationType;
   private LocationDetails locationDetails;
