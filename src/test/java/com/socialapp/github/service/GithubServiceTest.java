@@ -348,15 +348,21 @@ class GithubServiceTest {
     }
 
     @Test
-    @DisplayName("should throw NotFound when no GitHub account is linked")
-    void shouldThrowNotFound_whenNotLinked() {
+    @DisplayName("should return zeroed-out stats, not 404, when no GitHub account is linked")
+    void shouldReturnZeroedStats_whenNotLinked() {
       // Given
       when(githubStatsRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
 
-      // When / Then
-      assertThatThrownBy(() -> githubService.getGithubStats(USER_ID))
-          .isInstanceOf(NotFoundException.class)
-          .hasMessageContaining("not linked");
+      // When
+      GithubStatsResponse response = githubService.getGithubStats(USER_ID);
+
+      // Then
+      assertThat(response.getGithubUsername()).isNull();
+      assertThat(response.getPublicReposCount()).isZero();
+      assertThat(response.getFollowersCount()).isZero();
+      assertThat(response.getPinnedRepos()).isNull();
+      assertThat(response.getContributionGraph()).isNull();
+      assertThat(response.getLastSyncedAt()).isNull();
     }
   }
 

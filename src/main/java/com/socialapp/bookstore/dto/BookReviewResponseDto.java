@@ -17,4 +17,16 @@ public class BookReviewResponseDto {
   private Integer rating;
   private String feedback;
   private OffsetDateTime createdAt;
+
+  /**
+   * Deep-link key for the reviewer's profile — same reason {@code CommentResponseDto} carries one:
+   * {@code /v1/api/users/{username}/profile} is keyed by username and nothing maps {@link #userId}
+   * to it. Null when the reviewer's account row is gone.
+   */
+  private String authorUsername;
+
+  private String authorFullName;
+  private String authorProfilePictureUrl;
+  private Integer authorEliteScore;
+  private String authorLevelName;
 }

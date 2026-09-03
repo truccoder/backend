@@ -149,6 +149,16 @@ public class GithubService {
     githubStatsRepository.findByUserId(user.getId()).ifPresent(githubStatsRepository::delete);
   }
 
+  /**
+   * The owner's GitHub stats, or a zeroed-out response when no account is linked.
+   *
+   * <p>Not-linked is not the same failure as not-found (B43): this read backs every page with the
+   * app shell, so an unlinked account used to 404 on {@code /profile}, {@code /roadmap}, {@code
+   * /settings/*}, {@code /library} and {@code /projects} alike — the one signal a genuine 404
+   * would need to stand out against. {@code publicReposCount}/{@code followersCount} come back
+   * {@code 0} rather than {@code null} since they are already always-present counts on a linked
+   * account; the rest stay {@code null}, same as before linking ever happened.
+   */
   @Transactional(readOnly = true)
   public GithubStatsResponse getGithubStats(Integer userId) {
     return githubStatsRepository
@@ -163,7 +173,8 @@ public class GithubService {
                     .contributionGraph(entity.getContributionGraphJson())
                     .lastSyncedAt(entity.getLastSyncedAt())
                     .build())
-        .orElseThrow(() -> new NotFoundException("GitHub account not linked"));
+        .orElseGet(
+            () -> GithubStatsResponse.builder().publicReposCount(0).followersCount(0).build());
   }
 
   @Transactional

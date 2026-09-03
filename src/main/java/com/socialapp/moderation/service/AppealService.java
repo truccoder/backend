@@ -25,6 +25,10 @@ import com.socialapp.moderation.entity.UserViolationEntity;
 import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.repository.ModerationAppealRepository;
 import com.socialapp.moderation.repository.UserViolationRepository;
+import com.socialapp.notifications.NotificationMessages;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -49,6 +53,7 @@ public class AppealService {
   private final UserViolationRepository violationRepository;
   private final UserRepository userRepository;
   private final UserBanService userBanService;
+  private final NotificationService notificationService;
 
   /** What has been recorded against the caller, and whether each item is already under appeal. */
   @Transactional(readOnly = true)
@@ -184,6 +189,8 @@ public class AppealService {
     }
     log.info("Appeal {} approved by {}; violation {} revoked", appealId, reviewerId, violationId);
 
+    notifyAppellant(saved, NotificationType.APPEAL_APPROVED, NotificationMessages.APPEAL_APPROVED);
+
     // Nothing left to describe: the violation this disputed no longer exists.
     return toDto(saved, null, null);
   }
@@ -195,14 +202,37 @@ public class AppealService {
 
     appeal.setStatus(AppealStatus.REJECTED);
     stampReview(appeal, reviewerId, note);
+    ModerationAppealEntity saved = appealRepository.save(appeal);
 
     log.info("Appeal {} rejected by {}", appealId, reviewerId);
+    notifyAppellant(saved, NotificationType.APPEAL_REJECTED, NotificationMessages.APPEAL_REJECTED);
+
     return toDto(
-        appealRepository.save(appeal),
-        appeal.getViolationId() == null
+        saved,
+        saved.getViolationId() == null
             ? null
-            : violationRepository.findById(appeal.getViolationId()).orElse(null),
+            : violationRepository.findById(saved.getViolationId()).orElse(null),
         null);
+  }
+
+  /**
+   * Tells the appellant how their appeal was decided (B44 in {@code docs/backend-plan.md}) — until
+   * now the only way to find out was to reopen the appeal list and notice the status had changed.
+   */
+  private void notifyAppellant(
+      ModerationAppealEntity appeal, NotificationType type, String messageKey) {
+    boolean approved = NotificationType.APPEAL_APPROVED.equals(type);
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(appeal.getUserId())
+            .type(type)
+            .title(approved ? "Appeal approved" : "Appeal rejected")
+            .body(
+                approved
+                    ? "Your appeal was approved and the violation was removed"
+                    : "Your appeal was rejected")
+            .messageKey(messageKey)
+            .build());
   }
 
   private ModerationAppealEntity requirePending(Long appealId) {

@@ -318,17 +318,20 @@ class GithubControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn404_whenTheUserHasNoLinkedGithubAccount")
-    void shouldReturn404() throws Exception {
-      // Given
+    @DisplayName("shouldReturn200WithZeroedStats_whenTheUserHasNoLinkedGithubAccount")
+    void shouldReturnZeroedStats_whenNotLinked() throws Exception {
+      // Given: B43 — not-linked is not not-found, so the service answers 200 with zero counts
+      // rather than throwing, and this endpoint backs the app shell on every page.
       when(githubService.getGithubStats(777))
-          .thenThrow(new NotFoundException("GitHub account not linked"));
+          .thenReturn(GithubStatsResponse.builder().publicReposCount(0).followersCount(0).build());
 
       // When / Then
       mockMvc
           .perform(authed(get(URL + "/stats/777")))
-          .andExpect(status().isNotFound())
-          .andExpect(jsonPath("$.message").value("GitHub account not linked"));
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.githubUsername").doesNotExist())
+          .andExpect(jsonPath("$.publicReposCount").value(0))
+          .andExpect(jsonPath("$.followersCount").value(0));
     }
 
     @Test

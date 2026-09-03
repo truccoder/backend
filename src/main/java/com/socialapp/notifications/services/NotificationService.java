@@ -137,6 +137,26 @@ public class NotificationService {
     notificationRepository.markAllAsRead(userId);
   }
 
+  /**
+   * Deletes every notification a deleted post leaves dangling (B42) — one that pointed straight at
+   * the post, or at a comment underneath it. Without this, a like/comment/mention notification
+   * outlived the post it named and opened onto a 404.
+   */
+  @Transactional
+  public void deleteForPost(Integer postId) {
+    notificationRepository.deleteAllForPost(postId);
+  }
+
+  /**
+   * Deletes every notification pointing at one comment (B42), for a single comment deleted on its
+   * own. A post-wide delete already covers the comments a post takes with it — see {@link
+   * #deleteForPost}.
+   */
+  @Transactional
+  public void deleteForComment(Integer commentId) {
+    notificationRepository.deleteByReferenceTypeAndReferenceId("COMMENT", commentId);
+  }
+
   public NotificationPreferenceResponseDto updatePreference(
       Integer userId, UpdatePreferenceRequestDto request) {
     NotificationPreferenceEntity pref = getOrCreatePreference(userId);

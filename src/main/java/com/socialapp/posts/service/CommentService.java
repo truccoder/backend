@@ -316,6 +316,11 @@ public class CommentService {
 
     commentRepository.delete(comment);
     refreshCachedCommentCount(postId);
+
+    // B42: a like/mention notification pointing at this comment otherwise outlives it and opens
+    // onto a 404. Post-wide deletes take their comments' notifications with them separately (see
+    // PostService#deletePost) — this is the single-comment path.
+    notificationService.deleteForComment(commentId);
   }
 
   /**

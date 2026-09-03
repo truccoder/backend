@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -88,6 +89,14 @@ class BookReviewServiceTest {
     return user;
   }
 
+  private static UserEntity userWithProfile(Integer id, String username, String fullName) {
+    UserEntity user = userWithName(id, fullName);
+    user.setUsername(username);
+    user.setProfilePictureUrl("https://example.test/" + username + ".png");
+    user.setEliteScore(42);
+    return user;
+  }
+
   private static RatingCount ratingCount(int rating, long count) {
     RatingCount rc = mock(RatingCount.class);
     when(rc.getRating()).thenReturn(rating);
@@ -130,6 +139,7 @@ class BookReviewServiceTest {
       assertThat(savedReview.getFeedback()).isEqualTo("Loved it");
       assertThat(dto.getRating()).isEqualTo(5);
       assertThat(dto.getFeedback()).isEqualTo("Loved it");
+      assertThat(dto.getAuthorFullName()).isEqualTo("Alice");
 
       verify(bookRepository).save(bookCaptor.capture());
       assertThat(bookCaptor.getValue().getAvgRating()).isEqualTo(4.5);
@@ -160,7 +170,7 @@ class BookReviewServiceTest {
       bookReviewService.createOrUpdateReview(AUTHOR_ID, BOOK_ID, reviewRequest(5, "My own book"));
 
       // Then
-      verifyNoInteractions(notificationService, userRepository);
+      verifyNoInteractions(notificationService);
     }
 
     @Test
@@ -190,7 +200,7 @@ class BookReviewServiceTest {
       verify(reviewRepository).save(existingReview);
       assertThat(existingReview.getRating()).isEqualTo(4);
       assertThat(existingReview.getFeedback()).isEqualTo("better now");
-      verifyNoInteractions(notificationService, userRepository);
+      verifyNoInteractions(notificationService);
     }
 
     @Test
@@ -331,6 +341,43 @@ class BookReviewServiceTest {
       // Then
       assertThat(result).hasSize(2);
       assertThat(result).extracting(BookReviewResponseDto::getRating).containsExactly(5, 3);
+    }
+
+    @Test
+    @DisplayName("should attach the reviewer's byline via a single batched author lookup")
+    void shouldAttachAuthorByline_batchedAcrossAllReviewsOnThePage() {
+      // Given
+      when(bookService.findBookOrThrow(BOOK_ID)).thenReturn(book(BOOK_ID, AUTHOR_ID));
+      BookReviewEntity review1 =
+          BookReviewEntity.builder().id(1).userId(REVIEWER_ID).rating(5).feedback("Great").build();
+      BookReviewEntity review2 =
+          BookReviewEntity.builder().id(2).userId(AUTHOR_ID).rating(3).feedback("Meh").build();
+      when(reviewRepository.findByBookIdOrderByCreatedAtDesc(BOOK_ID))
+          .thenReturn(List.of(review1, review2));
+      when(userRepository.findAllById(Set.of(REVIEWER_ID, AUTHOR_ID)))
+          .thenReturn(List.of(userWithProfile(REVIEWER_ID, "alice", "Alice")));
+
+      // When
+      List<BookReviewResponseDto> result = bookReviewService.getReviews(BOOK_ID);
+
+      // Then
+      verify(userRepository, never()).findById(any());
+      BookReviewResponseDto reviewerDto =
+          result.stream()
+              .filter(dto -> dto.getUserId().equals(REVIEWER_ID))
+              .findFirst()
+              .orElseThrow();
+      assertThat(reviewerDto.getAuthorUsername()).isEqualTo("alice");
+      assertThat(reviewerDto.getAuthorFullName()).isEqualTo("Alice");
+      assertThat(reviewerDto.getAuthorEliteScore()).isEqualTo(42);
+
+      BookReviewResponseDto orphanedDto =
+          result.stream()
+              .filter(dto -> dto.getUserId().equals(AUTHOR_ID))
+              .findFirst()
+              .orElseThrow();
+      assertThat(orphanedDto.getAuthorUsername()).isNull();
+      assertThat(orphanedDto.getAuthorFullName()).isNull();
     }
 
     @Test

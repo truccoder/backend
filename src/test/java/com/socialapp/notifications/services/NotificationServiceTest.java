@@ -52,6 +52,8 @@ class NotificationServiceTest {
 
   private static final Integer RECIPIENT_ID = 1;
   private static final Integer ACTOR_ID = 2;
+  private static final Integer POST_ID = 100;
+  private static final Integer COMMENT_ID = 200;
 
   @Mock private NotificationRepository notificationRepository;
   @Mock private NotificationPreferenceRepository preferenceRepository;
@@ -631,6 +633,40 @@ class NotificationServiceTest {
 
       // Then
       verify(notificationRepository).markAllAsRead(RECIPIENT_ID);
+    }
+  }
+
+  // =====================================================================
+  // deleteForPost / deleteForComment
+  // =====================================================================
+
+  @Nested
+  @DisplayName("deleteForPost")
+  class DeleteForPostTests {
+
+    @Test
+    @DisplayName("should delegate to the repository's post-wide cleanup (B42)")
+    void shouldDelegateToRepository() {
+      // When
+      notificationService.deleteForPost(POST_ID);
+
+      // Then
+      verify(notificationRepository).deleteAllForPost(POST_ID);
+    }
+  }
+
+  @Nested
+  @DisplayName("deleteForComment")
+  class DeleteForCommentTests {
+
+    @Test
+    @DisplayName("should delegate to the repository keyed on the COMMENT reference (B42)")
+    void shouldDelegateToRepository() {
+      // When
+      notificationService.deleteForComment(COMMENT_ID);
+
+      // Then
+      verify(notificationRepository).deleteByReferenceTypeAndReferenceId("COMMENT", COMMENT_ID);
     }
   }
 

@@ -113,5 +113,26 @@ public enum NotificationType {
    * differently from "your application was declined", and a user may want to mute one without the
    * other.
    */
-  PROJECT_MEMBER_REMOVED
+  PROJECT_MEMBER_REMOVED,
+
+  /**
+   * An admin rejected the caller's post during manual review (B42/B44 in {@code
+   * docs/backend-plan.md}).
+   *
+   * <p>Closes the other silent half of moderation: {@code AdminModerationService.reviewPost} always
+   * awarded a violation and locked the post out of the feed, but never told the one person the
+   * decision was about. Without this, the only way to learn a post had been taken down was to
+   * revisit its permalink and notice.
+   */
+  POST_REJECTED,
+
+  /**
+   * An admin upheld the caller's appeal — the disputed violation is gone and any ban resting on it
+   * has been re-evaluated. The other silent half of {@code AppealService}: {@code approve} always
+   * acted, and until now never told the appellant it had.
+   */
+  APPEAL_APPROVED,
+
+  /** An admin declined the caller's appeal. The violation and any ban stand. */
+  APPEAL_REJECTED
 }

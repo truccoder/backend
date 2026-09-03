@@ -35,6 +35,9 @@ import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.repository.ModerationAppealRepository;
 import com.socialapp.moderation.repository.UserViolationRepository;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -54,10 +57,12 @@ class AppealServiceTest {
   @Mock private UserViolationRepository violationRepository;
   @Mock private UserRepository userRepository;
   @Mock private UserBanService userBanService;
+  @Mock private NotificationService notificationService;
 
   @InjectMocks private AppealService appealService;
 
   @Captor private ArgumentCaptor<ModerationAppealEntity> appealCaptor;
+  @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
   private static UserViolationEntity violation(Long id, Integer userId) {
     return UserViolationEntity.builder()
@@ -212,6 +217,12 @@ class AppealServiceTest {
       assertThat(result.getStatus()).isEqualTo(AppealStatus.APPROVED);
       assertThat(result.getReviewerNote()).isEqualTo("You were right");
       assertThat(result.getReviewedAt()).isNotNull();
+
+      // B44: the appellant is told they won, not left to notice their own appeal list changed.
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(USER_ID);
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.APPEAL_APPROVED);
     }
 
     @Test
@@ -268,6 +279,12 @@ class AppealServiceTest {
       // Then
       assertThat(result.getStatus()).isEqualTo(AppealStatus.REJECTED);
       verify(userBanService, never()).revokeViolation(any());
+
+      // B44: the appellant is told they lost, not left to notice their own appeal list changed.
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(USER_ID);
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.APPEAL_REJECTED);
     }
   }
 

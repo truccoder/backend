@@ -710,6 +710,22 @@ class CommentServiceTest {
     }
 
     @Test
+    @DisplayName(
+        "should delete every notification pointing at the comment (B42), so none opens onto a 404")
+    void shouldDeleteDanglingNotifications_whenCommentIsDeleted() {
+      // Given
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(samplePost(AUTHOR_ID)));
+      when(commentRepository.findById(COMMENT_ID))
+          .thenReturn(Optional.of(sampleComment(AUTHOR_ID, null)));
+
+      // When
+      commentService.deleteComment(AUTHOR_ID, POST_ID, COMMENT_ID);
+
+      // Then
+      verify(notificationService).deleteForComment(COMMENT_ID);
+    }
+
+    @Test
     @DisplayName("should throw ForbiddenException when the actor is not the comment's author")
     void shouldThrowForbiddenException_whenActorIsNotAuthor() {
       // Given

@@ -47,6 +47,7 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.rule.ModerationRuleEngine;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -102,6 +103,7 @@ class PostServiceTest {
   @Mock private HashtagRepository hashtagRepository;
   @Mock private CommentRepository commentRepository;
   @Mock private ReputationEventPublisher reputationEventPublisher;
+  @Mock private NotificationService notificationService;
 
   @InjectMocks private PostService postService;
 
@@ -1049,6 +1051,21 @@ class PostServiceTest {
       verify(postRepository).delete(post);
       verify(newsfeedService).removePost(eq(POST_ID), eq(AUTHOR_ID), taggedIdsCaptor.capture());
       assertThat(taggedIdsCaptor.getValue()).isEmpty();
+    }
+
+    @Test
+    @DisplayName(
+        "should delete every notification pointing at the post (B42), so none opens onto a 404")
+    void shouldDeleteDanglingNotifications_whenPostIsDeleted() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then
+      verify(notificationService).deleteForPost(POST_ID);
     }
 
     @Test

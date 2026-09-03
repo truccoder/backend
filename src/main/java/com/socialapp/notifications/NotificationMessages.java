@@ -42,6 +42,9 @@ public final class NotificationMessages {
   public static final String PROJECT_APPLICATION_ACCEPTED = "PROJECT_APPLICATION_ACCEPTED";
   public static final String PROJECT_APPLICATION_REJECTED = "PROJECT_APPLICATION_REJECTED";
   public static final String PROJECT_MEMBER_REMOVED = "PROJECT_MEMBER_REMOVED";
+  public static final String POST_REJECTED = "POST_REJECTED";
+  public static final String APPEAL_APPROVED = "APPEAL_APPROVED";
+  public static final String APPEAL_REJECTED = "APPEAL_REJECTED";
 
   /**
    * Builds an argument map from alternating key/value pairs, preserving order and rejecting a null

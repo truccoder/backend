@@ -23,12 +23,16 @@ public class ProfessionalProfileService {
   private final UserProfessionalProfileRepository profileRepository;
   private final UserRepository userRepository;
 
+  /**
+   * The owner's professional profile, or {@code null} when they have never filled one in.
+   *
+   * <p>Not-set-up is not the same failure as not-found (B43): a 404 here used to fire on every
+   * load of {@code /profile} for a brand-new account — the one moment a real "no such resource"
+   * 404 would need to stand out on. {@code null} lets the controller answer 200 with an empty
+   * body, which is what "you have not written anything here yet" actually means.
+   */
   public ProfessionalProfileResponseDto getProfile(Integer userId) {
-    return toDto(
-        profileRepository
-            .findById(userId)
-            .orElseThrow(
-                () -> new NotFoundException("Professional profile not found for user: " + userId)));
+    return profileRepository.findById(userId).map(this::toDto).orElse(null);
   }
 
   @Transactional

@@ -29,6 +29,10 @@ import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.repository.ModerationLogRepository;
 import com.socialapp.moderation.repository.UserBanRepository;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.NotificationMessages;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -47,6 +51,7 @@ public class AdminModerationService {
   private final UserBanRepository userBanRepository;
   private final NewsfeedService newsfeedService;
   private final UserBanService userBanService;
+  private final NotificationService notificationService;
 
   /**
    * The admin post queue.
@@ -150,11 +155,11 @@ public class AdminModerationService {
       post.setModerationStatus(ModerationStatus.REJECTED);
       postRepository.save(post);
 
+      String reason = Optional.ofNullable(feedback).orElse("content violation");
       userBanService.recordViolation(
-          post.getAuthorId(),
-          post.getId(),
-          violationType,
-          "Admin manual review: " + Optional.ofNullable(feedback).orElse("content violation"));
+          post.getAuthorId(), post.getId(), violationType, "Admin manual review: " + reason);
+
+      notifyAuthorOfRejection(post, violationType, reason);
 
       log.info(
           "Admin rejected post {} (decision={}, violationType={})",
@@ -175,6 +180,28 @@ public class AdminModerationService {
         // Null on approval: an approved post has no violation, and writing a type here would put
         // a violation row in the log for a post that was cleared.
         isViolation ? violationType : null);
+  }
+
+  /**
+   * Tells the author their post was taken down (B44 in {@code docs/backend-plan.md}) — the other
+   * decisive moment the product acts on a user that used to pass in complete silence, the one that
+   * matters more of the two: "you were struck twice more and you're locked out" only makes sense to
+   * someone who already knew about the first strike.
+   */
+  private void notifyAuthorOfRejection(
+      PostEntity post, ViolationType violationType, String reason) {
+    notificationService.send(
+        SendNotificationRequest.builder()
+            .recipientId(post.getAuthorId())
+            .type(NotificationType.POST_REJECTED)
+            .title("Your post was removed")
+            .body("Your post was removed for " + violationType.name() + ": " + reason)
+            .messageKey(NotificationMessages.POST_REJECTED)
+            .messageArgs(
+                NotificationMessages.args("violation", violationType.name(), "reason", reason))
+            .referenceId(post.getId())
+            .referenceType("POST")
+            .build());
   }
 
   private void saveModerationLog(

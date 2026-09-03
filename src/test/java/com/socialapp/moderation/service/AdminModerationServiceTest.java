@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -38,6 +39,9 @@ import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.repository.ModerationLogRepository;
 import com.socialapp.moderation.repository.UserBanRepository;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.repository.PostRepository;
 import com.socialapp.security.entity.UserEntity;
@@ -60,11 +64,13 @@ class AdminModerationServiceTest {
   @Mock private UserBanRepository userBanRepository;
   @Mock private NewsfeedService newsfeedService;
   @Mock private UserBanService userBanService;
+  @Mock private NotificationService notificationService;
 
   @InjectMocks private AdminModerationService adminModerationService;
 
   @Captor private ArgumentCaptor<PostEntity> postCaptor;
   @Captor private ArgumentCaptor<ModerationLogEntity> logCaptor;
+  @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
   private static PostEntity post(Integer id, Integer authorId, ModerationStatus status) {
     PostEntity post = new PostEntity();
@@ -317,6 +323,17 @@ class AdminModerationServiceTest {
       assertThat(logCaptor.getValue().getStatus()).isEqualTo(ModerationStatus.REJECTED);
       assertThat(logCaptor.getValue().getViolationType())
           .isEqualTo(ViolationType.SEXUALLY_EXPLICIT);
+
+      // B44: the author is told their post was taken down, not left to notice on their own.
+      verify(notificationService).send(notificationCaptor.capture());
+      SendNotificationRequest notification = notificationCaptor.getValue();
+      assertThat(notification.getRecipientId()).isEqualTo(AUTHOR_ID);
+      assertThat(notification.getType()).isEqualTo(NotificationType.POST_REJECTED);
+      assertThat(notification.getReferenceId()).isEqualTo(POST_ID);
+      assertThat(notification.getReferenceType()).isEqualTo("POST");
+      assertThat(notification.getMessageArgs())
+          .containsEntry("violation", "SEXUALLY_EXPLICIT")
+          .containsEntry("reason", "explicit content");
     }
 
     @Test
@@ -351,6 +368,7 @@ class AdminModerationServiceTest {
       verify(moderationLogRepository).save(logCaptor.capture());
       assertThat(logCaptor.getValue().getStatus()).isEqualTo(ModerationStatus.APPROVED);
       assertThat(logCaptor.getValue().getViolationType()).isNull();
+      verifyNoInteractions(notificationService);
     }
 
     @Test

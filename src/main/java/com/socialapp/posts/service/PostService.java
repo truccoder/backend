@@ -34,6 +34,7 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.rule.ModerationRuleEngine;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -74,6 +75,7 @@ public class PostService {
   private final HashtagRepository hashtagRepository;
   private final CommentRepository commentRepository;
   private final ReputationEventPublisher reputationEventPublisher;
+  private final NotificationService notificationService;
 
   private static final int MAX_TAGS = 20;
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
@@ -435,6 +437,11 @@ public class PostService {
     }
 
     postRepository.delete(post);
+
+    // B42: a like/comment/mention notification about this post (or a comment underneath it)
+    // otherwise outlives the post and opens onto a 404 — the only way anyone found out was
+    // clicking a dead link. Same transaction as the delete: either both happen or neither does.
+    notificationService.deleteForPost(postId);
 
     try {
       newsfeedService.removePost(postId, actorId, taggedUserIds);
