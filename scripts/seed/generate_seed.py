@@ -69,6 +69,10 @@ NEO4J_SEED = SEED_DIR / "friend-graph.cypher"
 # của repo này chạy. Máy dev vẫn dùng chính file này qua service minio-seed-objects (mount
 # src/main/resources/db/seed vào /manifest).
 MINIO_MANIFEST = SEED_DIR / "seed-manifest.tsv"
+# Nội dung bốn trang đầu của từng quyển sách, do scripts/seed/crawl_book_previews.py sinh sẵn (dữ
+# kiện thư mục lấy từ Open Library). File này KHÔNG do generator sinh ra — nó là đầu VÀO, và
+# t_books.total_pages / t_books.preview_pages được lấy từ đây thay vì bốc ngẫu nhiên.
+BOOK_PREVIEWS = SEED_DIR / "book-previews.json"
 ID_MAP = ROOT / "scripts" / "seed" / "id-map.md"
 
 # ── Dãy version ────────────────────────────────────────────────────────────────────────────────
@@ -100,6 +104,10 @@ GENERATED = {
     88: "seed_roadmaps",
     89: "seed_moderation",
     90: "seed_reputation_and_notifications",
+    # Trên V105 vì nó ghi vào các cột V105 mới thêm — Flyway dùng CHUNG một dãy version cho
+    # db/migration và db/seed, nên một file seed không bao giờ được mang số nhỏ hơn migration tạo
+    # ra cột nó ghi. Xem emit_job_descriptions.
+    106: "seed_job_descriptions",
 }
 
 # Ngưỡng số dòng dữ liệu mà trên đó file BẮT BUỘC phải mở trần thời gian. Đặt thấp hơn nhiều so
@@ -2778,9 +2786,26 @@ def categorise_book(title):
     return "OTHER"
 
 
+def load_book_previews():
+    """Đọc book-previews.json, hoặc dừng hẳn.
+
+    KHÔNG ĐOÁN KHI THIẾU. Số trang xem thử ghi vào t_books.preview_pages phải bằng đúng số trang
+    của file PDF/EPUB mà hai bộ dựng object tạo ra từ chính file này; đoán một con số ở đây là để
+    giao diện quảng cáo "xem thử 12 trang" trên một file có 4 trang, và không có gì bắt được.
+    """
+    if not BOOK_PREVIEWS.is_file():
+        sys.exit(
+            f"DỪNG — không tìm thấy {BOOK_PREVIEWS.relative_to(ROOT)}\n"
+            "Chạy `python scripts/seed/crawl_book_previews.py` trước, rồi chạy lại file này."
+        )
+    return json.loads(BOOK_PREVIEWS.read_text(encoding="utf-8"))["books"]
+
+
 def build_books(rng, people, posts):
     """80 quyển sách thật, gắn với bài BOOK và với người đăng."""
     from book_catalog import CATALOG
+
+    previews = load_book_previews()
 
     book_post_ids = [p["id"] for p in posts if p["kind"] == "BOOK"]
     authors = [p["id"] for p in people if p["primary_role"]]
@@ -2805,6 +2830,22 @@ def build_books(rng, people, posts):
         want_object(cover_key, "book-cover",
                     f"https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg")
 
+        # HAI LẦN RÚT NÀY GIỮ NGUYÊN, kể cả khi không dùng tới giá trị. Cả V85 dùng chung một dòng
+        # ngẫu nhiên, nên bỏ bớt một lần rút ở đây làm lệch mọi số bốc phía sau: giá sách, đánh giá,
+        # giao dịch — một thay đổi hai cột biến thành diff 5.000 dòng, và giá sách thì kịch bản demo
+        # bên frontend có trích dẫn.
+        size = rng.randint(400_000, 9_000_000)
+        fallback_total_pages = rng.randint(120, 780)
+        rng.choice([5, 8, 10, 12, 15])
+
+        # Số trang: của bản in thật khi Open Library biết. Số trang xem thử thì KHÔNG bao giờ bốc —
+        # nó là số trang CÓ THẬT trong file preview, và giao diện đem con số này ra hiển thị.
+        preview = previews.get(isbn) or {}
+        total_pages = preview.get("totalPages") or fallback_total_pages
+        preview_pages = len(preview.get("pages") or [])
+        if not preview_pages:
+            sys.exit(f"DỪNG — {isbn} không có trang nào trong book-previews.json")
+
         books.append({
             "id": bid, "isbn": isbn, "title": title, "writer": writer,
             "author_id": uploader,
@@ -2813,9 +2854,9 @@ def build_books(rng, people, posts):
             "description": f"{title} — {writer}. {BOOK_BLURBS[i]}",
             "file_key": file_key, "preview_key": preview_key, "cover_key": cover_key,
             "format": fmt,
-            "size": rng.randint(400_000, 9_000_000),
-            "pages": rng.randint(120, 780),
-            "preview_pages": rng.choice([5, 8, 10, 12, 15]),
+            "size": size,
+            "pages": total_pages,
+            "preview_pages": preview_pages,
             "price": price, "is_free": is_free,
             "age_days": rng.randint(20, 500),
         })
@@ -3444,6 +3485,174 @@ POSITION_TITLES = {
     "SECURITY": "Kỹ sư Bảo mật", "QA": "Kỹ sư Kiểm thử", "OTHER": "Chuyên viên Sản phẩm",
 }
 
+# ── Mô tả công việc theo từng vai (V105) ──────────────────────────────────────────────────────
+#
+# t_project_positions từ V105 mang JD có cấu trúc: role_summary + responsibilities + requirements,
+# MỖI VAI MỘT BẢN RIÊNG. Ba cột này là thứ người dùng đọc khi bấm vào một vị trí, và cũng là thứ
+# JobDescriptionPdfGenerator in ra PDF — nên seed để trống thì cả 135 vị trí demo hiện ra một thẻ
+# rỗng, còn nút "xem mô tả công việc" thì mở ra một trang gần như trắng.
+#
+# Viết theo VAI chứ không theo dự án: một "Kỹ sư Backend" ở dự án nào cũng làm gần đúng những việc
+# này, còn đặc thù của dự án đã nằm ở description + company_overview của chính dự án.
+ROLE_JD = {
+    "BACKEND": {
+        "summary": "Phụ trách phần máy chủ của sản phẩm: thiết kế API, mô hình dữ liệu và các tác vụ chạy nền, từ lược đồ cơ sở dữ liệu cho tới lúc chạy thật.",
+        "responsibilities": [
+            "Thiết kế và hiện thực API cho ứng dụng web và di động dùng chung",
+            "Viết migration và giữ lược đồ cơ sở dữ liệu khớp với mã nguồn",
+            "Theo dõi độ trễ, tỉ lệ lỗi và xử lý sự cố phần dịch vụ mình phụ trách",
+        ],
+        "requirements": [
+            "Đã từng xây dựng và vận hành ít nhất một dịch vụ REST chạy thật",
+            "Thạo SQL: biết đọc kế hoạch truy vấn và đặt index đúng chỗ",
+            "Viết được kiểm thử tự động cho phần mình làm",
+        ],
+        "nice": ["Có kinh nghiệm với hàng đợi việc nền hoặc kiến trúc hướng sự kiện"],
+    },
+    "FRONTEND": {
+        "summary": "Dựng phần giao diện người dùng nhìn thấy và chạm vào: bố cục, trạng thái, hiệu năng tải trang và khả năng truy cập trên cả máy tính lẫn điện thoại.",
+        "responsibilities": [
+            "Hiện thực giao diện từ thiết kế, chạy đúng trên nhiều kích thước màn hình",
+            "Tách phần dùng lại được thành component và giữ chúng có tài liệu",
+            "Đo và cải thiện thời gian tải trang cùng các chỉ số trải nghiệm",
+        ],
+        "requirements": [
+            "Thành thạo một framework component hiện đại và quản lý trạng thái",
+            "Đọc hiểu thiết kế và trao đổi trực tiếp với người thiết kế",
+            "Nắm cơ bản về khả năng truy cập: ngữ nghĩa HTML, tiêu điểm bàn phím",
+        ],
+        "nice": ["Từng làm việc với hệ thống design system dùng chung"],
+    },
+    "FULLSTACK": {
+        "summary": "Đi hết một tính năng từ giao diện tới cơ sở dữ liệu, và chịu trách nhiệm cho nó sau khi lên môi trường thật chứ không dừng ở lúc gộp mã.",
+        "responsibilities": [
+            "Hiện thực tính năng trọn vẹn: giao diện, API và lược đồ dữ liệu",
+            "Chia việc thành các lát cắt nhỏ đưa lên được sớm",
+            "Trực xử lý sự cố cho những tính năng mình đã đưa lên",
+        ],
+        "requirements": [
+            "Làm được cả hai phía và biết rõ mình yếu hơn ở phía nào",
+            "Đã đưa một tính năng ra người dùng thật từ đầu tới cuối",
+            "Thoải mái với việc ước lượng và cắt phạm vi khi cần",
+        ],
+        "nice": ["Có kinh nghiệm dựng quy trình tích hợp liên tục cho nhóm nhỏ"],
+    },
+    "MOBILE": {
+        "summary": "Phụ trách ứng dụng di động: vòng đời màn hình, chế độ ngoại tuyến, dung lượng gói cài đặt và quy trình phát hành lên hai kho ứng dụng.",
+        "responsibilities": [
+            "Hiện thực màn hình và điều hướng theo chuẩn của từng nền tảng",
+            "Xử lý trạng thái ngoại tuyến và đồng bộ lại khi có mạng",
+            "Chuẩn bị bản phát hành, theo dõi sự cố và tỉ lệ lỗi sau khi phát hành",
+        ],
+        "requirements": [
+            "Đã phát hành ít nhất một ứng dụng lên App Store hoặc Google Play",
+            "Hiểu vòng đời màn hình và giới hạn tài nguyên trên thiết bị",
+            "Biết đọc báo cáo sự cố và lần ngược về nguyên nhân",
+        ],
+        "nice": ["Từng làm phần đẩy thông báo hoặc lưu trữ dữ liệu ngoại tuyến"],
+    },
+    "DEVOPS": {
+        "summary": "Giữ đường đi từ mã nguồn tới môi trường thật ngắn và an toàn: hạ tầng khai báo bằng mã, quy trình phát hành tự động và khả năng quan sát hệ thống.",
+        "responsibilities": [
+            "Dựng và duy trì quy trình build, kiểm thử, phát hành tự động",
+            "Mô tả hạ tầng bằng mã, không cấu hình bằng tay trên máy chủ",
+            "Đặt cảnh báo dựa trên triệu chứng người dùng gặp, không dựa trên ngưỡng máy",
+        ],
+        "requirements": [
+            "Thạo Docker và ít nhất một nền tảng điều phối container",
+            "Đã dựng quy trình phát hành tự động cho một nhóm nhiều người",
+            "Viết được script tự động hoá và đọc được log hệ thống",
+        ],
+        "nice": ["Có kinh nghiệm tối ưu chi phí hạ tầng theo hoá đơn thật"],
+    },
+    "DATA_ML": {
+        "summary": "Làm việc với dữ liệu của sản phẩm: đường ống xử lý, chất lượng dữ liệu và các mô hình chạy được trong môi trường thật chứ không chỉ trong notebook.",
+        "responsibilities": [
+            "Xây dựng và duy trì đường ống dữ liệu chạy theo lịch",
+            "Kiểm tra chất lượng dữ liệu và cảnh báo khi số liệu lệch bất thường",
+            "Đưa mô hình ra môi trường thật và theo dõi kết quả sau đó",
+        ],
+        "requirements": [
+            "Thạo Python và SQL ở mức làm việc hằng ngày",
+            "Đã đưa ít nhất một mô hình hoặc đường ống dữ liệu vào chạy thật",
+            "Trình bày được kết quả cho người không làm kỹ thuật",
+        ],
+        "nice": ["Có kinh nghiệm với công cụ điều phối luồng dữ liệu"],
+    },
+    "SECURITY": {
+        "summary": "Phụ trách an toàn thông tin của sản phẩm: rà soát thiết kế, kiểm thử xâm nhập có kiểm soát và vá những lỗ hổng tìm được cùng đội phát triển.",
+        "responsibilities": [
+            "Rà soát thiết kế và mã nguồn ở góc nhìn của người tấn công",
+            "Kiểm thử xâm nhập có kiểm soát và viết báo cáo hành động được",
+            "Theo dõi lỗ hổng trong thư viện phụ thuộc và đề xuất thứ tự vá",
+        ],
+        "requirements": [
+            "Nắm chắc các lớp lỗ hổng phổ biến của ứng dụng web",
+            "Đã dùng công cụ quét và biết phân biệt cảnh báo thật với báo động giả",
+            "Viết được báo cáo mà lập trình viên đọc xong biết phải sửa gì",
+        ],
+        "nice": ["Từng tham gia mô hình hoá mối đe doạ cho một hệ thống thật"],
+    },
+    "QA": {
+        "summary": "Chịu trách nhiệm về chất lượng trước khi người dùng chịu: thiết kế bộ kiểm thử, tự động hoá phần lặp lại và giữ quy trình phát hành đáng tin.",
+        "responsibilities": [
+            "Thiết kế ca kiểm thử theo phân vùng tương đương và giá trị biên",
+            "Tự động hoá phần kiểm thử hồi quy và giữ bộ test không nhiễu",
+            "Viết báo cáo lỗi tái hiện được, kèm bước và dữ liệu cụ thể",
+        ],
+        "requirements": [
+            "Đã viết kiểm thử tự động cho một sản phẩm chạy thật",
+            "Biết thiết kế ca kiểm thử có phương pháp, không chỉ bấm thử",
+            "Đọc được log và khoanh vùng lỗi trước khi báo",
+        ],
+        "nice": ["Có kinh nghiệm kiểm thử hiệu năng hoặc kiểm thử API"],
+    },
+    "OTHER": {
+        "summary": "Phụ trách phần sản phẩm: làm rõ vấn đề cần giải, sắp thứ tự việc theo giá trị và giữ cho cả nhóm hiểu vì sao đang làm thứ đang làm.",
+        "responsibilities": [
+            "Nói chuyện với người dùng và biến điều nghe được thành yêu cầu rõ ràng",
+            "Sắp thứ tự backlog theo giá trị và chi phí, có lý do kèm theo",
+            "Đo kết quả sau khi phát hành và quyết định làm tiếp hay dừng",
+        ],
+        "requirements": [
+            "Đã phụ trách sản phẩm hoặc tính năng có người dùng thật",
+            "Viết được tài liệu yêu cầu ngắn gọn mà đội phát triển làm theo được",
+            "Đọc được số liệu sử dụng và rút ra kết luận có căn cứ",
+        ],
+        "nice": ["Từng làm việc với nhóm phân tán, lệch múi giờ"],
+    },
+}
+
+# Hai đoạn "nói về NƠI làm" nằm ở cấp DỰ ÁN, không lặp lại ở từng vai — đúng ranh giới V105 đặt ra.
+# Một dự án trong bảy để trống cả hai (i % 7 == 6): đội hai người và một repo là trạng thái có thật
+# trên bảng dự án này, và nhánh "không có phần giới thiệu đội" phải có dữ liệu để chạy.
+COMPANY_OVERVIEWS = [
+    "Nhóm sáu người làm một sản phẩm duy nhất, tự quyết định lộ trình và tự chịu trách nhiệm vận hành.",
+    "Đội kỹ thuật mười hai người tách từ một công ty dịch vụ, nay làm sản phẩm riêng cho thị trường trong nước.",
+    "Dự án nguồn mở có ba người duy trì thường xuyên và khoảng ba mươi người đóng góp không thường xuyên.",
+    "Nhóm nghiên cứu trong trường, làm sản phẩm để dùng thật chứ không dừng ở bài báo.",
+    "Startup giai đoạn đầu, bốn người, đang tìm sự phù hợp giữa sản phẩm và thị trường.",
+    "Đội nội bộ của một doanh nghiệp vừa, xây công cụ cho chính các phòng ban trong công ty dùng.",
+]
+
+COMPANY_CULTURES = [
+    "Quyết định kỹ thuật được viết lại thành văn bản và review công khai; không có quyết định nào chỉ tồn tại trong một cuộc họp.",
+    "Làm việc bất đồng bộ là mặc định, họp chỉ khi trao đổi bằng chữ đã bế tắc.",
+    "Mỗi thay đổi đều qua review, và người review có trách nhiệm ngang người viết.",
+    "Ưu tiên đưa bản nhỏ lên sớm rồi sửa tiếp, thay vì giữ một nhánh lớn hàng tháng.",
+    "Sai sót được mổ xẻ theo quy trình, không truy trách nhiệm cá nhân.",
+    "Ai cũng trực sự cố theo phiên, kể cả người mới, và luôn có người thứ hai hỗ trợ.",
+]
+
+# Mức yêu cầu của từng vị trí, gán vòng tròn theo id. MatchmakingService coi hai cột này là ĐIỀU
+# KIỆN LOẠI, nên một phần ba vị trí để trống là cố ý: cần cả nhánh "vai không đặt điều kiện" lẫn
+# nhánh "ứng viên chưa đủ năm kinh nghiệm bị loại" trong dữ liệu demo.
+POSITION_BARS = [
+    (None, None),
+    (2, "MID"),
+    (5, "SENIOR"),
+]
+
 APPLICATION_MESSAGES = [
     "Mình đã làm một dự án tương tự năm ngoái, gửi kèm liên kết trong hồ sơ.",
     "Mình rảnh khoảng 10 giờ mỗi tuần và muốn học thêm mảng này.",
@@ -3479,10 +3688,16 @@ def build_projects(rng, people):
         # Cột là varchar không CHECK nên nhãn thứ ba lọt qua Flyway rồi nổ lúc Hibernate đọc.
         status = "CLOSED" if i % 9 == 8 else "OPEN"
 
+        # Phần "nói về NƠI làm": viết một lần cho cả dự án, mọi vai dùng chung. Chọn theo chỉ số
+        # chứ không rút ngẫu nhiên — thêm một lượt rng ở đây sẽ đẩy lệch toàn bộ chuỗi số ngẫu
+        # nhiên của các file sinh sau (V88-V90), làm cả bộ seed đổi vì một cột.
+        has_company = (i % 7) != 6
         projects.append({
             "id": pid, "author_id": owner["id"],
             "title": title_base, "description": desc,
             "tags": tags, "status": status,
+            "company_overview": COMPANY_OVERVIEWS[i % len(COMPANY_OVERVIEWS)] if has_company else None,
+            "company_culture": COMPANY_CULTURES[i % len(COMPANY_CULTURES)] if has_company else None,
             "age": rng.randint(10, 450),
         })
 
@@ -3492,10 +3707,19 @@ def build_projects(rng, people):
             # required_skills cũng rút từ hai bảng dùng chung: TECH_STACK và DOMAINS. Hồ sơ mang
             # known_tech_stack theo TECH_STACK, nên hai bên giao được nhau.
             skills = rng.sample(TECH_STACK[role], 3) + [rng.choice(DOMAINS[role])]
+            # JD của vai này. Cùng lý do như trên: tra bảng theo vai và theo id, không rút rng.
+            jd = ROLE_JD[role]
+            min_years, seniority = POSITION_BARS[next_pos % len(POSITION_BARS)]
             positions.append({
                 "id": next_pos, "project_id": pid,
                 "title": POSITION_TITLES[role],
                 "description": f"Tham gia phần {POSITION_TITLES[role].lower()} của dự án.",
+                "role_summary": jd["summary"],
+                "responsibilities": jd["responsibilities"],
+                "requirements": jd["requirements"],
+                "nice_to_have": jd["nice"],
+                "min_years": min_years,
+                "seniority": seniority,
                 "skills": skills,
                 "quantity": rng.choice([1, 1, 2]),
                 "status": "OPEN" if status == "OPEN" else "CLOSED",
@@ -3579,6 +3803,10 @@ Ba fixture bắt buộc: một dự án OPEN có tags giao được với hồ s
     f.note("banner_url để NULL: không có object nào được nạp cho nó, và một URL trỏ vào chỗ trống "
            "thì tệ hơn NULL — trình duyệt hiện ảnh vỡ thay vì rơi về nền mặc định.")
 
+    f.note("Mô tả công việc có cấu trúc của từng vai (role_summary, responsibilities, "
+           "requirements…) KHÔNG nằm ở file này mà ở V106: các cột ấy do V105 thêm vào, mà Flyway "
+           "xếp db/migration và db/seed vào CÙNG MỘT dãy version — nên file V87 chạy xong từ lâu "
+           "trước khi cột tồn tại.")
     rows = [
         f"    ({p['id']}, {p['project_id']}, {q(p['title'])}, {q(p['description'])}, "
         f"{jsonb(p['skills'])}, {p['quantity']}, {q(p['status'])}, "
@@ -3850,6 +4078,82 @@ def build_roadmaps(rng, people):
                                  "status": status, "verifier": verifier,
                                  "age": rng.randint(1, 400)})
     return roadmaps, nodes, progress
+
+
+def emit_job_descriptions(projects, positions):
+    """V106 — JD có cấu trúc cho 50 dự án và 135 vị trí đã chèn ở V87.
+
+    VÌ SAO LÀ MỘT FILE RIÊNG, KHÔNG PHẢI THÊM CỘT VÀO V87. Flyway xếp `db/migration` và `db/seed`
+    vào CÙNG MỘT dãy version rồi chạy theo thứ tự số. Các cột này do V105 thêm, mà V87 mang số
+    nhỏ hơn — nên viết thẳng vào INSERT của V87 làm migrate CHẾT ở một database trắng với
+    "column company_overview of relation t_projects does not exist". Đúng cái bẫy mà V74 (tags)
+    né được chỉ vì nó tình cờ nằm dưới dãy seed.
+
+    Vì thế: UPDATE chứ không INSERT, và số version nằm TRÊN V105.
+    """
+    f = SqlFile(106, "seed_job_descriptions",
+                f"Mô tả công việc cho {len(positions)} vị trí và phần giới thiệu của {len(projects)} dự án.")
+    f.note("""
+FILE NÀY SINH TỰ ĐỘNG bởi scripts/seed/generate_seed.py — sửa tay sẽ bị ghi đè.
+
+V105 chia JD làm hai nửa theo đúng ranh giới của một tin tuyển dụng thật:
+
+    t_projects.company_overview / company_culture   nói về NƠI làm — viết một lần cho cả dự án
+    t_project_positions.role_summary /              nói về VIỆC làm — mỗi vai một bản riêng
+        responsibilities / requirements / nice_to_have
+
+Bỏ qua file này thì 135 thẻ vị trí trên bản demo đều rỗng và nút "xem mô tả công việc" mở ra một
+PDF chỉ có tiêu đề — đúng trạng thái mà V105 sinh ra để chấm dứt.
+
+min_years_experience và seniority_level là hai cột DUY NHẤT ở đây được MatchmakingService dùng làm
+ĐIỀU KIỆN LOẠI chứ không phải điểm cộng. Một phần ba vị trí để NULL cả hai là cố ý: cần cả nhánh
+"vai không đặt điều kiện" lẫn nhánh "ứng viên chưa đủ năm kinh nghiệm bị loại khỏi gợi ý" trong
+cùng một bộ dữ liệu.
+
+UPDATE ... FROM (VALUES ...) chứ không phải 185 câu UPDATE rời: một lần quét bảng thay vì 185 lần,
+và quan trọng hơn — cả khối là MỘT câu lệnh, nên không có trạng thái "chạy được nửa chừng".
+""")
+    f.rule()
+
+    rows = [
+        f"    ({p['id']}, {q(p['company_overview'])}, {q(p['company_culture'])})"
+        for p in projects
+    ]
+    f.sql(
+        "UPDATE socialapp.t_projects p\n"
+        "   SET company_overview = v.company_overview,\n"
+        "       company_culture  = v.company_culture\n"
+        "  FROM (VALUES\n" + ",\n".join(rows) + "\n"
+        "       ) AS v(id, company_overview, company_culture)\n"
+        " WHERE p.id = v.id;",
+        rows=len(rows),
+    )
+    f.note("Một dự án trong bảy để NULL cả hai: đội hai người và một repo là trạng thái có thật "
+           "trên bảng dự án này, và nhánh \"không có phần giới thiệu đội\" phải có dữ liệu để chạy.")
+
+    rows = [
+        f"    ({p['id']}, {q(p['role_summary'])}, {jsonb(p['responsibilities'])},"
+        f" {jsonb(p['requirements'])}, {jsonb(p['nice_to_have'])},"
+        f" {p['min_years'] if p['min_years'] is not None else 'NULL'}, {q(p['seniority'])})"
+        for p in positions
+    ]
+    f.sql(
+        "UPDATE socialapp.t_project_positions pos\n"
+        "   SET role_summary         = v.role_summary,\n"
+        "       responsibilities     = v.responsibilities::jsonb,\n"
+        "       requirements         = v.requirements::jsonb,\n"
+        "       nice_to_have         = v.nice_to_have::jsonb,\n"
+        "       min_years_experience = v.min_years,\n"
+        "       seniority_level      = v.seniority\n"
+        "  FROM (VALUES\n" + ",\n".join(rows) + "\n"
+        "       ) AS v(id, role_summary, responsibilities, requirements, nice_to_have,\n"
+        "              min_years, seniority)\n"
+        " WHERE pos.id = v.id;",
+        rows=len(rows),
+    )
+    f.note("Bản JD viết theo VAI chứ không theo dự án: một Kỹ sư Backend ở dự án nào cũng làm gần "
+           "đúng những việc ấy, còn đặc thù của dự án đã nằm ở description và company_overview.")
+    return f
 
 
 def emit_roadmaps(roadmaps, nodes, progress):
@@ -4636,6 +4940,7 @@ def main():
         emit_bookstore(books, reviews, purchases),
         emit_knowledge(explanations, notes),
         emit_projects(projects, positions, applications),
+        emit_job_descriptions(projects, positions),
         emit_roadmaps(roadmaps, nodes, progress),
         emit_moderation(logs, violations, bans, reports, admins),
         emit_reputation_and_notifications(rng, people, posts, eng),

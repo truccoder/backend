@@ -24,6 +24,10 @@ RUN ./gradlew bootJar -x test --no-daemon
 FROM python:3.12-alpine AS seed-objects
 COPY docker/minio/generate-seed-objects.py /seed/generate-seed-objects.py
 COPY src/main/resources/db/seed/seed-manifest.tsv /manifest/seed-manifest.tsv
+# Noi dung bon trang cua tung quyen sach. Thieu file nay thi moi PDF/EPUB nuong san quay ve mot
+# trang mau, va vi anh nuong san duoc uu tien hon moi duong khac, ban mot trang ay se la thu
+# production phuc vu.
+COPY src/main/resources/db/seed/book-previews.json /manifest/book-previews.json
 RUN mkdir -p /objects /cache && python /seed/generate-seed-objects.py || true
 
 FROM eclipse-temurin:17-jre
@@ -34,6 +38,14 @@ WORKDIR /app
 # hình sai phổ biến (mount docker socket, thêm capability) thì đó là bàn đạp ra khỏi container.
 RUN groupadd --system --gid 1001 socialapp \
  && useradd --system --uid 1001 --gid socialapp --no-create-home socialapp
+
+# Font Unicode cho PDF mô tả công việc (JobDescriptionPdfGenerator). Helvetica dựng sẵn trong
+# PDFBox chỉ mã hoá được WinAnsi: gặp "Phát triển" là ném ngay ở showText, nên không có font này
+# thì mọi JD tiếng Việt rơi về bản bỏ dấu. DejaVu phủ đủ tiếng Việt, khoảng 3 MB, và là đường
+# duy nhất khiến production khớp với máy dev (nơi generator nhặt được font của Windows).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/build/libs/*.jar app.jar
 

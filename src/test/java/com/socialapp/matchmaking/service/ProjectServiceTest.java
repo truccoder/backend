@@ -735,7 +735,10 @@ class ProjectServiceTest {
     private ProjectPositionRequestDTO request(Integer quantity) {
       ProjectPositionRequestDTO dto = new ProjectPositionRequestDTO();
       dto.setTitle("Frontend Developer");
-      dto.setDescription("React");
+      dto.setRoleSummary(
+          "Build the screens the project is judged on, alongside one other engineer.");
+      dto.setResponsibilities(List.of("Build screens", "Review UI pull requests"));
+      dto.setRequirements(List.of("Two years of React", "Reads English documentation"));
       dto.setRequiredSkills(List.of("react"));
       dto.setQuantity(quantity);
       return dto;
@@ -789,7 +792,9 @@ class ProjectServiceTest {
     private ProjectPositionRequestDTO request(Integer quantity) {
       ProjectPositionRequestDTO dto = new ProjectPositionRequestDTO();
       dto.setTitle("Backend Developer");
-      dto.setDescription("Spring");
+      dto.setRoleSummary("Own the API layer and the jobs behind it, from schema to deploy.");
+      dto.setResponsibilities(List.of("Design endpoints", "Keep the migrations honest"));
+      dto.setRequirements(List.of("Three years of Java", "Has shipped a REST API"));
       dto.setRequiredSkills(List.of("java"));
       dto.setQuantity(quantity);
       return dto;

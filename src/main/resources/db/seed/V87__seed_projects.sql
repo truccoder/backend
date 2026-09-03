@@ -87,6 +87,8 @@ INSERT INTO socialapp.t_projects
 
 -- banner_url để NULL: không có object nào được nạp cho nó, và một URL trỏ vào chỗ trống thì tệ hơn NULL — trình duyệt hiện ảnh vỡ thay vì rơi về nền mặc định.
 
+-- Mô tả công việc có cấu trúc của từng vai (role_summary, responsibilities, requirements…) KHÔNG nằm ở file này mà ở V106: các cột ấy do V105 thêm vào, mà Flyway xếp db/migration và db/seed vào CÙNG MỘT dãy version — nên file V87 chạy xong từ lâu trước khi cột tồn tại.
+
 INSERT INTO socialapp.t_project_positions
     (id, project_id, title, description, required_skills, quantity, status,
      created_at, updated_at) VALUES

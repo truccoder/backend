@@ -141,4 +141,8 @@ docs/
 # Open Library) tải một lần rồi dùng lại, nên lần `docker compose up` thứ hai chạy được offline.
 # Không commit: đây là bản sao của dữ liệu bên thứ ba, dựng lại được, và nặng.
 docker/minio/.cache/
+# Bản ghi thô từ Open Library, cache của scripts/seed/crawl_book_previews.py. Kết quả đã dựng thành
+# hình nằm ở src/main/resources/db/seed/book-previews.json và ĐƯỢC commit; cache chỉ để chạy lại
+# không cần mạng.
+scripts/seed/.cache/
 __pycache__/

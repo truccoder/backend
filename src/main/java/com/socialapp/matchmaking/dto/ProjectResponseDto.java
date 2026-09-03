@@ -27,6 +27,12 @@ public class ProjectResponseDto {
   private String description;
   private String bannerUrl;
   private List<String> tags;
+
+  /** The company half of the job description, shared by every role — see {@code V105}. */
+  private String companyOverview;
+
+  private String companyCulture;
+
   private ProjectStatus status;
   private Integer authorId;
   private String authorUsername;
@@ -51,6 +57,8 @@ public class ProjectResponseDto {
         .description(project.getDescription())
         .bannerUrl(project.getBannerUrl())
         .tags(project.getTags())
+        .companyOverview(project.getCompanyOverview())
+        .companyCulture(project.getCompanyCulture())
         .status(project.getStatus())
         .authorId(project.getAuthor() == null ? null : project.getAuthor().getId())
         // authorUsername mirrors B13's feed fix: /u/{username} is keyed on the handle and there is

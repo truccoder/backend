@@ -29,6 +29,7 @@ import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
+import com.socialapp.knowledge.entity.enums.SeniorityLevel;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.matchmaking.dto.SuggestedCandidateDto;
 import com.socialapp.matchmaking.dto.SuggestedProjectDto;
@@ -87,6 +88,14 @@ class MatchmakingServiceTest {
     project.setAuthor(author);
     position.setProject(project);
 
+    return position;
+  }
+
+  /** A role that states an experience bar — the gate {@code V105} made expressible. */
+  private static ProjectPositionEntity positionRequiring(
+      List<String> requiredSkills, Integer minYears) {
+    ProjectPositionEntity position = position(requiredSkills);
+    position.setMinYearsExperience(minYears);
     return position;
   }
 
@@ -239,9 +248,16 @@ class MatchmakingServiceTest {
       List<SuggestedCandidateDto> result =
           matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
 
-      // Then: best fit first, which the old boolean filter could not express at all.
-      assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22, 33, 11);
-      assertThat(result).extracting(SuggestedCandidateDto::getMatchScore).containsExactly(9, 6, 3);
+      // Then: best fit first, which the old boolean filter could not express at all — and 11,
+      // who matches one skill of three, is no longer in the list at all. One shared word out of
+      // three is how a "Java, Spring, Redis" role used to end up recommending someone whose only
+      // overlap was Java (PositionFit.MIN_SKILL_COVERAGE).
+      assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22, 33);
+      // 22 covers all three (9 + the full-coverage bonus), 33 covers two.
+      assertThat(result).extracting(SuggestedCandidateDto::getMatchScore).containsExactly(12, 6);
+      assertThat(result)
+          .extracting(SuggestedCandidateDto::getSkillCoveragePercent)
+          .containsExactly(100, 67);
     }
 
     @Test
@@ -260,10 +276,11 @@ class MatchmakingServiceTest {
       List<SuggestedCandidateDto> result =
           matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
 
-      // Then: both count, and the reply echoes the owner's own spelling back at them.
+      // Then: both count (6), plus the full-coverage bonus for matching every skill asked for,
+      // and the reply echoes the owner's own spelling back at them.
       assertThat(result)
           .singleElement()
-          .satisfies(dto -> assertThat(dto.getMatchScore()).isEqualTo(6));
+          .satisfies(dto -> assertThat(dto.getMatchScore()).isEqualTo(9));
       assertThat(result.get(0).getMatchedSkills()).containsExactly("Java", "React");
     }
 
@@ -294,7 +311,8 @@ class MatchmakingServiceTest {
 
       // Then
       assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(11, 22);
-      assertThat(result).extracting(SuggestedCandidateDto::getMatchScore).containsExactly(5, 3);
+      // 3 for the skill + 3 for covering the whole (one-skill) role, and +2 to the same-role one.
+      assertThat(result).extracting(SuggestedCandidateDto::getMatchScore).containsExactly(8, 6);
     }
 
     @Test
@@ -324,6 +342,102 @@ class MatchmakingServiceTest {
 
       // Then: a label loses to a demonstrated skill.
       assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22, 11);
+    }
+
+    @Test
+    @DisplayName("should drop a candidate who matches too few of the required skills")
+    void shouldDropCandidatesBelowTheCoverageBar() {
+      // Given: a four-skill role, and someone who shares one of them.
+      when(positionRepository.findById(POSITION_ID))
+          .thenReturn(
+              Optional.of(position(List.of("Go", "Kubernetes", "Terraform", "PostgreSQL"))));
+      when(profileRepository.findCandidatesBySkills(anyList(), eq(OWNER_ID), anyInt()))
+          .thenReturn(List.of(profile(11, "PostgreSQL"), profile(22, "Go", "Kubernetes")));
+      when(applicationRepository.findApplicantIdsByPositionId(POSITION_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.empty());
+
+      // When
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
+
+      // Then: the SQL pool selects on "shares at least one skill" because that is what an index
+      // can do; the shortlist is not obliged to repeat the compromise.
+      assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22);
+    }
+
+    @Test
+    @DisplayName("should drop a candidate below the experience bar the role states")
+    void shouldDropCandidatesBelowTheExperienceBar() {
+      // Given: the role asks for five years. Both candidates know the skill.
+      when(positionRepository.findById(POSITION_ID))
+          .thenReturn(Optional.of(positionRequiring(List.of("Java"), 5)));
+
+      UserProfessionalProfileEntity tooJunior = profile(11, "Java");
+      tooJunior.setYearsOfExperience(1);
+      UserProfessionalProfileEntity qualified = profile(22, "Java");
+      qualified.setYearsOfExperience(6);
+
+      when(profileRepository.findCandidatesBySkills(anyList(), eq(OWNER_ID), anyInt()))
+          .thenReturn(List.of(tooJunior, qualified));
+      when(applicationRepository.findApplicantIdsByPositionId(POSITION_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.empty());
+
+      // When
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
+
+      // Then: below the bar is a wrong match, not a weak one — no score can buy past it.
+      assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22);
+    }
+
+    @Test
+    @DisplayName("should drop a candidate who never stated their experience, once a bar is set")
+    void shouldDropCandidatesWithUnknownExperience_whenTheRoleAsks() {
+      // Given
+      when(positionRepository.findById(POSITION_ID))
+          .thenReturn(Optional.of(positionRequiring(List.of("Java"), 3)));
+      when(profileRepository.findCandidatesBySkills(anyList(), eq(OWNER_ID), anyInt()))
+          .thenReturn(List.of(profile(11, "Java")));
+      when(applicationRepository.findApplicantIdsByPositionId(POSITION_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.empty());
+
+      // When
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
+
+      // Then: a role that did not ask lets everyone through; a person who did not answer cannot
+      // be shown to clear a bar that was asked for. The asymmetry is the point.
+      assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should accept a candidate more senior than the role asks for")
+    void shouldAcceptCandidatesAboveTheSeniorityBar() {
+      // Given: the role asks for SENIOR.
+      ProjectPositionEntity position = position(List.of("Java"));
+      position.setSeniorityLevel(SeniorityLevel.SENIOR);
+      when(positionRepository.findById(POSITION_ID)).thenReturn(Optional.of(position));
+
+      UserProfessionalProfileEntity mid = profile(11, "Java");
+      mid.setSeniorityLevel(SeniorityLevel.MID);
+      UserProfessionalProfileEntity lead = profile(22, "Java");
+      lead.setSeniorityLevel(SeniorityLevel.LEAD);
+
+      when(profileRepository.findCandidatesBySkills(anyList(), eq(OWNER_ID), anyInt()))
+          .thenReturn(List.of(mid, lead));
+      when(applicationRepository.findApplicantIdsByPositionId(POSITION_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.empty());
+
+      // When
+      List<SuggestedCandidateDto> result =
+          matchmakingService.suggestCandidates(POSITION_ID, OWNER_ID, LIMIT);
+
+      // Then: a bar is a floor, not an equality check — a LEAD passes a SENIOR role.
+      assertThat(result).extracting(SuggestedCandidateDto::getUserId).containsExactly(22);
     }
 
     @Test
@@ -658,9 +772,96 @@ class MatchmakingServiceTest {
       // When
       List<SuggestedProjectDto> result = matchmakingService.suggestProjects(OWNER_ID, LIMIT);
 
-      // Then: the strong match leads; the two equal ones fall back to newest first.
+      // Then: the strong match leads; the two equal ones fall back to newest first. Every role
+      // here is fully covered by the caller, so each carries the full-coverage bonus too.
       assertThat(result).extracting(dto -> dto.project().getId()).containsExactly(4001, 4003, 4002);
-      assertThat(result).extracting(SuggestedProjectDto::matchScore).containsExactly(6, 3, 3);
+      assertThat(result).extracting(SuggestedProjectDto::matchScore).containsExactly(9, 6, 6);
+      assertThat(result.get(0).qualifiedPositionIds()).containsExactly(4101);
+    }
+
+    @Test
+    @DisplayName("should not suggest a project on shared domains alone")
+    void shouldNotSuggestOnDomainsAlone() {
+      // Given: the caller cares about the same things this project is about, but the only open
+      // role wants a stack they do not have.
+      UserProfessionalProfileEntity caller = profile(OWNER_ID, "Java");
+      caller.setInterestedDomains(List.of("API Design"));
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.of(caller));
+
+      ProjectEntity project = project(4001, 900, "API Design");
+      when(projectRepository.findOpenProjectsForMatching(eq(OWNER_ID), any(Pageable.class)))
+          .thenReturn(List.of(project));
+      when(applicationRepository.findProjectIdsByApplicantId(OWNER_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(positionRepository.findByProjectIdIn(List.of(4001)))
+          .thenReturn(List.of(openPositionOn(project, 4101, "Figma", "Sketch")));
+
+      // When
+      List<SuggestedProjectDto> result = matchmakingService.suggestProjects(OWNER_ID, LIMIT);
+
+      // Then: shared interests describe a project worth reading about, not one to apply to.
+      assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should not suggest a project whose only open role is above the caller")
+    void shouldRespectTheExperienceBar() {
+      // Given
+      UserProfessionalProfileEntity caller = profile(OWNER_ID, "Java");
+      caller.setYearsOfExperience(1);
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.of(caller));
+
+      ProjectEntity project = project(4001, 900);
+      when(projectRepository.findOpenProjectsForMatching(eq(OWNER_ID), any(Pageable.class)))
+          .thenReturn(List.of(project));
+      when(applicationRepository.findProjectIdsByApplicantId(OWNER_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+
+      ProjectPositionEntity seniorRole = openPositionOn(project, 4101, "Java");
+      seniorRole.setMinYearsExperience(5);
+      when(positionRepository.findByProjectIdIn(List.of(4001))).thenReturn(List.of(seniorRole));
+
+      // When
+      List<SuggestedProjectDto> result = matchmakingService.suggestProjects(OWNER_ID, LIMIT);
+
+      // Then: suggesting a role someone cannot take wastes the applicant's time and the owner's.
+      assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName(
+        "should score a project by its best role and name every role the caller qualifies for")
+    void shouldScoreByBestRoleAndNameThem() {
+      // Given: three open roles — one the caller fully covers, one they half cover, one they
+      // cannot take at all.
+      UserProfessionalProfileEntity caller = profile(OWNER_ID, "Java", "Spring");
+      when(profileRepository.findById(OWNER_ID)).thenReturn(Optional.of(caller));
+
+      ProjectEntity project = project(4001, 900);
+      when(projectRepository.findOpenProjectsForMatching(eq(OWNER_ID), any(Pageable.class)))
+          .thenReturn(List.of(project));
+      when(applicationRepository.findProjectIdsByApplicantId(OWNER_ID)).thenReturn(List.of());
+      when(blockQueryService.blockedPairIds(OWNER_ID)).thenReturn(Set.of());
+      when(positionRepository.findByProjectIdIn(List.of(4001)))
+          .thenReturn(
+              List.of(
+                  openPositionOn(project, 4101, "Java", "Spring"),
+                  openPositionOn(project, 4102, "Java", "Kafka"),
+                  openPositionOn(project, 4103, "Figma")));
+
+      // When
+      List<SuggestedProjectDto> result = matchmakingService.suggestProjects(OWNER_ID, LIMIT);
+
+      // Then: the project inherits the best role it can offer (2 skills + full coverage = 9),
+      // rather than the sum of scraps across roles nobody could apply to as a whole.
+      assertThat(result)
+          .singleElement()
+          .satisfies(
+              dto -> {
+                assertThat(dto.matchScore()).isEqualTo(9);
+                assertThat(dto.qualifiedPositionIds()).containsExactly(4101, 4102);
+                assertThat(dto.matchedSkills()).containsExactly("Java", "Spring");
+              });
     }
 
     @Test

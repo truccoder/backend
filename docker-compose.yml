@@ -112,7 +112,7 @@ services:
       - |
         set -e
         mc alias set local http://minio-server:9000 minio_admin minio_admin_password
-        mc mb --ignore-existing local/books local/book-covers local/profile-pictures local/post-media
+        mc mb --ignore-existing local/books local/book-covers local/profile-pictures local/post-media local/job-descriptions
         mc anonymous set download local/profile-pictures
         mc anonymous set download local/post-media
         # The five prefixes and the bucket each belongs to, per BookStorageService,

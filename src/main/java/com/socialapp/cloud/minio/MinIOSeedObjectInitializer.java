@@ -14,14 +14,18 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.Normalizer;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -35,6 +39,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.imageio.ImageIO;
 import lombok.RequiredArgsConstructor;
@@ -80,6 +87,13 @@ import nl.siegmann.epublib.epub.EpubWriter;
  * bật, object nào nhỏ hơn {@code MIN_REAL_IMAGE_BYTES} mà manifest có khai nguồn thật được coi là ô
  * màu và thử lấy lại ảnh thật (một ảnh thật đã lưu luôn ≥ ngưỡng đó, nên không có dương tính giả).
  *
+ * <p><b>File sách có nội dung, không còn là trang trắng.</b> Mỗi PDF/EPUB của gian sách được dựng
+ * bốn trang — bìa lót, mục lục, hai trang mở đầu chương một — từ {@code db/seed/book-previews.json}
+ * đóng sẵn trong jar. File đó do {@code scripts/seed/crawl_book_previews.py} sinh lúc soạn: dữ kiện
+ * thư mục (tiêu đề, tác giả, nhà xuất bản, năm, mục lục) lấy từ Open Library, văn xuôi do máy sinh.
+ * Bản trước sinh đúng một trang A4 mang mỗi tên file, nên bấm "Xem thử" trên một quyển có bìa thật
+ * lại mở ra một trang trắng.
+ *
  * <p><b>Mặc định TẮT</b> ({@code minio.seed-objects-on-start}), cùng lý do với hai initializer kia.
  * {@code application-prod.yml} bật nó; máy dev để {@code docker-compose} lo.
  *
@@ -98,6 +112,15 @@ import nl.siegmann.epublib.epub.EpubWriter;
 public class MinIOSeedObjectInitializer {
 
   private static final String MANIFEST_PATH = "db/seed/seed-manifest.tsv";
+
+  /** Nội dung bốn trang của từng quyển sách, dựng sẵn lúc soạn và đóng vào jar cùng manifest. */
+  private static final String BOOK_PREVIEWS_PATH = "db/seed/book-previews.json";
+
+  /**
+   * 13 chữ số đầu tiên trong tên file là ISBN: {@code previews/9001/9780132350884-preview.pdf} và
+   * {@code books/9001/9780132350884.epub} tra về cùng một quyển.
+   */
+  private static final Pattern ISBN_IN_KEY = Pattern.compile("(\\d{13})");
 
   /**
    * Prefix của key ⇢ BUCKET chứa nó. Phải khớp từng dòng với {@code BUCKET_OF_PREFIX} trong
@@ -139,6 +162,19 @@ public class MinIOSeedObjectInitializer {
 
   private static final String USER_AGENT = "elitenexus-seed/1.0";
 
+  /**
+   * Hình trang của file sách sinh ra, sao chép đúng các con số của
+   * {@code generate-seed-objects.py} để hai đường cho ra cùng một bố cục.
+   */
+  private static final float MARGIN_X = 64;
+
+  private static final float TOP_Y = 770;
+  private static final float BOTTOM_Y = 64;
+  private static final float HEADING_SIZE = 16;
+  private static final float BODY_SIZE = 11;
+  private static final float LINE_HEIGHT = 15.5f;
+  private static final float PARAGRAPH_GAP = 8;
+
   /** Bìa mỗi thứ một màu, sao chép đúng bảng của {@code generate-seed-objects.py}. */
   private static final int[][] PALETTE = {
     {37, 99, 235}, {5, 150, 105}, {219, 39, 119}, {217, 119, 6},
@@ -146,6 +182,12 @@ public class MinIOSeedObjectInitializer {
   };
 
   private final MinIOService minIOService;
+
+  /**
+   * Nạp một lần ở lượt đồng bộ đầu tiên. Không dùng {@code @PostConstruct}: bước này chỉ chạy khi
+   * {@code seed-objects-on-start} bật, còn bean thì luôn được tạo.
+   */
+  private volatile Map<String, BookDocument> bookPreviews;
 
   /**
    * Bật cùng lúc với việc nạp seed. {@code application-prod.yml} đặt {@code true}; env
@@ -290,8 +332,13 @@ public class MinIOSeedObjectInitializer {
     try {
       long existingSize = minIOService.objectSize(bucket, row.key());
       boolean present = existingSize >= 0;
+      // File sách sinh ra cũng được coi là "ô màu" khi nó nhỏ hơn ngưỡng, dù manifest không khai
+      // nguồn tải nào cho nó. Không có vế này thì mọi môi trường đã seed một lần vẫn giữ nguyên bản
+      // PDF một trang trắng của thế hệ trước — bốn trang mới chỉ có ở một MinIO hoàn toàn trống.
       boolean placeholderInPlace =
-          present && existingSize < MIN_REAL_IMAGE_BYTES && row.sourceUrl() != null;
+          present
+              && existingSize < MIN_REAL_IMAGE_BYTES
+              && (row.sourceUrl() != null || bookOf(row.key()) != null);
 
       if (present && !(placeholderInPlace && replacePlaceholders)) {
         stats.skipped.incrementAndGet();
@@ -306,8 +353,9 @@ public class MinIOSeedObjectInitializer {
       boolean wasReal = data != null;
 
       if (!wasReal) {
-        if (present) {
+        if (present && bookOf(row.key()) == null) {
           // Đã có một ô màu và lần này vẫn không lấy được ảnh thật — đừng ghi đè bằng ô màu khác.
+          // File sách thì ngược lại: bản sinh ra ở đây LÀ nội dung đích, nên nó được ghi đè.
           stats.skipped.incrementAndGet();
           return;
         }
@@ -426,10 +474,12 @@ public class MinIOSeedObjectInitializer {
     if (key.startsWith("covers/")) {
       return solidImage(400, 560, rgb, "jpg");
     }
+    BookDocument book = bookOf(key);
+    List<BookPage> pages = book != null ? book.pages() : fallbackPages(stemOf(key));
     if (key.endsWith(".epub")) {
-      return minimalEpub(stemOf(key));
+      return documentEpub(book != null ? book.title() : stemOf(key), pages);
     }
-    return minimalPdf(stemOf(key));
+    return documentPdf(pages);
   }
 
   private byte[] solidImage(int width, int height, int[] rgb, String format) {
@@ -452,22 +502,118 @@ public class MinIOSeedObjectInitializer {
     }
   }
 
-  private byte[] minimalPdf(String title) {
+  // ── File sách: bốn trang dựng sẵn ───────────────────────────────────────────────────────────
+
+  /** Một trang: tiêu đề (có thể rỗng ở trang tiếp nối) và các đoạn văn. */
+  private record BookPage(String heading, List<String> paragraphs) {}
+
+  /** Một quyển sách trong {@code book-previews.json}. */
+  private record BookDocument(String title, List<BookPage> pages) {}
+
+  /**
+   * Bản ghi của quyển sách mà {@code key} trỏ tới, hoặc {@code null} nếu key không tra ra quyển nào.
+   *
+   * <p>Thiếu file {@code book-previews.json} hoặc file hỏng thì trả {@code null} cho MỌI key và
+   * đường sinh rơi về một trang mẫu — chậm chân một nhịp còn hơn làm hỏng khởi động.
+   */
+  private BookDocument bookOf(String key) {
+    // CHỈ FILE NỘI DUNG. Ảnh bìa nằm ở covers/<uploader>/<isbn>.jpg — cũng mang ISBN trong tên, nên
+    // thiếu vế này thì mọi ảnh bìa bị coi là file sách và bị dựng lại thành PDF.
+    if (!key.endsWith(".pdf") && !key.endsWith(".epub")) {
+      return null;
+    }
+    Map<String, BookDocument> previews = bookPreviews;
+    if (previews == null) {
+      synchronized (this) {
+        if (bookPreviews == null) {
+          bookPreviews = readBookPreviews();
+        }
+        previews = bookPreviews;
+      }
+    }
+    String name = key.substring(key.lastIndexOf('/') + 1);
+    Matcher matcher = ISBN_IN_KEY.matcher(name);
+    return matcher.find() ? previews.get(matcher.group(1)) : null;
+  }
+
+  private Map<String, BookDocument> readBookPreviews() {
+    Map<String, BookDocument> out = new LinkedHashMap<>();
+    try (InputStream in = new ClassPathResource(BOOK_PREVIEWS_PATH).getInputStream()) {
+      JsonNode books = new ObjectMapper().readTree(in).path("books");
+      books
+          .properties()
+          .forEach(
+              entry -> {
+                List<BookPage> pages = new ArrayList<>();
+                for (JsonNode page : entry.getValue().path("pages")) {
+                  List<String> paragraphs = new ArrayList<>();
+                  page.path("paragraphs").forEach(par -> paragraphs.add(par.asText()));
+                  pages.add(new BookPage(page.path("heading").asText(""), paragraphs));
+                }
+                if (!pages.isEmpty()) {
+                  out.put(
+                      entry.getKey(),
+                      new BookDocument(entry.getValue().path("title").asText(""), pages));
+                }
+              });
+      log.info("minio.seed-objects-on-start: {} có {} quyển sách", BOOK_PREVIEWS_PATH, out.size());
+    } catch (IOException | RuntimeException e) {
+      log.warn(
+          "minio.seed-objects-on-start: không đọc được {} — file sách sẽ chỉ có một trang mẫu.",
+          BOOK_PREVIEWS_PATH,
+          e);
+    }
+    return out;
+  }
+
+  /**
+   * Nội dung cho một file sách không tra ra quyển nào — manifest và {@code book-previews.json} đang
+   * lệch nhau, chạy lại {@code scripts/seed/crawl_book_previews.py} rồi {@code generate_seed.py}.
+   */
+  private List<BookPage> fallbackPages(String stem) {
+    return List.of(
+        new BookPage(
+            stem,
+            List.of(
+                "File mau cho bo seed - khong phai noi dung that.",
+                "Khong tim thay quyen nay trong book-previews.json.")));
+  }
+
+  /**
+   * PDF nhiều trang.
+   *
+   * <p><b>Tràn thì cắt, không đẩy sang trang mới</b>: số trang của file phải bằng đúng số phần tử
+   * của {@code pages}, vì cột {@code t_books.preview_pages} bên bộ seed SQL được đặt bằng chính con
+   * số ấy.
+   */
+  private byte[] documentPdf(List<BookPage> pages) {
     try (PDDocument doc = new PDDocument()) {
-      PDPage page = new PDPage(PDRectangle.A4);
-      doc.addPage(page);
       PDType1Font font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-      try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-        cs.beginText();
-        cs.setFont(font, 16);
-        cs.newLineAtOffset(60, 760);
-        cs.showText(asciiSafe(title));
-        cs.endText();
-        cs.beginText();
-        cs.setFont(font, 11);
-        cs.newLineAtOffset(60, 730);
-        cs.showText("File mau cho bo seed - khong phai noi dung that.");
-        cs.endText();
+      float textWidth = PDRectangle.A4.getWidth() - 2 * MARGIN_X;
+      for (BookPage page : pages) {
+        PDPage pdPage = new PDPage(PDRectangle.A4);
+        doc.addPage(pdPage);
+        try (PDPageContentStream cs = new PDPageContentStream(doc, pdPage)) {
+          float y = TOP_Y;
+          String heading = asciiSafe(page.heading());
+          if (!heading.isBlank()) {
+            for (String line : wrap(heading, font, HEADING_SIZE, textWidth)) {
+              write(cs, font, HEADING_SIZE, line, y);
+              y -= HEADING_SIZE + 6;
+            }
+            y -= PARAGRAPH_GAP;
+          }
+          for (String paragraph : page.paragraphs()) {
+            for (String line : wrap(asciiSafe(paragraph), font, BODY_SIZE, textWidth)) {
+              if (y < BOTTOM_Y) {
+                break;
+              }
+              write(cs, font, BODY_SIZE, line, y);
+              y -= LINE_HEIGHT;
+            }
+            y -= PARAGRAPH_GAP;
+          }
+        }
       }
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       doc.save(out);
@@ -477,19 +623,70 @@ public class MinIOSeedObjectInitializer {
     }
   }
 
-  private byte[] minimalEpub(String title) {
+  private void write(PDPageContentStream cs, PDType1Font font, float size, String line, float y)
+      throws IOException {
+    cs.beginText();
+    cs.setFont(font, size);
+    cs.newLineAtOffset(MARGIN_X, y);
+    cs.showText(line);
+    cs.endText();
+  }
+
+  /** Ngắt dòng theo bề rộng ĐO ĐƯỢC của font, khác bên Python vốn phải ước lượng theo số ký tự. */
+  private List<String> wrap(String text, PDType1Font font, float size, float width)
+      throws IOException {
+    List<String> lines = new ArrayList<>();
+    StringBuilder current = new StringBuilder();
+    for (String word : text.split("\\s+")) {
+      if (word.isEmpty()) {
+        continue;
+      }
+      String candidate = current.isEmpty() ? word : current + " " + word;
+      if (font.getStringWidth(candidate) / 1000 * size <= width) {
+        current.setLength(0);
+        current.append(candidate);
+      } else {
+        if (!current.isEmpty()) {
+          lines.add(current.toString());
+        }
+        current.setLength(0);
+        current.append(word);
+      }
+    }
+    if (!current.isEmpty()) {
+      lines.add(current.toString());
+    }
+    return lines.isEmpty() ? List.of("") : lines;
+  }
+
+  /** EPUB nhiều chương, mỗi trang một chương. */
+  private byte[] documentEpub(String title, List<BookPage> pages) {
     try {
       Book book = new Book();
       book.getMetadata().addTitle(title);
       book.getMetadata().addIdentifier(new Identifier());
-      String html =
-          "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-              + "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>"
-              + escapeXml(title)
-              + "</title></head><body><h1>"
-              + escapeXml(title)
-              + "</h1><p>File mẫu cho bộ seed — không phải nội dung thật.</p></body></html>\n";
-      book.addSection(title, new Resource(html.getBytes(StandardCharsets.UTF_8), "chapter1.html"));
+      int index = 0;
+      for (BookPage page : pages) {
+        index++;
+        StringBuilder body = new StringBuilder();
+        if (!page.heading().isBlank()) {
+          body.append("<h1>").append(escapeXml(page.heading())).append("</h1>");
+        }
+        for (String paragraph : page.paragraphs()) {
+          body.append("<p>").append(escapeXml(paragraph)).append("</p>");
+        }
+        String heading = page.heading().isBlank() ? title : page.heading();
+        String html =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                + "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>"
+                + escapeXml(heading)
+                + "</title></head><body>"
+                + body
+                + "</body></html>\n";
+        book.addSection(
+            heading,
+            new Resource(html.getBytes(StandardCharsets.UTF_8), "chapter" + index + ".html"));
+      }
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       new EpubWriter().write(book, out);
       return out.toByteArray();
@@ -525,8 +722,22 @@ public class MinIOSeedObjectInitializer {
     return name.replace('-', ' ');
   }
 
+  /**
+   * Bỏ dấu về ASCII. Helvetica chuẩn của PDF không có ký tự ngoài Latin-1, mà danh mục thì có
+   * "Aurélien Géron" và mục lục thật có dấu nháy cong — bỏ dấu thì vẫn đọc được, để nguyên thì
+   * PDFBox ném ngay ở {@code showText}. Bên {@code generate-seed-objects.py} làm cùng một việc.
+   */
   private static String asciiSafe(String s) {
-    return s.replaceAll("[^\\x20-\\x7E]", "?");
+    String folded =
+        Normalizer.normalize(s, Normalizer.Form.NFKD)
+            .replaceAll("\\p{M}", "")
+            .replace('\u2018', '\'')
+            .replace('\u2019', '\'')
+            .replace('\u201C', '"')
+            .replace('\u201D', '"')
+            .replace('\u2013', '-')
+            .replace('\u2014', '-');
+    return folded.replaceAll("[^\\x20-\\x7E]", "?");
   }
 
   private static String escapeXml(String s) {

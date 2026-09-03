@@ -417,6 +417,15 @@ rate-limit:
     mail-window: ${AUTH_RATE_LIMIT_MAIL_WINDOW:15m}
     trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}
 
+# Font dùng để in PDF mô tả công việc (JobDescriptionPdfGenerator).
+#
+# Để trống là bình thường: generator tự dò các vị trí font hệ thống quen thuộc (DejaVu trong ảnh
+# runtime, Arial/Segoe trên máy Windows). Chỉ đặt khi chạy ở một môi trường không có font nào —
+# ở đó Helvetica dựng sẵn của PDFBox không mã hoá được tiếng Việt, và JD sẽ bị bỏ dấu.
+matchmaking:
+  job-description:
+    font-path: ${JOB_DESCRIPTION_FONT_PATH:}
+
 # Timeout cho mọi lời gọi HTTP đi ra ngoài. Xem WebClientTimeoutConfig — trước đây không WebClient
 # nào có timeout, nên một upstream nhận kết nối rồi im lặng sẽ giữ thread Tomcat vô hạn.
 http-client:

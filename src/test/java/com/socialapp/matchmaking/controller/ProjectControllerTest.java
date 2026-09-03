@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +34,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.matchmaking.dto.JobDescriptionUrlResponse;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
 import com.socialapp.matchmaking.dto.ProjectMemberDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
@@ -44,6 +46,7 @@ import com.socialapp.matchmaking.entity.ProjectPositionEntity;
 import com.socialapp.matchmaking.entity.enums.ApplicationStatus;
 import com.socialapp.matchmaking.entity.enums.PositionStatus;
 import com.socialapp.matchmaking.entity.enums.ProjectStatus;
+import com.socialapp.matchmaking.service.JobDescriptionService;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.matchmaking.service.ProjectService;
@@ -88,6 +91,7 @@ class ProjectControllerTest {
   @MockBean private ProjectService projectService;
   @MockBean private ProjectQueryService projectQueryService;
   @MockBean private MatchmakingService matchmakingService;
+  @MockBean private JobDescriptionService jobDescriptionService;
   @MockBean private JwtProvider jwtProvider;
   @MockBean private BanDetailsService banDetailsService;
   @MockBean private UserRepository userRepository;
@@ -620,7 +624,8 @@ class ProjectControllerTest {
           ProjectResponseDto.builder().id(projectId).title("Project " + projectId).build(),
           score,
           List.of("Java"),
-          List.of("API Design"));
+          List.of("API Design"),
+          List.of(1));
     }
 
     @Test
@@ -1049,7 +1054,22 @@ class ProjectControllerTest {
   @DisplayName("POST /v1/api/projects/{projectId}/positions")
   class AddPositionTests {
 
-    private static final String BODY = "{ \"title\": \"Frontend Developer\" }";
+    /**
+     * A whole job description, because {@code ProjectPositionRequestDTO} now requires one: a role
+     * summary, at least two responsibilities, at least two requirements, and the skills the
+     * matcher matches on. A title alone is a 422 — see {@code shouldReturn422_whenTheRoleHasNoJobDescription}.
+     */
+    private static final String BODY =
+        """
+        {
+          "title": "Frontend Developer",
+          "roleSummary": "Build the screens this project is judged on, next to one other engineer.",
+          "responsibilities": ["Build the screens", "Review UI pull requests"],
+          "requirements": ["Two years with React", "Comfortable reading English docs"],
+          "requiredSkills": ["React", "TypeScript"],
+          "quantity": 1
+        }
+        """;
 
     @Test
     @DisplayName("shouldReturn201AndTheCreatedPosition_happyPath")
@@ -1075,7 +1095,37 @@ class ProjectControllerTest {
           .perform(
               authed(post(URL + "/2/positions"))
                   .contentType(MediaType.APPLICATION_JSON)
-                  .content("{ \"description\": \"no title\" }"))
+                  .content("{ \"roleSummary\": \"no title\" }"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenTheRoleHasNoJobDescription")
+    void shouldReturn422WithoutJobDescription() throws Exception {
+      // The posting shape that used to be accepted, and the reason matchmaking could not work:
+      // a title with no summary, no responsibilities, no requirements and no skills to match on
+      // produced a role the candidate endpoint answered with an empty list, silently, with a 200.
+      mockMvc
+          .perform(
+              authed(post(URL + "/2/positions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{ \"title\": \"Frontend Developer\" }"))
+          .andExpect(status().isUnprocessableEntity());
+
+      verify(projectService, never()).addPosition(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenTheRoleListsOnlyOneResponsibility")
+    void shouldReturn422OnThinResponsibilities() throws Exception {
+      mockMvc
+          .perform(
+              authed(post(URL + "/2/positions"))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(
+                      BODY.replace(
+                          "[\"Build the screens\", \"Review UI pull requests\"]",
+                          "[\"Build the screens\"]")))
           .andExpect(status().isUnprocessableEntity());
     }
 
@@ -1100,7 +1150,17 @@ class ProjectControllerTest {
   @DisplayName("PUT /v1/api/projects/positions/{positionId}")
   class UpdatePositionTests {
 
-    private static final String BODY = "{ \"title\": \"Backend Developer\", \"quantity\": 3 }";
+    private static final String BODY =
+        """
+        {
+          "title": "Backend Developer",
+          "roleSummary": "Own the API layer and the background jobs behind it, schema to deploy.",
+          "responsibilities": ["Design the endpoints", "Keep the migrations honest"],
+          "requirements": ["Three years with Java", "Has shipped a REST API"],
+          "requiredSkills": ["Java", "Spring"],
+          "quantity": 3
+        }
+        """;
 
     @Test
     @DisplayName("shouldReturn200AndTheUpdatedPosition_happyPath")
@@ -1134,7 +1194,7 @@ class ProjectControllerTest {
           .perform(
               authed(put(URL + "/positions/30"))
                   .contentType(MediaType.APPLICATION_JSON)
-                  .content("{ \"title\": \"Backend Developer\", \"quantity\": 1 }"))
+                  .content(BODY.replace("\"quantity\": 3", "\"quantity\": 1")))
           .andExpect(status().isConflict());
     }
 
@@ -1290,6 +1350,66 @@ class ProjectControllerTest {
       mockMvc.perform(delete(URL + "/applications/70")).andExpect(status().isUnauthorized());
 
       verify(projectService, never()).withdrawApplication(any(), any());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/projects/positions/{positionId}/job-description
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/projects/positions/{positionId}/job-description")
+  class JobDescriptionTests {
+
+    private static final Integer POSITION_ID = 30;
+
+    @Test
+    @DisplayName("shouldReturn200AndASignedUrl_happyPath")
+    void shouldReturnSignedUrl() throws Exception {
+      OffsetDateTime renderedAt = OffsetDateTime.parse("2026-09-01T10:15:30Z");
+      when(jobDescriptionService.getOrRender(POSITION_ID))
+          .thenReturn(
+              new JobDescriptionUrlResponse("https://minio/job-descriptions/x.pdf", renderedAt));
+
+      mockMvc
+          .perform(authed(get(URL + "/positions/" + POSITION_ID + "/job-description")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.url").value("https://minio/job-descriptions/x.pdf"))
+          .andExpect(jsonPath("$.renderedAt").exists());
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenThePositionDoesNotExist")
+    void shouldReturn404() throws Exception {
+      when(jobDescriptionService.getOrRender(999))
+          .thenThrow(new NotFoundException("Position not found with ID: 999"));
+
+      mockMvc
+          .perform(authed(get(URL + "/positions/999/job-description")))
+          .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("shouldReturn200ForAnySignedInCaller_notOnlyTheOwner")
+    void shouldBeReadableByAnyone() throws Exception {
+      // A job posting only its author can open is not a posting. Unlike suggested-candidates, this
+      // endpoint does not take the caller at all.
+      when(jobDescriptionService.getOrRender(POSITION_ID))
+          .thenReturn(new JobDescriptionUrlResponse("https://minio/jd.pdf", OffsetDateTime.now()));
+
+      mockMvc
+          .perform(authed(get(URL + "/positions/" + POSITION_ID + "/job-description")))
+          .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401ForGuest() throws Exception {
+      mockMvc
+          .perform(get(URL + "/positions/" + POSITION_ID + "/job-description"))
+          .andExpect(status().isUnauthorized());
+
+      verify(jobDescriptionService, never()).getOrRender(any());
     }
   }
 }

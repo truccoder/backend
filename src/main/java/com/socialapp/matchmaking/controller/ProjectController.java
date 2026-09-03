@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.socialapp.common.utils.Constants;
 import com.socialapp.matchmaking.dto.ApplicationRequestDTO;
+import com.socialapp.matchmaking.dto.JobDescriptionUrlResponse;
 import com.socialapp.matchmaking.dto.ProjectApplicationResponseDto;
 import com.socialapp.matchmaking.dto.ProjectMemberDto;
 import com.socialapp.matchmaking.dto.ProjectPageResponseDto;
@@ -22,6 +23,7 @@ import com.socialapp.matchmaking.dto.UpdateProjectRequestDTO;
 import com.socialapp.matchmaking.dto.UpdateProjectStatusRequestDTO;
 import com.socialapp.matchmaking.entity.ProjectEntity;
 import com.socialapp.matchmaking.entity.ProjectPositionEntity;
+import com.socialapp.matchmaking.service.JobDescriptionService;
 import com.socialapp.matchmaking.service.MatchmakingService;
 import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.matchmaking.service.ProjectService;
@@ -40,6 +42,7 @@ public class ProjectController {
   private final ProjectService projectService;
   private final ProjectQueryService projectQueryService;
   private final MatchmakingService matchmakingService;
+  private final JobDescriptionService jobDescriptionService;
 
   /**
    * <p>Returns the created project instead of {@code void}. {@code ProjectService.createProject}
@@ -208,6 +211,19 @@ public class ProjectController {
   @GetMapping("/applications/mine")
   public List<ProjectApplicationResponseDto> getMyApplications() {
     return projectQueryService.getMyApplications(SecurityUtils.getCurrentUserId());
+  }
+
+  /**
+   * This role's job description as a PDF, behind a presigned URL — the same way a book preview is
+   * served, so the client opens it in the viewer it already has rather than building a second one.
+   *
+   * <p>Readable by any signed-in user: a job posting that only its author can open is not a
+   * posting. The document is rendered on the first request and re-used until the role or its
+   * project is edited; see {@code JobDescriptionService}.
+   */
+  @GetMapping("/positions/{positionId}/job-description")
+  public JobDescriptionUrlResponse getJobDescription(@PathVariable Integer positionId) {
+    return jobDescriptionService.getOrRender(positionId);
   }
 
   @PostMapping("/positions/{positionId}/apply")

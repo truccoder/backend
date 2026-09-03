@@ -66,8 +66,13 @@ public class MinIOBucketInitializer {
    * lỗi này không bao giờ hiện ra. Production không có service đó — nó chạy compose của repo
    * DATN-infra, nơi không có bước tạo bucket nào — nên gian sách hỏng ở đúng nơi không ai thấy.
    * Tạo bucket ở đây là chỗ duy nhất đúng cho cả hai môi trường.
+   *
+   * <p>{@code job-descriptions} (V105) nằm cùng nhóm và vì đúng lý do đó: JD của một vị trí
+   * được dựng thành PDF rồi phục vụ qua presigned URL, nên thiếu bucket thì mỗi lượt bấm
+   * "xem mô tả công việc" trả 503 chứ không phải một tài liệu trống.
    */
-  private static final List<String> PRIVATE_BUCKETS = List.of("books", "book-covers");
+  private static final List<String> PRIVATE_BUCKETS =
+      List.of("books", "book-covers", "job-descriptions");
 
   /** How many times to re-try the whole bucket-preparation pass before logging the loud line. */
   private static final int MAX_ATTEMPTS = 6;

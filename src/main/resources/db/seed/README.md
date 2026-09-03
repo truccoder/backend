@@ -21,8 +21,8 @@ mọi môi trường — kể cả production, nơi không có `docker-compose.y
 |---|---|
 | `Neo4jSeedInitializer` (ứng dụng) | nạp `db/seed/friend-graph.cypher` mỗi khi `NEO4J_SEED_ON_START=true` — file tự dọn dải 9001–9599 rồi `MERGE` lại |
 | `NewsfeedSeedInitializer` (ứng dụng) | xoá sạch khoá `feed:*` rồi fan-out lại, mỗi khi `NEWSFEED_REBUILD_ON_START=true` |
-| `MinIOBucketInitializer` (ứng dụng) | tạo cả **bốn** bucket, đặt policy công khai cho hai bucket ảnh — có **thử lại** vài lần nếu MinIO chưa sẵn sàng |
-| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, lấy ảnh (ưu tiên **ảnh nướng sẵn trong image**, rồi mới tải mạng, rồi mới sinh ô màu) và nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có ảnh thật; ghi đè ô màu cũ khi `MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS=true` |
+| `MinIOBucketInitializer` (ứng dụng) | tạo cả **năm** bucket (thêm `job-descriptions` từ V105), đặt policy công khai cho hai bucket ảnh — có **thử lại** vài lần nếu MinIO chưa sẵn sàng |
+| `MinIOSeedObjectInitializer` (ứng dụng) | đọc `db/seed/seed-manifest.tsv`, lấy ảnh (ưu tiên **ảnh nướng sẵn trong image**, rồi mới tải mạng, rồi mới sinh ô màu) và nạp lên MinIO, mỗi khi `MINIO_SEED_OBJECTS_ON_START=true` — bỏ qua object đã có ảnh thật; ghi đè ô màu cũ khi `MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS=true`. File PDF/EPUB của sách được dựng bốn trang từ `db/seed/book-previews.json`, và một file sách một-trang của thế hệ trước cũng được coi là ô màu nên sẽ bị thay |
 
 `minio-seed-objects` + `minio-init` trong `docker-compose.yml` vẫn còn nhưng **chỉ là đường dev**:
 chúng làm đúng việc của `MinIOSeedObjectInitializer` (cộng cache ảnh ở `docker/minio/.cache/` để
@@ -160,6 +160,44 @@ python scripts/seed/generate_seed.py
 Script này sinh `V81`–`V90`, `db/seed/friend-graph.cypher`, `scripts/seed/chat-plan.json`,
 `db/seed/seed-manifest.tsv` và `scripts/seed/id-map.md`. `V80` (reset) và `V92` (fixture) viết
 tay. `V91` bỏ trống — xem "Vì sao không seed tin xu hướng" bên dưới.
+
+### Nội dung vài trang đầu của sách
+
+`db/seed/book-previews.json` là **đầu vào**, không phải đầu ra của generator, và được commit:
+
+```bash
+python scripts/seed/crawl_book_previews.py   # chạy khi đổi book_catalog.py, hoặc muốn lấy lại dữ liệu mới
+pip install -r scripts/seed/requirements.txt
+python scripts/seed/fetch_real_previews.py   # nạp đè văn xuôi thật cho 10 quyển có nguồn hợp pháp
+python scripts/seed/generate_seed.py
+```
+
+Script crawl gọi Open Library **một lần lúc soạn** để lấy **dữ kiện thư mục** của từng ISBN — tiêu
+đề phụ, nhà xuất bản, năm, số trang, chủ đề và **mục lục** — rồi dựng sẵn bốn trang cho mỗi quyển:
+bìa lót, mục lục, hai trang mở đầu chương một (văn xuôi máy sinh, vì Open Library không cho trích
+nguyên văn). Kết quả cache ở `scripts/seed/.cache/openlibrary/` nên lần chạy sau không cần mạng;
+xoá thư mục đó để lấy lại dữ liệu mới.
+
+`fetch_real_previews.py` chạy tiếp theo, thay văn xuôi máy sinh đó bằng **văn bản thật** cho 10
+quyển có nguồn xem trước hợp pháp đã xác minh tay (sách toàn văn CC/MIT tác giả tự đăng, hoặc sample
+chapter PDF chính thức của Pearson/InformIT — xem `REAL_SOURCES` trong file). 70 quyển còn lại không
+có nguồn thật thì mượn đoạn văn thật của một trong 10 quyển trên (`pooledFrom` ghi rõ mượn từ ISBN
+nào) thay vì giữ văn xuôi máy sinh. Cache ở `scripts/seed/.cache/real-previews/`.
+
+Ba bên đọc file này và **không bên nào gọi mạng**: `generate_seed.py` lấy `totalPages` cho
+`t_books.total_pages` và **số phần tử của `pages`** cho `t_books.preview_pages`;
+`docker/minio/generate-seed-objects.py` và `MinIOSeedObjectInitializer` sắp chữ ra PDF/EPUB. Vì
+`preview_pages` bằng đúng số trang có thật trong file, giao diện không thể quảng cáo "xem thử 12
+trang" trên một file 4 trang.
+
+**Văn xuôi trong hai trang chương là do máy sinh**, lấy chủ đề thật của quyển sách làm nguyên liệu
+— không phát hành lại nội dung có bản quyền. API cũng trả `excerpts` (trích nguyên văn); crawler cố
+ý không dùng. Thế hệ trước sinh đúng **một trang A4 chỉ mang tên file**, nên bấm "Xem thử" trên một
+quyển có bìa thật lại mở ra một trang trắng.
+
+Đổi số trang, số đoạn hay cách hành văn thì sửa `CHAPTER_PAGES` / `PARAGRAPHS_PER_PAGE` /
+`OPENERS`–`MIDDLES`–`CLOSERS` trong crawler, chạy lại **cả hai** script; chỉ chạy crawler mà quên
+generator là `preview_pages` trong SQL lệch với file thật.
 
 Đầu ra **tất định**: chạy lại cho `git diff` sạch nếu không đổi tham số. Đó không phải chi tiết
 phong cách — nó là thứ khiến việc sửa một dòng trong bộ seed review được, thay vì mỗi lần sinh lại

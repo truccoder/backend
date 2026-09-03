@@ -1,6 +1,8 @@
 package com.socialapp.matchmaking.service;
 
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -84,6 +86,13 @@ public class MatchmakingService {
   private static final int ROLE_BONUS = 2;
 
   /**
+   * Paid once to whoever covers <em>every</em> skill a role asked for. Worth less than one extra
+   * shared skill on purpose: it separates an exact fit from a partial one of the same size without
+   * letting a narrow role (two skills, both matched) outrank a broad one someone matched more of.
+   */
+  private static final int FULL_COVERAGE_BONUS = 3;
+
+  /**
    * Who might fill this role, best match first, for the project owner to approach.
    *
    * <p><b>Owner-only.</b> The reply carries other users' job title, seniority, years of experience
@@ -140,7 +149,12 @@ public class MatchmakingService {
     return pool.stream()
         .filter(p -> !excluded.contains(p.getUserId()))
         .filter(p -> !blocked.contains(p.getUserId()))
-        .map(p -> toCandidateDto(p, requiredSkills, ownerProfile))
+        .map(p -> Map.entry(p, PositionFit.forCandidate(position, p)))
+        // The gate, and the reason this endpoint is worth trusting. The pool is selected by
+        // "shares at least one skill", which is all SQL can index; this is where "shares enough of
+        // them, and clears the bars the job description states" is applied. See PositionFit.
+        .filter(entry -> entry.getValue().qualified())
+        .map(entry -> toCandidateDto(entry.getKey(), entry.getValue(), ownerProfile))
         .sorted(
             Comparator.comparingInt(SuggestedCandidateDto::getMatchScore)
                 .reversed()
@@ -227,35 +241,72 @@ public class MatchmakingService {
   /**
    * Scores one project against one profile and builds its response in the same pass.
    *
-   * <p>Only {@code OPEN} positions contribute their skills: a filled role cannot be applied to, so
-   * matching a user's stack against it would suggest a project on the strength of work already
-   * taken. The response still carries every position, because the project detail a user sees
-   * should not silently hide its filled roles.
+   * <p><b>A project is scored through its roles, one role at a time.</b> The previous version
+   * poured every open role's required skills into a single list and counted the overlap, which
+   * quietly turned "you match a bit of three different roles" into a strong recommendation for a
+   * project this person could not apply to anywhere. What matters is whether there is <em>one</em>
+   * role they qualify for, so each open role is judged on its own ({@link PositionFit}) and the
+   * project inherits the score of the best one it can offer them.
+   *
+   * <p><b>No qualifying role means no suggestion</b>, whatever the tags say. Domain overlap can
+   * only add to a project that already has work for this person; on its own it describes a project
+   * they would enjoy reading about, which is not what this endpoint claims to return.
+   *
+   * <p>Only {@code OPEN} positions are considered: a filled role cannot be applied to, so matching
+   * against it would suggest a project on the strength of work already taken. The response still
+   * carries every position, because the project detail a user sees should not silently hide its
+   * filled roles.
    */
   private SuggestedProjectDto score(
       ProjectEntity project,
       List<ProjectPositionEntity> positions,
       UserProfessionalProfileEntity profile) {
-    List<String> openSkills =
-        positions.stream()
-            .filter(p -> p.getStatus() == PositionStatus.OPEN)
-            .map(ProjectPositionEntity::getRequiredSkills)
-            .filter(skills -> skills != null)
-            .flatMap(List::stream)
-            .toList();
+    Map<Integer, PositionFit> qualifying = new LinkedHashMap<>();
+    for (ProjectPositionEntity position : positions) {
+      if (position.getStatus() != PositionStatus.OPEN) {
+        continue;
+      }
+      PositionFit fit = PositionFit.forSeeker(position, profile);
+      if (fit.qualified()) {
+        qualifying.put(position.getId(), fit);
+      }
+    }
 
-    List<String> matchedSkills =
-        ProfileMatchScorer.matchedSkills(profile.getKnownTechStack(), openSkills);
+    List<String> matchedSkills = union(qualifying.values());
     List<String> matchedDomains =
         ProfileMatchScorer.matchedSkills(profile.getInterestedDomains(), project.getTags());
 
-    int matchScore = matchedSkills.size() * SKILL_WEIGHT + matchedDomains.size() * DOMAIN_WEIGHT;
+    int bestRoleScore =
+        qualifying.values().stream().mapToInt(MatchmakingService::skillScore).max().orElse(0);
+    int matchScore =
+        qualifying.isEmpty() ? 0 : bestRoleScore + matchedDomains.size() * DOMAIN_WEIGHT;
 
     List<ProjectPositionResponseDto> positionDtos =
         positions.stream().map(ProjectPositionResponseDto::from).toList();
 
     return new SuggestedProjectDto(
-        ProjectResponseDto.from(project, positionDtos), matchScore, matchedSkills, matchedDomains);
+        ProjectResponseDto.from(project, positionDtos),
+        matchScore,
+        matchedSkills,
+        matchedDomains,
+        List.copyOf(qualifying.keySet()));
+  }
+
+  /**
+   * Every skill matched across the roles this user qualifies for, each listed once.
+   *
+   * <p>De-duplicated case-insensitively and in first-seen order, for the reason {@code
+   * ProfileMatchScorer.matchedSkills} gives: two roles both asking for React must not make the
+   * reason read "React, react".
+   */
+  private static List<String> union(Collection<PositionFit> fits) {
+    Map<String, String> byNormalized = new LinkedHashMap<>();
+    for (PositionFit fit : fits) {
+      for (String skill : fit.matchedSkills()) {
+        byNormalized.putIfAbsent(skill.trim().toLowerCase(), skill);
+      }
+    }
+    return List.copyOf(byNormalized.values());
   }
 
   /**
@@ -274,17 +325,16 @@ public class MatchmakingService {
   }
 
   /**
-   * {@code matchedSkills} is spelled the way the <em>position</em> spells it: the project owner
-   * wrote those words, and they are reading this list, so their own vocabulary is what reads as an
-   * answer to their posting.
+   * One qualified candidate, with the evidence attached.
+   *
+   * <p>{@code matchedSkills} is spelled the way the <em>position</em> spells it (see {@link
+   * PositionFit#forCandidate}): the project owner wrote those words, and they are the one reading
+   * this list, so their own vocabulary is what reads as an answer to their posting.
    */
   private SuggestedCandidateDto toCandidateDto(
       UserProfessionalProfileEntity profile,
-      List<String> requiredSkills,
+      PositionFit fit,
       UserProfessionalProfileEntity ownerProfile) {
-    List<String> matchedSkills =
-        ProfileMatchScorer.matchedSkills(requiredSkills, profile.getKnownTechStack());
-
     boolean sameRole =
         ownerProfile != null
             && ProfileMatchScorer.sameRole(ownerProfile.getPrimaryRole(), profile.getPrimaryRole());
@@ -296,8 +346,15 @@ public class MatchmakingService {
         .yearsOfExperience(profile.getYearsOfExperience())
         .primaryRole(profile.getPrimaryRole())
         .knownTechStack(profile.getKnownTechStack())
-        .matchScore(matchedSkills.size() * SKILL_WEIGHT + (sameRole ? ROLE_BONUS : 0))
-        .matchedSkills(matchedSkills)
+        .matchScore(skillScore(fit) + (sameRole ? ROLE_BONUS : 0))
+        .matchedSkills(fit.matchedSkills())
+        .skillCoveragePercent(fit.coveragePercent())
         .build();
+  }
+
+  /** What a fit is worth before either direction adds its own bonuses. */
+  private static int skillScore(PositionFit fit) {
+    return fit.matchedSkills().size() * SKILL_WEIGHT
+        + (fit.fullCoverage() ? FULL_COVERAGE_BONUS : 0);
   }
 }

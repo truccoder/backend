@@ -35,4 +35,12 @@ public class SuggestedCandidateDto {
   private int matchScore;
 
   private List<String> matchedSkills;
+
+  /**
+   * How much of the role this person covers, 0–100. Everyone in this list already clears the
+   * minimum ({@code PositionFit.MIN_SKILL_COVERAGE}) and both bars the job description states, so
+   * this is the difference between "qualifies" and "qualifies comfortably" — the thing an owner
+   * was previously counting by hand off two lists.
+   */
+  private int skillCoveragePercent;
 }

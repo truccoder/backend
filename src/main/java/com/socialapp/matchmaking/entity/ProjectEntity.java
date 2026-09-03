@@ -50,6 +50,24 @@ public class ProjectEntity {
   @Column(columnDefinition = "jsonb")
   private List<String> tags;
 
+  /**
+   * The two halves of a job description that describe the <em>place</em> rather than the work:
+   * written once for the whole project, shared by every role on it.
+   *
+   * <p>They live here and not on {@code ProjectPositionEntity} deliberately. A project owner
+   * writing three roles should not retype who they are three times, and three copies of the same
+   * paragraph drift apart the first time one of them is edited. Everything that differs per role —
+   * summary, responsibilities, requirements — is on the position instead.
+   *
+   * <p>Both are optional: a solo side project has no company to describe, and refusing to publish
+   * it until someone invents one would be a form asking for a lie.
+   */
+  @Column(columnDefinition = "TEXT")
+  private String companyOverview;
+
+  @Column(columnDefinition = "TEXT")
+  private String companyCulture;
+
   @Enumerated(EnumType.STRING)
   private ProjectStatus status = ProjectStatus.OPEN;
 

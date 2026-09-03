@@ -56,6 +56,8 @@ public class ProjectService {
     project.setDescription(request.getDescription());
     project.setBannerUrl(request.getBannerUrl());
     project.setTags(request.getTags());
+    project.setCompanyOverview(request.getCompanyOverview());
+    project.setCompanyCulture(request.getCompanyCulture());
 
     if (request.getPositions() != null) {
       project.setPositions(
@@ -64,9 +66,7 @@ public class ProjectService {
                   posDto -> {
                     ProjectPositionEntity pos = new ProjectPositionEntity();
                     pos.setProject(project);
-                    pos.setTitle(posDto.getTitle());
-                    pos.setDescription(posDto.getDescription());
-                    pos.setRequiredSkills(posDto.getRequiredSkills());
+                    applyJobDescription(pos, posDto);
                     pos.setQuantity(posDto.getQuantity() != null ? posDto.getQuantity() : 1);
                     return pos;
                   })
@@ -271,6 +271,8 @@ public class ProjectService {
     project.setDescription(request.getDescription());
     project.setBannerUrl(request.getBannerUrl());
     project.setTags(request.getTags());
+    project.setCompanyOverview(request.getCompanyOverview());
+    project.setCompanyCulture(request.getCompanyCulture());
     return projectRepository.save(project);
   }
 
@@ -345,9 +347,7 @@ public class ProjectService {
 
     ProjectPositionEntity position = new ProjectPositionEntity();
     position.setProject(project);
-    position.setTitle(request.getTitle());
-    position.setDescription(request.getDescription());
-    position.setRequiredSkills(request.getRequiredSkills());
+    applyJobDescription(position, request);
     position.setQuantity(request.getQuantity() != null ? request.getQuantity() : 1);
     return positionRepository.save(position);
   }
@@ -381,9 +381,7 @@ public class ProjectService {
           "Quantity cannot be below the " + acceptedCount + " seat(s) already filled");
     }
 
-    position.setTitle(request.getTitle());
-    position.setDescription(request.getDescription());
-    position.setRequiredSkills(request.getRequiredSkills());
+    applyJobDescription(position, request);
     position.setQuantity(newQuantity);
 
     if (position.getStatus() == PositionStatus.FILLED && acceptedCount < newQuantity) {
@@ -542,6 +540,36 @@ public class ProjectService {
     }
 
     applicationRepository.delete(application);
+  }
+
+  /**
+   * Copies a role's job description off the request and onto the entity — the one place the
+   * mapping lives, so {@link #createProject}, {@link #addPosition} and {@link #updatePosition}
+   * cannot end up writing three different subsets of it. Forgetting one field in one of the three
+   * is exactly the kind of bug that shows up as "the requirements I typed vanished when I edited
+   * the role".
+   *
+   * <p>Every field is replaced, never merged: the request is validated as a complete JD
+   * ({@code ProjectPositionRequestDTO}), so a null {@code niceToHave} means the owner cleared that
+   * section rather than that they did not mention it.
+   *
+   * <p>{@code quantity} is left to the caller — it is the one field with a rule of its own
+   * (it cannot drop below the seats already filled), and that rule lives in {@link
+   * #updatePosition}.
+   *
+   * <p>The cached JD PDF is <b>not</b> invalidated here. {@code @UpdateTimestamp} moves {@code
+   * updatedAt} past {@code jdRenderedAt} on any write, and {@code JobDescriptionService} treats
+   * that as stale — one clock instead of two flags that can disagree.
+   */
+  private void applyJobDescription(ProjectPositionEntity position, ProjectPositionRequestDTO dto) {
+    position.setTitle(dto.getTitle());
+    position.setRoleSummary(dto.getRoleSummary());
+    position.setResponsibilities(dto.getResponsibilities());
+    position.setRequirements(dto.getRequirements());
+    position.setNiceToHave(dto.getNiceToHave());
+    position.setRequiredSkills(dto.getRequiredSkills());
+    position.setMinYearsExperience(dto.getMinYearsExperience());
+    position.setSeniorityLevel(dto.getSeniorityLevel());
   }
 
   /**

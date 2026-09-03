@@ -10,13 +10,20 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -130,6 +137,58 @@ class MinIOSeedObjectInitializerTest {
   }
 
   @Test
+  @DisplayName(
+      "file sách sinh ra mang đúng nội dung bốn trang của quyển đó, không phải trang trắng")
+  void generatedBookFileCarriesTheBooksOwnPages() throws IOException {
+    // Bản trước sinh đúng một trang A4 chỉ mang tên file, nên "Xem thử" trên một quyển có bìa thật
+    // lại mở ra một trang trắng. Bốn trang ở đây đến từ db/seed/book-previews.json.
+    when(minIOService.objectSize(anyString(), anyString())).thenReturn(REAL_SIZE);
+    when(minIOService.objectSize("books", "previews/9008/9780134190440-preview.pdf"))
+        .thenReturn(-1L);
+
+    initializer.seedObjects();
+
+    ArgumentCaptor<byte[]> bytesCap = ArgumentCaptor.forClass(byte[].class);
+    verify(minIOService, times(1)).uploadBytes(anyString(), anyString(), bytesCap.capture(), any());
+
+    try (PDDocument doc = Loader.loadPDF(bytesCap.getValue())) {
+      // Số trang PHẢI bằng t_books.preview_pages của bộ seed SQL — cả hai lấy từ cùng một mảng
+      // `pages` trong book-previews.json, và giao diện đem con số ấy ra hiển thị.
+      assertThat(doc.getNumberOfPages()).isEqualTo(4);
+      String text = new PDFTextStripper().getText(doc);
+      assertThat(text).contains("The Go Programming Language").contains("9780134190440");
+      assertThat(text).doesNotContain("File mau cho bo seed");
+    }
+  }
+
+  @Test
+  @DisplayName("EPUB sinh ra có một chương cho mỗi trang, chữ giữ nguyên dấu")
+  void generatedEpubHasOneChapterPerPage() throws IOException {
+    when(minIOService.objectSize(anyString(), anyString())).thenReturn(REAL_SIZE);
+    when(minIOService.objectSize("books", "previews/9001/9780132350884-preview.epub"))
+        .thenReturn(-1L);
+
+    initializer.seedObjects();
+
+    ArgumentCaptor<byte[]> bytesCap = ArgumentCaptor.forClass(byte[].class);
+    verify(minIOService, times(1)).uploadBytes(anyString(), anyString(), bytesCap.capture(), any());
+
+    List<String> chapters = new java.util.ArrayList<>();
+    StringBuilder all = new StringBuilder();
+    try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytesCap.getValue()))) {
+      for (ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+        if (entry.getName().endsWith(".html") || entry.getName().endsWith(".xhtml")) {
+          chapters.add(entry.getName());
+          all.append(new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+        }
+      }
+    }
+
+    assertThat(chapters).hasSize(4);
+    assertThat(all.toString()).contains("Clean Code").contains("Robert C. Martin");
+  }
+
+  @Test
   @DisplayName("chỉ nạp object có trong manifest — không bịa key, không đụng fixture khong-ton-tai")
   void onlyUploadsManifestKeys() {
     // Chỉ một key được coi là thiếu ⇒ đúng một lượt nạp lên. Bộ khởi tạo duyệt manifest chứ không
@@ -156,15 +215,26 @@ class MinIOSeedObjectInitializerTest {
 
   @Test
   @DisplayName(
-      "ô màu tại chỗ + replace bật + không có nguồn thật: vẫn không ghi đè bằng ô màu khác")
-  void placeholderInPlace_replaceOn_butNoRealSource_doesNotOverwrite() {
+      "ô màu tại chỗ + replace bật + không có nguồn thật: ảnh giữ nguyên, file sách được dựng lại")
+  void placeholderInPlace_replaceOn_rewritesBookFilesOnly() {
     ReflectionTestUtils.setField(initializer, "replacePlaceholders", true);
     // fetchRemote vẫn tắt và không có bakedDir ⇒ không lấy được ảnh thật cho key nào.
     when(minIOService.objectSize(anyString(), anyString())).thenReturn(PLACEHOLDER_SIZE);
 
     initializer.seedObjects();
 
-    verify(minIOService, never()).uploadBytes(anyString(), anyString(), any(), anyString());
+    ArgumentCaptor<String> keyCap = ArgumentCaptor.forClass(String.class);
+    verify(minIOService, org.mockito.Mockito.atLeastOnce())
+        .uploadBytes(anyString(), keyCap.capture(), any(), anyString());
+
+    // Ảnh: ghi đè một ô màu bằng một ô màu khác thì không được gì, nên vẫn bỏ qua.
+    assertThat(keyCap.getAllValues()).noneMatch(key -> key.startsWith("avatars/"));
+    assertThat(keyCap.getAllValues()).noneMatch(key -> key.startsWith("covers/"));
+
+    // File sách: bản dựng ở đây LÀ nội dung đích, nên một file một-trang của thế hệ trước phải
+    // được thay. Không có vế này thì mọi môi trường đã seed một lần giữ nguyên trang trắng cũ.
+    assertThat(keyCap.getAllValues()).anyMatch(key -> key.startsWith("previews/"));
+    assertThat(keyCap.getAllValues()).anyMatch(key -> key.startsWith("books/"));
   }
 
   @Test
