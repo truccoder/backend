@@ -14,6 +14,7 @@ import com.socialapp.bookstore.entity.BookEntity;
 import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.bookstore.repository.BookRepository;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -65,15 +66,47 @@ public class BookService {
    *
    * <p>Fetches one row beyond {@code limit} so {@code hasMore} is answered by the page itself
    * rather than by a {@code COUNT(*)} over the whole table on every scroll.
+   *
+   * @param category null để lấy toàn bộ Thư viện; có giá trị thì lọc ngay trong truy vấn cắt
+   *     trang, không lọc sau. Cùng con trỏ {@code cursor} vẫn dùng được khi đổi tab vì thứ tự
+   *     vẫn là id giảm dần — nhưng FE nên bỏ con trỏ cũ khi người dùng đổi tab, vì con trỏ đó
+   *     là vị trí trong một danh sách khác.
    */
-  public BookPageResponseDto getLibraryPage(Integer cursor, int limit, Integer requesterId) {
-    List<BookEntity> page = bookRepository.findLibraryPage(cursor, PageRequest.of(0, limit + 1));
+  public BookPageResponseDto getLibraryPage(
+      Integer cursor, int limit, LearningCategory category, Integer requesterId) {
+    List<BookEntity> page =
+        bookRepository.findLibraryPage(cursor, category, PageRequest.of(0, limit + 1));
 
     boolean hasMore = page.size() > limit;
     List<BookEntity> visible = hasMore ? page.subList(0, limit) : page;
 
     List<BookResponseDto> items =
         visible.stream().map(book -> bookResponseMapper.toResponseDto(book, requesterId)).toList();
+    Integer nextCursor = visible.isEmpty() ? null : visible.get(visible.size() - 1).getId();
+
+    return new BookPageResponseDto(items, nextCursor, hasMore);
+  }
+
+  /**
+   * One cursor page of the books {@code buyerId} has completed a purchase for — the "Sách đã
+   * mua" tab, FE's {@code docs/backend-plan.md} B37.
+   *
+   * <p>Free books never appear here, and that needs no branch: {@link MomoService#createPayment}
+   * refuses to create a purchase row for a free book at all ({@code isFree} throws before any
+   * insert), so {@code t_book_purchases} only ever holds rows for books that were actually paid
+   * for. A book the caller owns for free (own work, or a free book generally) is "in the
+   * library", not "purchased" — those are different questions, and conflating them is the exact
+   * bug {@code Book.purchased} on the FE has today for free books.
+   */
+  public BookPageResponseDto getPurchasedPage(Integer buyerId, Integer cursor, int limit) {
+    List<BookEntity> page =
+        bookRepository.findPurchasedPage(buyerId, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = page.size() > limit;
+    List<BookEntity> visible = hasMore ? page.subList(0, limit) : page;
+
+    List<BookResponseDto> items =
+        visible.stream().map(book -> bookResponseMapper.toResponseDto(book, buyerId)).toList();
     Integer nextCursor = visible.isEmpty() ? null : visible.get(visible.size() - 1).getId();
 
     return new BookPageResponseDto(items, nextCursor, hasMore);

@@ -13,7 +13,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialapp.common.exception.ExternalApiException;
+import com.socialapp.common.utils.RedirectUri;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -49,6 +51,12 @@ public class GithubApiClient {
   public GithubApiClient(WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
     this.webClient = webClientBuilder.build();
     this.objectMapper = objectMapper;
+  }
+
+  @PostConstruct
+  void normalizeRedirectUris() {
+    this.redirectUri = RedirectUri.normalize(this.redirectUri);
+    this.linkRedirectUri = RedirectUri.normalize(this.linkRedirectUri);
   }
 
   /** Authorisation URL for signing in with GitHub. */

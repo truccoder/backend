@@ -1,9 +1,25 @@
-# minio.url is baked directly into t_users.profile_picture_url / t_books.cover_image_url at
-# upload time (ProfileService/BookStorageService) — must be the publicly reachable address
-# *before* any uploads happen in an environment, since existing DB rows won't be rewritten
-# retroactively if this changes later.
+# minio.url được NƯỚNG THẲNG vào cột nào, và không nướng vào cột nào — hai nhóm này hành xử khác
+# hẳn nhau khi địa chỉ MinIO đổi:
+#
+#   Nướng sẵn URL tuyệt đối, KHÔNG viết lại được về sau:
+#     t_users.profile_picture_url, t_users.cover_image_url, t_posts.images
+#     (ProfileService, MediaService). Trình duyệt tải thẳng, không qua backend.
+#
+#   Chỉ lưu KEY, backend ký URL tạm thời mỗi lần phục vụ:
+#     t_books.file_key / cover_image_key / preview_file_key (BookStorageService).
+#     Nhóm này tự đúng theo minio.url hiện tại, đổi địa chỉ không ảnh hưởng.
+#     (Cột sách từng tên là cover_image_url và từng nướng URL; V44 đổi sang key.)
+#
+# Vì nhóm thứ nhất không viết lại được, giá trị này phải là địa chỉ công khai truy cập được
+# *trước khi* có bất kỳ lần tải lên nào trong một môi trường.
 minio:
   url: ${MINIO_URL:http://localhost:9000}
+  # Địa chỉ app DÙNG ĐỂ GỌI MinIO (upload, stat, tạo bucket, đặt policy). Bỏ trống ⇒ dùng luôn
+  # minio.url. Production đặt về địa chỉ mạng nội bộ (http://minio:9000) để việc tạo bucket + đặt
+  # policy public-read KHÔNG phụ thuộc reverse proxy đã sẵn sàng hay chưa — lần khởi động đầu,
+  # Caddy chưa lên, lệnh đặt policy fail lặng lẽ và mọi ảnh seed trả 403. URL ký sẵn của sách vẫn
+  # ký theo minio.url (xem MinIOConfig#minioPresignClient).
+  internal-url: ${MINIO_INTERNAL_URL:}
   access-key: ${MINIO_ACCESS_KEY:minio_admin}
   secret-key: ${MINIO_SECRET_KEY:minio_admin_password}
 
@@ -78,17 +94,24 @@ spring:
     # Ba nhóm location, ba mức độ an toàn khác nhau:
     #
     #   db/migration  — schema. Chạy ở mọi nơi.
-    #   db/seed       — nội dung demo + 60 tài khoản. Chạy ở dev VÀ production (quyết định
-    #                   2026-08-21). An toàn ở production nhờ mật khẩu lấy từ placeholder bên dưới
-    #                   thay vì ghi cứng trong repo.
-    #   db/seed-dev   — personal access token, tức là CREDENTIAL DÙNG ĐƯỢC NGAY. Chỉ dev.
+    #   db/seed       — nội dung demo + 500 tài khoản. Chạy ở dev VÀ production (quyết định
+    #                   2026-08-21). Mật khẩu seed là hash bcrypt GHI CỨNG trong file seed, KHÔNG
+    #                   phải placeholder — đánh đổi có ý thức, vì mật khẩu demo phải in được vào
+    #                   tài liệu bảo vệ đồ án. Runbook production nhắc đổi mật khẩu hai tài khoản
+    #                   admin qua API ngay sau khi seed xong.
+    #
+    # Từ 2026-08-28 chỉ còn HAI nhóm. Thư mục db/seed-dev đã bị xoá: nó ra đời để giữ ba personal
+    # access token — credential dùng được ngay — nhưng người dùng tự tạo token qua
+    # POST /v1/api/tokens trong vài giây, nên ba token seed sẵn chỉ đổi lấy ba credential nằm công
+    # khai trong repo. Bỏ token đi thì lý do tách thư mục biến mất theo, và hai môi trường từ nay
+    # khai giống hệt nhau.
     #
     # Mặc định ở đây là migration-only, và đó vẫn là lựa chọn đúng: chạy app không cấu hình gì thì
-    # không nên tự đổ 60 tài khoản vào database. Mỗi môi trường tự khai mình muốn gì.
+    # không nên tự đổ 500 tài khoản vào database. Mỗi môi trường tự khai mình muốn gì.
     #
     #   dev đầy đủ:
-    #     FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed,classpath:db/seed-dev
-    #   production: xem application-prod.yml (migration + seed, KHÔNG có seed-dev)
+    #     FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/seed
+    #   production: xem application-prod.yml — GIỐNG HỆT dòng trên
     locations: ${FLYWAY_LOCATIONS:classpath:db/migration}
 
     # Any database seeded before this split still has V20/V21/V25/V29/V30 recorded in
@@ -96,6 +119,20 @@ spring:
     # validation reports as "applied migration not resolved locally". Ignoring *:missing keeps
     # those databases migratable — and is what makes it safe to turn validate-on-migrate on.
     ignore-migration-patterns: "*:missing"
+
+    # Giá trị đổ vào ${minioUrl} trong db/seed. Ảnh của bộ seed phải mang URL TUYỆT ĐỐI (trình
+    # duyệt tải thẳng, không qua backend), mà địa chỉ MinIO thì khác nhau giữa máy dev và
+    # production — nên URL không ghi cứng được trong SQL, và cũng không để NULL được nữa kể từ khi
+    # seed có ảnh thật.
+    #
+    # Flyway thay placeholder ở TẦNG ĐỌC FILE, trước khi parse SQL: một chuỗi ${...} lọt vào file
+    # seed mà không được khai ở đây sẽ giết migration với "No value provided for placeholder",
+    # KỂ CẢ khi nó nằm trong một dòng comment. Đã xảy ra đúng một lần ở V51.
+    #
+    # Sai giá trị này thì không có gì báo lỗi: URL vẫn hợp lệ, chỉ là trỏ vào nơi không có object,
+    # và toàn bộ ảnh của bộ seed hỏng im lặng.
+    placeholders:
+      minioUrl: ${MINIO_URL:http://localhost:9000}
 
   jpa:
     hibernate:
@@ -257,6 +294,19 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
 
+# Khoá AES-256 (base64, 32 byte) dùng để mã hoá các cột chứa token OAuth của bên thứ ba —
+# access token GitHub, và cặp access/refresh token Google Calendar. Xem EncryptedStringConverter.
+#
+# KHÔNG có giá trị mặc định, và đó là chủ ý: một khoá mặc định nằm trong repo thì tương đương không
+# mã hoá gì cả. Thiếu khoá thì việc LIÊN KẾT tài khoản GitHub/Google bị từ chối (503), phần còn lại
+# của ứng dụng vẫn chạy bình thường.
+#
+# Sinh khoá:  openssl rand -base64 32
+#
+# Đổi khoá thì các token đã mã hoá bằng khoá cũ không đọc được nữa — người dùng phải liên kết lại.
+security:
+  column-encryption-key: ${COLUMN_ENCRYPTION_KEY:}
+
 gemini:
   api-key: ${GEMINI_API_KEY:}
   model: gemini-2.5-flash-lite
@@ -313,6 +363,12 @@ momo:
   access-key: ${MOMO_ACCESS_KEY:F8BBA842ECF85}
   secret-key: ${MOMO_SECRET_KEY:K951B6PE1waDMi640xX08PD3vg6EkVlz}
   api-url: ${MOMO_API_URL:https://test-payment.momo.vn}
+  # Which flow MoMo's hosted page offers. captureWallet is wallet/QR and is the only value
+  # measured to settle on the sandbox; payWithATM gives the card-entry screen, which is easier to
+  # demo by hand but parks at resultCode 7002 for ever there — pair it with the `dev` profile's
+  # POST /v1/api/payments/{transactionRef}/dev-settle to reach COMPLETED. See
+  # MomoProperties#requestType for the measurements.
+  request-type: ${MOMO_REQUEST_TYPE:payWithATM}
   redirect-url: ${MOMO_REDIRECT_URL:http://localhost:3000/payment/success}
   ipn-url: ${MOMO_IPN_URL:http://localhost:8080/v1/api/payments/momo/webhook}
 
@@ -342,6 +398,17 @@ rate-limit:
   #   requests/window          — theo IP nguồn, chặn dò mật khẩu
   #   mail-requests/mail-window — theo ĐỊA CHỈ NHẬN, chặn việc dội mail vào hòm thư người khác
   #                               từ nhiều IP mà mỗi IP đều nằm dưới hạn mức trên
+  # Hạn mức theo NGƯỜI DÙNG cho các endpoint tốn tiền thật (hiện là /knowledge/.../explain).
+  #
+  # Hai bộ lọc ở trên không phủ tới: guest thoát ngay khi người gọi đã đăng nhập, còn auth chỉ áp
+  # cho /v1/api/auth/**. Nghĩa là trước đây một tài khoản hợp lệ chạy vòng lặp trên endpoint gọi
+  # Gemini không gặp trần nào — và vì kiểm duyệt nội dung dùng CHUNG khoá Gemini, tiêu hết hạn mức
+  # nghĩa là kiểm duyệt cũng ngừng hoạt động.
+  costly:
+    enabled: ${COSTLY_RATE_LIMIT_ENABLED:true}
+    ai-requests: ${AI_RATE_LIMIT_REQUESTS:20}
+    ai-window: ${AI_RATE_LIMIT_WINDOW:1h}
+
   auth:
     enabled: ${AUTH_RATE_LIMIT_ENABLED:true}
     requests: ${AUTH_RATE_LIMIT_REQUESTS:20}
@@ -349,6 +416,15 @@ rate-limit:
     mail-requests: ${AUTH_RATE_LIMIT_MAIL_REQUESTS:3}
     mail-window: ${AUTH_RATE_LIMIT_MAIL_WINDOW:15m}
     trust-forwarded-for: ${GUEST_RATE_LIMIT_TRUST_XFF:false}
+
+# Font dùng để in PDF mô tả công việc (JobDescriptionPdfGenerator).
+#
+# Để trống là bình thường: generator tự dò các vị trí font hệ thống quen thuộc (DejaVu trong ảnh
+# runtime, Arial/Segoe trên máy Windows). Chỉ đặt khi chạy ở một môi trường không có font nào —
+# ở đó Helvetica dựng sẵn của PDFBox không mã hoá được tiếng Việt, và JD sẽ bị bỏ dấu.
+matchmaking:
+  job-description:
+    font-path: ${JOB_DESCRIPTION_FONT_PATH:}
 
 # Timeout cho mọi lời gọi HTTP đi ra ngoài. Xem WebClientTimeoutConfig — trước đây không WebClient
 # nào có timeout, nên một upstream nhận kết nối rồi im lặng sẽ giữ thread Tomcat vô hạn.

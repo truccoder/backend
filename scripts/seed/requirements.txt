@@ -1,0 +1,3 @@
+# Chỉ scripts/seed/fetch_real_previews.py cần file này. Mọi script seed khác (crawl_book_previews.py,
+# generate_seed.py, docker/minio/generate-seed-objects.py) cố tình chỉ dùng thư viện chuẩn.
+pypdf>=6.0

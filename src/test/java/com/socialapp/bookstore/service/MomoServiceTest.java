@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -19,6 +20,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
@@ -363,7 +366,7 @@ class MomoServiceTest {
     }
 
     @Test
-    @DisplayName("should default the payment method to ATM when payType is absent")
+    @DisplayName("should default the payment method to MOMO when payType is absent")
     void shouldUseDefaultPaymentMethod_whenPayTypeIsNull() {
       // Given
       when(momoApiClient.verifyIpnSignature(anyMap())).thenReturn(true);
@@ -379,7 +382,9 @@ class MomoServiceTest {
       momoService.handleWebhook(payload);
 
       // Then
-      assertThat(purchase.getPaymentMethod()).isEqualTo("ATM");
+      // "ATM" until the request type moved from payWithATM to captureWallet — nothing in the
+      // wallet flow is a card payment, so an absent payType must not record one.
+      assertThat(purchase.getPaymentMethod()).isEqualTo("MOMO");
     }
 
     @Test
@@ -490,9 +495,44 @@ class MomoServiceTest {
       when(purchaseRepository.findByTransactionRef("REF404")).thenReturn(Optional.empty());
 
       // When / Then
-      assertThatThrownBy(() -> momoService.syncPaymentStatus("REF404"))
+      assertThatThrownBy(() -> momoService.syncPaymentStatus(BUYER_ID, "REF404"))
           .isInstanceOf(NotFoundException.class)
           .hasMessageContaining("Purchase not found");
+    }
+
+    @Test
+    @DisplayName("should refuse to sync a purchase belonging to somebody else")
+    void shouldRefuse_whenCallerIsNotTheBuyer() {
+      // Given: a purchase owned by BUYER_ID. The ref used to be trusted on its own, so any
+      // signed-in user could drive somebody else's order to COMPLETED or FAILED and fire the
+      // author's "your book sold" notification with it.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+
+      // When / Then: 404, not 403 — somebody else's order ref is not theirs to confirm exists
+      assertThatThrownBy(() -> momoService.syncPaymentStatus(BUYER_ID + 1, "REF1"))
+          .isInstanceOf(NotFoundException.class);
+      verifyNoInteractions(momoApiClient);
+    }
+
+    @Test
+    @DisplayName("should return false when MoMo answers with a malformed resultCode")
+    void shouldReturnFalse_whenResultCodeIsMalformed() {
+      // Given: handleWebhook already guarded this; the query path did not, so a junk resultCode
+      // threw NumberFormatException out of a user-facing endpoint.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+      Map<String, Object> response = new HashMap<>();
+      response.put("resultCode", "not-a-number");
+      when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
+
+      // When
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
+
+      // Then
+      assertThat(result).isFalse();
     }
 
     @Test
@@ -512,11 +552,136 @@ class MomoServiceTest {
       when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
 
       // When
-      boolean result = momoService.syncPaymentStatus("REF1");
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
 
       // Then
       assertThat(result).isTrue();
       assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.COMPLETED);
+    }
+
+    @ParameterizedTest(name = "resultCode {0} leaves the purchase PENDING")
+    @ValueSource(ints = {1000, 7000, 7002})
+    @DisplayName("should not fail a purchase MoMo is still processing")
+    void shouldLeavePending_whenResultCodeIsNotFinal(int resultCode) {
+      // Given: the state `/payment/success` most often finds on its FIRST poll — the browser is
+      // back from MoMo before MoMo has settled. 1000 is "awaiting the user's confirmation",
+      // 7000/7002 are "being processed by the payment provider". None of them is a failure.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      Map<String, Object> response = new HashMap<>();
+      response.put("resultCode", resultCode);
+      when(momoApiClient.queryPaymentStatus("REF1")).thenReturn(response);
+
+      // When
+      boolean result = momoService.syncPaymentStatus(BUYER_ID, "REF1");
+
+      // Then: still unpaid, but NOT written off. This used to land in the `else` branch and mark
+      // the row FAILED, so a healthy payment was destroyed by the very poll meant to confirm it —
+      // and the money would arrive against a row saying it had not been paid.
+      assertThat(result).isFalse();
+      assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.PENDING);
+      verify(notificationService, never()).send(any());
+    }
+  }
+
+  // =====================================================================
+  // settleAsPaidForDevelopment
+  // =====================================================================
+
+  @Nested
+  @DisplayName("settleAsPaidForDevelopment")
+  class SettleAsPaidForDevelopmentTests {
+
+    @Test
+    @DisplayName("should complete the purchase and notify the author without calling MoMo")
+    void shouldCompletePurchase_andNotifyAuthor() {
+      // Given: a PENDING purchase that MoMo's sandbox will never settle on its own — the QR needs
+      // a phone, and payWithATM parks at 7002 for ever.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      when(bookService.findBookOrThrow(BOOK_ID))
+          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
+      when(userRepository.findById(BUYER_ID))
+          .thenReturn(Optional.of(userWithName(BUYER_ID, "Dave")));
+
+      // When
+      boolean result = momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: the whole real settlement path runs, which is the point — a demo that skipped the
+      // author's notification would not be demonstrating the feature.
+      assertThat(result).isTrue();
+      assertThat(purchase.getPaymentStatus()).isEqualTo(PaymentStatus.COMPLETED);
+      assertThat(purchase.getPaidAt()).isNotNull();
+      verify(notificationService).send(any());
+      // MoMo is never asked: there is nothing to ask it about, since no money moved.
+      verifyNoInteractions(momoApiClient);
+    }
+
+    @Test
+    @DisplayName("should record a payment method that cannot be mistaken for a real one")
+    void shouldRecordDevPaymentMethod() {
+      // Given
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+      when(bookService.findBookOrThrow(BOOK_ID))
+          .thenReturn(paidBook(BOOK_ID, AUTHOR_ID, 1000L, "Book"));
+      when(userRepository.findById(BUYER_ID)).thenReturn(Optional.empty());
+
+      // When
+      momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: "DEV", never "MOMO" or a payType — a row settled by hand must stay tellable apart
+      // from one MoMo actually collected money for, including months later in the database.
+      assertThat(purchase.getPaymentMethod()).isEqualTo("DEV");
+      assertThat(purchase.getGatewayTransactionNo()).startsWith("DEV-");
+    }
+
+    @Test
+    @DisplayName("should refuse to settle a purchase belonging to somebody else")
+    void shouldRefuse_whenCallerIsNotTheBuyer() {
+      // Given: the same exposure syncPaymentStatus had, and worse here — this path needs no
+      // agreement from MoMo at all, so an unguarded ref would be a free copy of anyone's book.
+      when(purchaseRepository.findByTransactionRef("REF1"))
+          .thenReturn(
+              Optional.of(existingPurchase(PaymentStatus.PENDING, "REF1", OffsetDateTime.now())));
+
+      // When / Then: 404, not 403 — somebody else's order ref is not theirs to confirm exists
+      assertThatThrownBy(() -> momoService.settleAsPaidForDevelopment(BUYER_ID + 1, "REF1"))
+          .isInstanceOf(NotFoundException.class);
+      verify(purchaseRepository, never()).save(any());
+      verify(notificationService, never()).send(any());
+    }
+
+    @Test
+    @DisplayName("should reject when the transaction does not exist")
+    void shouldThrowNotFoundException_whenTransactionDoesNotExist() {
+      // Given
+      when(purchaseRepository.findByTransactionRef("REF404")).thenReturn(Optional.empty());
+
+      // When / Then
+      assertThatThrownBy(() -> momoService.settleAsPaidForDevelopment(BUYER_ID, "REF404"))
+          .isInstanceOf(NotFoundException.class)
+          .hasMessageContaining("Purchase not found");
+    }
+
+    @Test
+    @DisplayName("should not re-notify a purchase that is already COMPLETED")
+    void shouldBeIdempotent_whenAlreadyCompleted() {
+      // Given: the button is easy to press twice.
+      BookPurchaseEntity purchase =
+          existingPurchase(PaymentStatus.COMPLETED, "REF1", OffsetDateTime.now());
+      when(purchaseRepository.findByTransactionRef("REF1")).thenReturn(Optional.of(purchase));
+
+      // When
+      boolean result = momoService.settleAsPaidForDevelopment(BUYER_ID, "REF1");
+
+      // Then: applyResult's existing short-circuit covers this path too
+      assertThat(result).isTrue();
+      verify(notificationService, never()).send(any());
+      verify(purchaseRepository, never()).save(any());
     }
   }
 

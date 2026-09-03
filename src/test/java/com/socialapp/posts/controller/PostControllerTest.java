@@ -36,12 +36,14 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.exception.ContentViolationException;
 import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
 import com.socialapp.posts.dto.PostPageResponseDto;
+import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.service.PostQueryService;
 import com.socialapp.posts.service.PostService;
@@ -128,19 +130,25 @@ class PostControllerTest {
   class CreatePostTests {
 
     @Test
-    @DisplayName("shouldReturn200_whenPayloadIsValid_happyPath")
-    void shouldReturn200_whenPayloadIsValid_happyPath() throws Exception {
+    @DisplayName("shouldReturn201WithPostId_whenPayloadIsValid_happyPath")
+    void shouldReturn201WithPostId_whenPayloadIsValid_happyPath() throws Exception {
       // Given
       String requestJson =
           """
           { "content": "Hello world", "visibility": "PUBLIC" }
           """;
+      PostEntity saved = new PostEntity();
+      saved.setId(42);
+      saved.setModerationStatus(ModerationStatus.PENDING_MODERATION);
+      when(postService.createPost(eq(currentUser.getId()), any())).thenReturn(saved);
 
       // When / Then
       mockMvc
           .perform(
               authed(post(POSTS_URL)).contentType(MediaType.APPLICATION_JSON).content(requestJson))
-          .andExpect(status().isOk());
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.postId").value(42))
+          .andExpect(jsonPath("$.moderationStatus").value("PENDING_MODERATION"));
 
       verify(postService).createPost(eq(currentUser.getId()), any());
     }
@@ -170,8 +178,8 @@ class PostControllerTest {
   class CreateBookPostTests {
 
     @Test
-    @DisplayName("shouldReturn200_whenMetadataAndFileAreValid_happyPath")
-    void shouldReturn200_whenMetadataAndFileAreValid_happyPath() throws Exception {
+    @DisplayName("shouldReturn201WithPostId_whenMetadataAndFileAreValid_happyPath")
+    void shouldReturn201WithPostId_whenMetadataAndFileAreValid_happyPath() throws Exception {
       // Given
       MockMultipartFile metadata =
           new MockMultipartFile(
@@ -182,11 +190,17 @@ class PostControllerTest {
       MockMultipartFile bookFile =
           new MockMultipartFile(
               "file", "book.pdf", MediaType.APPLICATION_PDF_VALUE, new byte[] {1, 2, 3});
+      PostEntity saved = new PostEntity();
+      saved.setId(7);
+      saved.setModerationStatus(ModerationStatus.APPROVED);
+      when(postService.createBookPost(eq(currentUser.getId()), any(), any(), any()))
+          .thenReturn(saved);
 
       // When / Then
       mockMvc
           .perform(authed(multipart(BOOK_POSTS_URL).file(metadata).file(bookFile)))
-          .andExpect(status().isOk());
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.postId").value(7));
 
       verify(postService).createBookPost(eq(currentUser.getId()), any(), any(), any());
     }
@@ -606,7 +620,7 @@ class PostControllerTest {
     @DisplayName("shouldReturn200AndACursorPage_happyPath")
     void shouldReturnPage() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, null, 20))
           .thenReturn(
               new PostPageResponseDto(
                   java.util.List.of(FeedPostDataDto.builder().postId(9).authorId(3).build()),
@@ -626,14 +640,14 @@ class PostControllerTest {
     @DisplayName("shouldRouteToTheDiscoveryFeed_notToAPostWhoseIdIsPublic")
     void shouldNotBeSwallowedByThePostIdRoute() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), null, 20))
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, null, 20))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When
       mockMvc.perform(authed(get(POSTS_URL + "/public"))).andExpect(status().isOk());
 
       // Then — the literal segment must win over the {postId} template
-      verify(postQueryService).getPublicFeed(currentUser.getId(), null, 20);
+      verify(postQueryService).getPublicFeed(currentUser.getId(), null, null, 20);
       verify(postQueryService, never()).getPost(any(), any());
     }
 
@@ -641,7 +655,7 @@ class PostControllerTest {
     @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
     void shouldPassPagingThrough() throws Exception {
       // Given
-      when(postQueryService.getPublicFeed(currentUser.getId(), 30, 5))
+      when(postQueryService.getPublicFeed(currentUser.getId(), 30, null, 5))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When
@@ -650,20 +664,71 @@ class PostControllerTest {
           .andExpect(status().isOk());
 
       // Then
-      verify(postQueryService).getPublicFeed(currentUser.getId(), 30, 5);
+      verify(postQueryService).getPublicFeed(currentUser.getId(), 30, null, 5);
     }
 
     @Test
     @DisplayName("shouldReturn200_whenCalledByAGuest_becauseThisIsAGuestsHomePage")
     void shouldServeGuests() throws Exception {
       // Given: no Authorization header
-      when(postQueryService.getPublicFeed(null, null, 20))
+      when(postQueryService.getPublicFeed(null, null, null, 20))
           .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
 
       // When / Then — /v1/api/feed is a per-user Redis fan-out and cannot be opened, so this is
       // the page an anonymous visitor lands on
       mockMvc.perform(get(POSTS_URL + "/public")).andExpect(status().isOk());
-      verify(postQueryService).getPublicFeed(null, null, 20);
+      verify(postQueryService).getPublicFeed(null, null, null, 20);
+    }
+
+    @Test
+    @DisplayName("shouldPassHashtagThrough_whenAHashtagBadgeIsClicked")
+    void shouldPassHashtagThrough() throws Exception {
+      // Given
+      when(postQueryService.getPublicFeed(currentUser.getId(), null, "java", 20))
+          .thenReturn(new PostPageResponseDto(java.util.List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(POSTS_URL + "/public")).param("hashtag", "java"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(postQueryService).getPublicFeed(currentUser.getId(), null, "java", 20);
+    }
+  }
+
+  // =====================================================================
+  // Đường dẫn không tồn tại
+  // =====================================================================
+
+  @Nested
+  @DisplayName("URL không khớp controller nào")
+  class UnknownPathTests {
+
+    @Test
+    @DisplayName("shouldReturn404_whenPathMatchesNoController")
+    void shouldReturn404_whenPathMatchesNoController() throws Exception {
+      // Given — cùng một khiếm khuyết với ca 405 ở trên, sớm hơn một bước trong dispatch: không có
+      // handler cho NoResourceFoundException thì nó rơi xuống handler Exception bắt-tất và quay ra
+      // 500. Sai hai lần: nói với người gọi rằng máy chủ hỏng trong khi họ hỏi một thứ không tồn
+      // tại, và chôn những cái 500 thật giữa đống nhiễu. Một route frontend gõ sai trong buổi demo
+      // trông y hệt một sự cố máy chủ.
+
+      // When / Then
+      mockMvc
+          .perform(authed(get("/v1/api/duong-dan-khong-ton-tai")))
+          .andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.code").value(404));
+    }
+
+    @Test
+    @DisplayName("shouldReturn404_whenPathIsAlmostRight")
+    void shouldReturn404_whenPathIsAlmostRight() throws Exception {
+      // Given — ca hay gặp thật: sai số nhiều/ít của một danh từ trong đường dẫn. Ở dự án này
+      // /v1/api/friendships từng bị gọi nhầm thành /v1/api/friends, và triệu chứng là 500.
+
+      // When / Then
+      mockMvc.perform(authed(get(POSTS_URL + "s/public"))).andExpect(status().isNotFound());
     }
   }
 }

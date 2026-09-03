@@ -4,6 +4,7 @@ import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.springframework.stereotype.Component;
@@ -51,6 +52,84 @@ public class SkillTagResolver {
   /** Below this, a fragment is a particle ({@code và}, {@code de}, {@code 10}), not a skill. */
   private static final int MIN_FRAGMENT_LENGTH = 3;
 
+  /**
+   * Node names the fold-and-split strategy above can never reach, mapped by hand to the hashtag(s)
+   * that mean the same thing.
+   *
+   * <p>The gap this closes: roadmap node names are Vietnamese phrases a moderator wrote ({@code
+   * "Kiểm thử"}, {@code "Xác thực"}), hashtags are English tokens an author typed ({@code testing},
+   * {@code security}). Folding {@code "Kiểm thử"} produces {@code kiem} and {@code thu} — neither is
+   * {@code testing}, and no amount of stripping diacritics fixes that, because the two words are not
+   * spelling variants of each other. They are translations.
+   *
+   * <p><b>Why a fixed table instead of a translator.</b> A machine-translated or fuzzy-matched guess
+   * can drift into the wrong topic silently — the one failure mode the fold logic above was written
+   * to avoid (see the class javadoc). A hand-checked table can only be wrong where a human already
+   * looked and got it wrong, which is a bug someone can point at and fix. So every entry here is a
+   * direct, unambiguous rendering of one specific node name into hashtag(s) that already exist in
+   * {@code t_hashtags} as of 2026-09 — never a fragment, a synonym family, or a "close enough" guess.
+   *
+   * <p><b>Why this list is short, not exhaustive.</b> Most node names have no honest one-word English
+   * counterpart in the seeded hashtag vocabulary ({@code "Cấu trúc dữ liệu"}, {@code "Một framework"},
+   * {@code "Xử lý sự cố"} in the general sense) — inventing one would be exactly the guess this table
+   * exists to avoid. Leaving those out means their skill tab may still come up empty, which is the
+   * correct, honest answer: "no hashtag says this" rather than "here is a hashtag that might."
+   *
+   * <p>Keyed on the exact node name as stored in {@code t_roadmap_nodes.name} — not folded, not
+   * lower-cased — so a rename silently drops the entry instead of drifting onto a different node.
+   * Values are looked up alongside the fold-based candidates in {@link #candidatesFor}, and pass
+   * through the same {@code t_hashtags} intersection in {@link #resolveTagsFor}, so a stale entry
+   * whose target hashtag no longer exists costs nothing beyond a wasted map lookup.
+   */
+  private static final Map<String, Set<String>> KNOWN_TRANSLATIONS =
+      Map.ofEntries(
+          Map.entry("Cơ sở dữ liệu quan hệ", Set.of("database")),
+          Map.entry("Thiết kế API", Set.of("api")),
+          Map.entry("Ghi log và đo đạc", Set.of("logging", "observability")),
+          Map.entry("Kiểm thử", Set.of("testing")),
+          Map.entry("Khả năng truy cập", Set.of("accessibility")),
+          Map.entry("Hiệu năng web", Set.of("webperf")),
+          Map.entry("Hiệu năng", Set.of("performance")),
+          Map.entry("Container", Set.of("docker")),
+          Map.entry("Điều phối container", Set.of("kubernetes")),
+          Map.entry("Giám sát", Set.of("monitoring", "observability")),
+          Map.entry("Cảnh báo", Set.of("monitoring")),
+          Map.entry("Hạ tầng dưới dạng mã", Set.of("terraform")),
+          Map.entry("Tích hợp liên tục", Set.of("cicd")),
+          Map.entry("Triển khai liên tục", Set.of("cicd")),
+          Map.entry("Học có giám sát", Set.of("machinelearning")),
+          Map.entry("Đưa mô hình lên sản xuất", Set.of("mlops")),
+          Map.entry("Mô hình hoá mối đe doạ", Set.of("security")),
+          Map.entry("Xác thực", Set.of("security")),
+          Map.entry("Phân quyền", Set.of("security")),
+          Map.entry("Mười rủi ro phổ biến", Set.of("security")),
+          Map.entry("Chèn mã", Set.of("security")),
+          Map.entry("Bí mật và khoá", Set.of("security")),
+          Map.entry("Phụ thuộc bên thứ ba", Set.of("security")),
+          Map.entry("Ghi nhật ký an toàn", Set.of("security")),
+          Map.entry("Test đơn vị", Set.of("testing", "junit")),
+          Map.entry("Test tích hợp", Set.of("testing")),
+          Map.entry("Test đầu cuối", Set.of("testing", "cypress", "selenium", "playwright")),
+          Map.entry("Kiểm thử hiệu năng", Set.of("testing", "performance")),
+          Map.entry("Kim tự tháp kiểm thử", Set.of("testing")),
+          Map.entry("Độ phủ", Set.of("testing")),
+          Map.entry("Test giòn", Set.of("testing")),
+          Map.entry("Dữ liệu kiểm thử", Set.of("testing")),
+          Map.entry("Kiến trúc phân tầng", Set.of("architecture")),
+          Map.entry("Thiết kế theo miền", Set.of("ddd")),
+          Map.entry("Ghép lỏng và gắn kết", Set.of("architecture")),
+          Map.entry("Tiến hoá hệ thống", Set.of("architecture")),
+          Map.entry("Phỏng vấn", Set.of("interview")),
+          Map.entry("Dẫn dắt kỹ thuật", Set.of("mentoring")),
+          Map.entry("Làm việc nhóm", Set.of("teamwork")),
+          Map.entry("Dòng lệnh Linux", Set.of("linux")),
+          Map.entry("Quản lý phiên bản", Set.of("git")),
+          Map.entry("Đường ống dữ liệu", Set.of("airflow", "dbt")),
+          Map.entry("Offline-first", Set.of("pwa")),
+          Map.entry("Nghiên cứu người dùng", Set.of("ux")),
+          Map.entry("Viết rõ ràng", Set.of("documentation")),
+          Map.entry("Ghi lại quyết định", Set.of("documentation")));
+
   private final UserRoadmapProgressRepository progressRepository;
   private final HashtagRepository hashtagRepository;
 
@@ -79,7 +158,10 @@ public class SkillTagResolver {
         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
   }
 
-  /** The folded whole plus each folded fragment of one node name — see the class javadoc. */
+  /**
+   * The folded whole, each folded fragment, and any hand-curated translation of one node name —
+   * see the class javadoc and {@link #KNOWN_TRANSLATIONS}.
+   */
   private Set<String> candidatesFor(String skillName) {
     Set<String> candidates = new LinkedHashSet<>();
     if (skillName == null || skillName.isBlank()) {
@@ -95,6 +177,8 @@ public class SkillTagResolver {
     if (whole.length() >= MIN_FRAGMENT_LENGTH) {
       candidates.add(whole);
     }
+
+    candidates.addAll(KNOWN_TRANSLATIONS.getOrDefault(skillName.trim(), Set.of()));
     return candidates;
   }
 

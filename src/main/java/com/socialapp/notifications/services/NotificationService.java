@@ -68,24 +68,36 @@ public class NotificationService {
 
     NotificationChannel channel = request.getChannel();
 
+    // Push and email are best-effort side channels; the stored row and the SSE event are the
+    // notification. OneSignal being down, or SMTP refusing, used to throw straight out of this
+    // method — leaving the row saved but never marked sent and, worse, never published, so the
+    // in-app bell silently missed a notification because an unrelated channel failed.
     if (shouldSendPush(channel, prefs)) {
-      pushService.sendToPlayer(
-          prefs.getOnesignalPlayerId(),
-          request.getTitle(),
-          request.getBody(),
-          Objects.requireNonNullElse(request.getPushData(), Map.of()));
-      entity.setSentAt(OffsetDateTime.now());
+      try {
+        pushService.sendToPlayer(
+            prefs.getOnesignalPlayerId(),
+            request.getTitle(),
+            request.getBody(),
+            Objects.requireNonNullElse(request.getPushData(), Map.of()));
+        entity.setSentAt(OffsetDateTime.now());
+      } catch (Exception e) {
+        log.warn("Push delivery failed for user {}", request.getRecipientId(), e);
+      }
     }
 
     if (shouldSendEmail(channel, prefs)) {
-      UserEntity recipient = userRepository.findById(request.getRecipientId()).orElse(null);
-      if (Objects.nonNull(recipient) && Objects.nonNull(recipient.getEmail())) {
-        mailService.sendNotificationEmail(
-            recipient.getEmail(),
-            Objects.toString(recipient.getFullName(), "User"),
-            request.getTitle(),
-            request.getBody());
-        entity.setSentAt(OffsetDateTime.now());
+      try {
+        UserEntity recipient = userRepository.findById(request.getRecipientId()).orElse(null);
+        if (Objects.nonNull(recipient) && Objects.nonNull(recipient.getEmail())) {
+          mailService.sendNotificationEmail(
+              recipient.getEmail(),
+              Objects.toString(recipient.getFullName(), "User"),
+              request.getTitle(),
+              request.getBody());
+          entity.setSentAt(OffsetDateTime.now());
+        }
+      } catch (Exception e) {
+        log.warn("Email delivery failed for user {}", request.getRecipientId(), e);
       }
     }
 
@@ -163,8 +175,11 @@ public class NotificationService {
             .type(request.getType())
             .title(request.getTitle())
             .body(request.getBody())
+            .messageKey(request.getMessageKey())
+            .messageArgs(request.getMessageArgs())
             .referenceId(request.getReferenceId())
             .referenceType(request.getReferenceType())
+            .postId(request.getPostId())
             .channel(request.getChannel())
             .build();
     return notificationRepository.save(entity);
@@ -208,8 +223,11 @@ public class NotificationService {
         .type(entity.getType())
         .title(entity.getTitle())
         .body(entity.getBody())
+        .messageKey(entity.getMessageKey())
+        .messageArgs(entity.getMessageArgs())
         .referenceId(entity.getReferenceId())
         .referenceType(entity.getReferenceType())
+        .postId(entity.getPostId())
         .channel(entity.getChannel())
         .isRead(entity.getIsRead())
         .createdAt(entity.getCreatedAt())

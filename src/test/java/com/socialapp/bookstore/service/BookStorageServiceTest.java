@@ -10,14 +10,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
@@ -41,15 +39,32 @@ class BookStorageServiceTest {
   private static final Integer AUTHOR_ID = 1;
 
   @Mock private MinioClient minioClient;
+
+  /**
+   * A second MinIO client, built on the public address, that {@code BookStorageService} uses only to
+   * sign display/download URLs — see {@code MinIOConfig#minioPresignClient()}. Real work
+   * ({@code removeObject}) still goes through {@link #minioClient}.
+   */
+  @Mock private MinioClient minioPresignClient;
+
   @Mock private MinIOService minIOService;
 
-  @InjectMocks private BookStorageService bookStorageService;
+  private BookStorageService bookStorageService;
 
-  /** For {@code uploadBook}, which reads the stream via try-with-resources. */
-  private MultipartFile mockBookFile(String filename) throws IOException {
+  @org.junit.jupiter.api.BeforeEach
+  void setUp() {
+    // Built by hand rather than @InjectMocks: the two same-typed MinioClient params can only be
+    // told apart by name, which Mockito's constructor injection does not do.
+    bookStorageService = new BookStorageService(minioClient, minioPresignClient, minIOService);
+  }
+
+  /**
+   * For {@code uploadBook}. It no longer opens the stream itself — reading and storing both live
+   * inside {@code MinIOService} now — so only the filename is stubbed here.
+   */
+  private MultipartFile mockBookFile(String filename) {
     MultipartFile file = mock(MultipartFile.class);
     when(file.getOriginalFilename()).thenReturn(filename);
-    when(file.getInputStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
     return file;
   }
 
@@ -114,13 +129,14 @@ class BookStorageServiceTest {
       // Given
       MultipartFile file = mockBookFile("novel.pdf");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadBook(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book file")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 
@@ -165,13 +181,14 @@ class BookStorageServiceTest {
       // Given
       byte[] bytes = {1, 2, 3};
       when(minIOService.uploadBytes(anyString(), anyString(), any(), anyString()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadPreview(AUTHOR_ID, bytes, "pdf"))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload book preview file")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 
@@ -196,7 +213,8 @@ class BookStorageServiceTest {
       assertThat(key).startsWith("covers/1/").endsWith(".jpg");
       assertThat(key).doesNotContain("X-Amz-Signature").doesNotContain("http");
       verify(minIOService).uploadFile(eq("book-covers"), eq(key), eq(file));
-      verify(minioClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+      verify(minioPresignClient, never())
+          .getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
 
     @Test
@@ -205,13 +223,14 @@ class BookStorageServiceTest {
       // Given
       MultipartFile file = mockCoverFile("cover.jpg");
       when(minIOService.uploadFile(anyString(), anyString(), any()))
-          .thenThrow(new IOException("minio down"));
+          .thenThrow(
+              new StorageException("Could not store the object", new IOException("minio down")));
 
       // When / Then
       assertThatThrownBy(() -> bookStorageService.uploadCover(AUTHOR_ID, file))
           .isInstanceOf(StorageException.class)
-          .hasMessageContaining("Failed to upload cover image")
-          .hasCauseInstanceOf(IOException.class);
+          .hasMessageContaining("Could not store")
+          .hasRootCauseInstanceOf(IOException.class);
     }
   }
 
@@ -227,7 +246,7 @@ class BookStorageServiceTest {
     @DisplayName("should sign the key against the covers bucket")
     void shouldSignCoverKey() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenReturn("https://cdn/cover-url");
 
       // When
@@ -243,14 +262,15 @@ class BookStorageServiceTest {
       // When / Then — most books have no cover
       assertThat(bookStorageService.getCoverUrl(null)).isNull();
       assertThat(bookStorageService.getCoverUrl("  ")).isNull();
-      verify(minioClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+      verify(minioPresignClient, never())
+          .getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
 
     @Test
     @DisplayName("should return null instead of throwing when signing fails")
     void shouldReturnNull_whenSigningFails() throws Exception {
       // Given — a missing bucket is an ordinary state on a freshly reset MinIO
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new IOException("no such bucket"));
 
       // When / Then — this runs on the feed read path, so throwing here would take the whole
@@ -315,7 +335,7 @@ class BookStorageServiceTest {
     @DisplayName("should return a presigned download URL from the books bucket")
     void shouldReturnPresignedUrl_forDownload() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenReturn("https://cdn/file-key");
 
       // When
@@ -329,7 +349,7 @@ class BookStorageServiceTest {
     @DisplayName("should return a presigned preview URL from the books bucket")
     void shouldReturnPresignedUrl_forPreview() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenReturn("https://cdn/preview-key");
 
       // When
@@ -343,7 +363,7 @@ class BookStorageServiceTest {
     @DisplayName("should wrap a presigned URL generation failure as a StorageException")
     void shouldThrowStorageException_whenPresignedUrlGenerationFails() throws Exception {
       // Given
-      when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+      when(minioPresignClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
           .thenThrow(new IOException("network fail"));
 
       // When / Then

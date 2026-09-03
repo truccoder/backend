@@ -1,8 +1,11 @@
 package com.socialapp.notifications.entity;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import com.socialapp.notifications.entity.enums.NotificationChannel;
 import com.socialapp.notifications.entity.enums.NotificationType;
@@ -40,9 +43,35 @@ public class NotificationEntity {
   @Column(columnDefinition = "TEXT")
   private String body;
 
+  /**
+   * Template key + interpolation args the client renders in its own language — see {@code
+   * NotificationMessages} and B40 in {@code docs/backend-plan.md}. {@link #title} / {@link #body}
+   * stay the English text for push and email, and the fallback for rows written before this column
+   * existed (where {@code messageKey} is null).
+   */
+  @Column(name = "message_key", length = 64)
+  private String messageKey;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "message_args", columnDefinition = "jsonb")
+  private Map<String, String> messageArgs;
+
   private Integer referenceId;
 
   private String referenceType;
+
+  /**
+   * The post a {@code COMMENT} reference lives under, so the client has somewhere to navigate.
+   *
+   * <p>Null for every other {@code referenceType}: only a comment needs a second coordinate,
+   * because no route is keyed by comment id and a comment row does not announce its post to a
+   * client that only holds the notification.
+   *
+   * <p>Written at send time rather than resolved at read time — both emitting sites already hold
+   * the post, while the read path maps a whole page outside a transaction.
+   */
+  @Column(name = "post_id")
+  private Integer postId;
 
   @Enumerated(EnumType.STRING)
   private NotificationChannel channel;
