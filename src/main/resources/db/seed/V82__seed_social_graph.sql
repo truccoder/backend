@@ -3275,7 +3275,7 @@ INSERT INTO socialapp.t_friend_requests
     (9481, 9498, 'ACCEPTED', now() - INTERVAL '301 days', now() - INTERVAL '122 days'),
     (9491, 9494, 'ACCEPTED', now() - INTERVAL '311 days', now() - INTERVAL '132 days');
 
--- 180 lời mời đang chờ. Chỉ số partial uq_friend_requests_pending_pair (V33) bắt buộc mỗi
+-- 181 lời mời đang chờ. Chỉ số partial uq_friend_requests_pending_pair (V33) bắt buộc mỗi
 -- cặp KHÔNG THỨ TỰ chỉ có tối đa một dòng PENDING — nó đánh trên LEAST/GREATEST, nên đảo chiều người
 -- gửi cũng không lách được. Các cặp dưới đây đôi một khác nhau.
 
@@ -3460,7 +3460,8 @@ INSERT INTO socialapp.t_friend_requests
     (9173, 9193, 'PENDING', now() - INTERVAL '393 days', now() - INTERVAL '174 days'),
     (9173, 9398, 'PENDING', now() - INTERVAL '393 days', now() - INTERVAL '174 days'),
     (9175, 9355, 'PENDING', now() - INTERVAL '395 days', now() - INTERVAL '176 days'),
-    (9176, 9405, 'PENDING', now() - INTERVAL '396 days', now() - INTERVAL '177 days');
+    (9176, 9405, 'PENDING', now() - INTERVAL '396 days', now() - INTERVAL '177 days'),
+    (9133, 9224, 'PENDING', now() - INTERVAL '353 days', now() - INTERVAL '134 days');
 
 -- 70 lời mời bị từ chối và 50 lời mời người gửi tự huỷ. Hai trạng thái này
 -- không bị ràng buộc bởi chỉ số partial ở trên, nên cùng một cặp xuất hiện lại được.

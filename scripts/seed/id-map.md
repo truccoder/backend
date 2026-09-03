@@ -18,6 +18,21 @@ id không còn tồn tại, giữa buổi bảo vệ.
 Mật khẩu: tài khoản thường `12qwaszx`, ADMIN `1234qwer`.
 Email: `<username>@elitenexus.test`
 
+## Cặp demo: gợi ý kết bạn ("vì sao gợi ý người này")
+
+9133 và 9224 CHƯA là bạn nhưng đứng #1 trong danh sách gợi ý của nhau — mỗi người đăng
+nhập sẽ thấy người kia kèm đủ ba lý do: cùng vai trò MOBILE, tech stack khớp 100%
+(Kotlin/Swift/Flutter/Dart/Firebase/Jetpack Compose), và hashtag trùng trên bài PUBLIC.
+Có sẵn một lời mời PENDING (9133 → 9224) để demo luôn bước chấp nhận, và một lượt bình
+luận + thích qua lại trên bài của 9133 (id 102143) cùng một đơn ứng tuyển ACCEPTED của
+9224 vào một vị trí Mobile có sẵn (dự án 4012, vị trí 31) để demo thêm bảng tin/matchmaking
+trên cùng hai tài khoản này.
+
+| id | username | vai | ghi chú |
+|---|---|---|---|
+| 9133 | `truongthithao` | Kỹ sư Mobile, MID | Trương Thị Thảo |
+| 9224 | `ngotrungkhoa` | Kỹ sư Mobile, SENIOR | Ngô Trung Khoa |
+
 ## Dải id
 
 | Thực thể | Dải |

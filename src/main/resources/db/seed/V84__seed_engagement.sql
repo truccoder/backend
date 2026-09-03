@@ -1,5 +1,5 @@
 -- =============================================================================================
--- 9,001 bình luận, 119,878 cảm xúc bài, 29,246 lượt thích bình luận, RSVP, quiz và lịch sử tương tác.
+-- 9,003 bình luận, 119,878 cảm xúc bài, 29,248 lượt thích bình luận, RSVP, quiz và lịch sử tương tác.
 
 -- Flyway chạy file này qua chính pool của ứng dụng, nơi application.yml đặt
 -- statement_timeout = 15s cho MỌI kết nối. Trần đó đúng cho một request người dùng và sai cho một
@@ -9033,7 +9033,9 @@ INSERT INTO socialapp.t_comments
     (208998, 101449, 9130, 'Chỗ này mình nghĩ hơi khác: Cảm giác như vấn đề gốc nằm ở tầng dữ liệu chứ không phải ở đây. Mình theo dõi bài để hóng thêm ý kiến.', NULL, now() - INTERVAL '28 days', now() - INTERVAL '28 days'),
     (208999, 102037, 9046, 'Đã thử và có kết quả tương tự. Cảm giác như vấn đề gốc nằm ở tầng dữ liệu chứ không phải ở đây. Mình theo dõi bài để hóng thêm ý kiến.', NULL, now() - INTERVAL '45 days', now() - INTERVAL '45 days'),
     (209000, 100121, 9101, 'Bài viết rõ ràng, lưu lại đọc kỹ sau. Cảm giác như vấn đề gốc nằm ở tầng dữ liệu chứ không phải ở đây. Mình theo dõi bài để hóng thêm ý kiến.', 208143, now() - INTERVAL '79 days', now() - INTERVAL '79 days'),
-    (209001, 100846, 9143, 'Gửi giúp mình qua ho.tro@elitenexus.test nhé, dấu @ ở đây là email chứ không nhắc ai cả.', NULL, now() - INTERVAL '223 days', now() - INTERVAL '223 days');
+    (209001, 100846, 9143, 'Gửi giúp mình qua ho.tro@elitenexus.test nhé, dấu @ ở đây là email chứ không nhắc ai cả.', NULL, now() - INTERVAL '223 days', now() - INTERVAL '223 days'),
+    (209002, 102143, 9224, 'Flutter + Jetpack Compose là combo bên mình cũng đang dùng, đọc bài này thấy quen tay ghê. Team mình vừa refactor xong một màn hình tương tự, có vài chỗ trùng ý luôn.', NULL, now() - INTERVAL '10 days', now() - INTERVAL '10 days'),
+    (209003, 101300, 9001, 'Đúng bài học xương máu. Cách mình hay làm là tách theo boundary nghiệp vụ trước, đo xong mới quyết định service nào tách trước — tách theo lớp kỹ thuật dễ vỡ giữa chừng hơn.', NULL, now() - INTERVAL '8 days', now() - INTERVAL '8 days');
 
 -- ── Cảm xúc bài viết — đủ bảy loại ────────────────────────────────────────────────────────────
 
@@ -158167,7 +158169,9 @@ INSERT INTO socialapp.t_comment_reactions (user_id, comment_id, reaction_type, c
     (9455, 208999, 'LIKE', now() - INTERVAL '10 days'),
     (9186, 208999, 'LIKE', now() - INTERVAL '3 days'),
     (9295, 209000, 'LIKE', now() - INTERVAL '38 days'),
-    (9421, 209000, 'LIKE', now() - INTERVAL '33 days');
+    (9421, 209000, 'LIKE', now() - INTERVAL '33 days'),
+    (9133, 209002, 'LIKE', now() - INTERVAL '3 days'),
+    (9133, 209003, 'LIKE', now() - INTERVAL '2 days');
 
 -- ── RSVP sự kiện ────────────────────────────────────────────────────────────────────────────
 
@@ -172782,7 +172786,9 @@ INSERT INTO socialapp.t_user_interactions (user_id, post_id, author_id, type, cr
     (9436, 102157, 9214, 'COMMENT', now() - INTERVAL '158 days'),
     (9392, 100619, 9178, 'COMMENT', now() - INTERVAL '120 days'),
     (9054, 100623, 9319, 'COMMENT', now() - INTERVAL '236 days'),
-    (9474, 102327, 9466, 'COMMENT', now() - INTERVAL '137 days');
+    (9474, 102327, 9466, 'COMMENT', now() - INTERVAL '137 days'),
+    (9224, 102143, 9133, 'COMMENT', now() - INTERVAL '10 days'),
+    (9001, 101300, 9133, 'COMMENT', now() - INTERVAL '8 days');
 
 -- ── Câu trả lời được chấp nhận ───────────────────────────────────────────────────────────────
 -- acceptedAnswerId phải trỏ tới một bình luận CÓ THẬT CỦA CHÍNH BÀI ĐÓ. Trỏ sang bình luận của bài
@@ -172860,7 +172866,7 @@ UPDATE socialapp.t_posts p
 
 -- Đẩy các sequence quá dải id gán tay, và quá dữ liệu vừa chèn.
 
-SELECT setval('socialapp.q_comments_id', 209002, FALSE);
+SELECT setval('socialapp.q_comments_id', 209004, FALSE);
 SELECT setval('socialapp.q_event_rsvps_id',
               GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_event_rsvps), 1), true);
 SELECT setval('socialapp.q_user_interactions_id',

@@ -2516,6 +2516,46 @@ def build_engagement(rng, people, posts, quiz_posts, edges, author_weights):
         if candidates:
             accepted.append((p["id"], rng.choice(candidates)))
 
+    # ── Cặp demo 9133/9224: một lượt bình luận + thích qua lại ───────────────────────────────
+    #
+    # CHỈ một bình luận, không phải hai. Bản đầu có 9133 "trả lời" ngay dưới bình luận của 9224 —
+    # nhưng bài 102143 CHÍNH LÀ bài của 9133, nên đó là 9133 bình luận vào bài của chính mình, và
+    # nobodyEngagesWithTheirOwnPost() (SeedMigrationTest) bắt đúng ca này. Chiều "qua lại" ở đây
+    # vì vậy là bình luận (9224 → bài của 9133) rồi LƯỢT THÍCH (9133 → bình luận của 9224), không
+    # phải bình luận cả hai chiều — thích một bình luận trên bài của chính mình không phạm luật
+    # trên, luật đó chỉ xét t_comments/t_post_reactions.
+    #
+    # Thêm SAU mọi vòng lặp rng ở trên (kể cả vòng "cảm xúc bình luận" vốn duyệt qua chính
+    # `comments`), và dùng age CỐ ĐỊNH thay vì để add_comment() tự rút rng.randint(1,300) — hai
+    # điều kiện đó cộng lại là thứ giữ cho việc thêm dòng này không đẩy lệch một rng nào của mọi
+    # lần rút NGẪU NHIÊN phía sau trong build_books/build_bookstore/.../build_moderation.
+    # Bài 102143 do 9133 đăng, PUBLIC + APPROVED, đã có 8 bình luận tự nhiên — không phải một
+    # trong bốn bài fixture (regulars[0:4]) mà V92 đếm đúng số, nên thêm vào đây an toàn.
+    demo_comment = add_comment(
+        102143, 9224,
+        "Flutter + Jetpack Compose là combo bên mình cũng đang dùng, đọc bài này thấy quen tay "
+        "ghê. Team mình vừa refactor xong một màn hình tương tự, có vài chỗ trùng ý luôn.",
+        age=10)
+    comment_likes.append((9133, demo_comment, 3))
+    interactions.append((9224, 102143, 9133, "COMMENT", 10))
+
+    # ── 9001 (DEMO_EXPERT) và 9133: khép nốt chiều bình luận còn thiếu ───────────────────────
+    #
+    # Hai người đã là bạn (đồ thị Neo4j) và đã tương tác qua cảm xúc (9133 → bài 9001 24 lần,
+    # 9001 → bài 9133 7 lần) cùng hai bình luận của 9133 trên bài 9001 — NHƯNG 9001 chưa từng
+    # bình luận vào bài nào của 9133. Bài 101300 (REGULAR, PUBLIC, APPROVED, chủ 9133, đã có 6
+    # bình luận tự nhiên, không mang hashtag fixture nào) đúng chủ đề backend/kiến trúc — hợp
+    # vai "cao thủ" của 9001 hơn là một bài Mobile. Cùng nguyên tắc RNG-an-toàn như khối trên:
+    # thêm SAU mọi vòng lặp rng, age cố định.
+    demo_expert_comment = add_comment(
+        101300, DEMO_EXPERT,
+        "Đúng bài học xương máu. Cách mình hay làm là tách theo boundary nghiệp vụ trước, đo "
+        "xong mới quyết định service nào tách trước — tách theo lớp kỹ thuật dễ vỡ giữa chừng "
+        "hơn.",
+        age=8)
+    comment_likes.append((9133, demo_expert_comment, 2))
+    interactions.append((DEMO_EXPERT, 101300, 9133, "COMMENT", 8))
+
     return {
         "comments": comments, "reactions": reaction_rows, "comment_likes": comment_likes,
         "rsvps": rsvps, "quiz_answers": quiz_answers, "interactions": interactions,
@@ -2524,6 +2564,12 @@ def build_engagement(rng, people, posts, quiz_posts, edges, author_weights):
         "fixtures": {"zero_comments": fixture_zero, "one_comment": fixture_one,
                      "two_comments": fixture_two, "many_comments": fixture_many,
                      "zero_reactions": zero_reaction_post},
+        # id thật của hai bình luận trên, để emit_reputation_and_notifications() ép chắc chắn có
+        # thông báo POST_COMMENTED / COMMENT_LIKED cho đúng các cặp này thay vì phó mặc cho phép
+        # chia dư (`c.id % 3 = 0` …) — một hàng cụ thể có thể trật phép chia dư một cách hoàn
+        # toàn tình cờ, và một buổi demo thì không có chỗ cho "tình cờ".
+        "demo_pair": {"comment_id": demo_comment},
+        "demo_expert_pair": {"comment_id": demo_expert_comment},
     }
 
 
@@ -3758,6 +3804,25 @@ def build_projects(rng, people):
     # 3. Một dự án tags NULL — điểm chủ đề bằng 0, và không được làm nổ phép giao.
     next(p for p in reversed(projects) if p["status"] == "OPEN")["tags"] = None
 
+    # ── Cặp demo 9133/9224: một đơn ứng tuyển ────────────────────────────────────────────────
+    #
+    # KHÔNG thêm dự án thứ 51: SeedMigrationTest.projectTagFixtures() khoá cứng
+    # "COUNT(*) FROM t_projects = 50", nên 9224 không thể là chủ một dự án mới ở đây — chỉ có thể
+    # nộp đơn vào một vị trí Mobile đã có sẵn. Vị trí 31 (dự án 4012, chủ là 9151, không phải
+    # 9133/9224 nên không vi phạm "không ai nộp đơn vào dự án của chính mình") đòi đúng
+    # ["Jetpack Compose","Flutter","Swift","Offline First"] — khớp thẳng known_tech_stack của
+    # 9224. status ACCEPTED để PROJECT_APPLICATION_ACCEPTED (10 điểm) cũng tính cho cặp này, dùng
+    # đúng phép dẫn xuất SQL sẵn có ở V90 (xem emit_reputation_and_notifications) — không cần sửa
+    # gì thêm ở đó cho phần này.
+    demo_app_id = next_app
+    applications.append({
+        "id": demo_app_id, "project_id": 4012, "position_id": 31, "applicant_id": 9224,
+        "message": "Stack Jetpack Compose + Flutter là đúng thứ mình làm hằng ngày, rất muốn "
+                   "tham gia dự án này.",
+        "status": "ACCEPTED", "age": 6,
+    })
+    next_app += 1
+
     return projects, positions, applications
 
 
@@ -4573,8 +4638,15 @@ SELECT p.author_id, r.user_id, 'POST_LIKED',
  WHERE p.author_id <> r.user_id
    AND (r.post_id + r.user_id) % 7 = 0;""", rows=7000)
 
-    f.sql("""
+    demo_comment_id = eng["demo_pair"]["comment_id"]
+    demo_expert_comment_id = eng["demo_expert_pair"]["comment_id"]
+    f.sql(f"""
 -- POST_COMMENTED: cũng trỏ tới bài.
+--
+-- OR c.id IN ({demo_comment_id}, {demo_expert_comment_id}): bình luận của 9224 trên bài của
+-- 9133, và của 9001 (DEMO_EXPERT) trên bài khác của 9133 — cả hai cặp demo — ép có thông báo
+-- chắc chắn thay vì phó mặc cho c.id % 3 = 0, con số mà id thật của một bình luận cụ thể có
+-- thể trật một cách hoàn toàn tình cờ.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -4588,7 +4660,7 @@ SELECT p.author_id, c.author_id, 'POST_COMMENTED',
   JOIN socialapp.t_users u ON u.id = c.author_id
  WHERE p.author_id <> c.author_id
    AND c.parent_id IS NULL
-   AND c.id % 3 = 0;""", rows=2500)
+   AND (c.id % 3 = 0 OR c.id IN ({demo_comment_id}, {demo_expert_comment_id}));""", rows=2500)
 
     f.sql("""
 -- USER_MENTIONED: trỏ tới BÌNH LUẬN, nên post_id BẮT BUỘC có, lấy thẳng từ chính hàng bình luận.
@@ -4610,8 +4682,12 @@ SELECT target.id, c.author_id, 'USER_MENTIONED',
  WHERE c.content LIKE '@%'
    AND target.id <> c.author_id;""", rows=60)
 
-    f.sql("""
+    f.sql(f"""
 -- COMMENT_LIKED: cũng trỏ tới bình luận, cùng luật post_id.
+--
+-- OR (...): 9133 thích bình luận của 9224, và cũng thích bình luận của 9001 (hai cặp demo) —
+-- cùng lý do ép-chắc-chắn như POST_COMMENTED ở trên, thay vì phó mặc cho
+-- (cr.comment_id + cr.user_id) % 11 = 0.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -4624,10 +4700,15 @@ SELECT c.author_id, cr.user_id, 'COMMENT_LIKED',
   JOIN socialapp.t_comments c ON c.id = cr.comment_id
   JOIN socialapp.t_users u ON u.id = cr.user_id
  WHERE c.author_id <> cr.user_id
-   AND (cr.comment_id + cr.user_id) % 11 = 0;""", rows=2700)
+   AND ((cr.comment_id + cr.user_id) % 11 = 0
+        OR (cr.comment_id IN ({demo_comment_id}, {demo_expert_comment_id})
+            AND cr.user_id = 9133));""", rows=2700)
 
     f.sql("""
 -- FRIEND_REQUEST và FRIEND_ACCEPTED: không nói về bài viết nào, nên post_id là NULL.
+--
+-- OR (fr.requester_id = 9133 AND fr.addressee_id = 9224): lời mời của cặp demo gợi ý kết bạn —
+-- cùng lý do ép-chắc-chắn như hai khối trên, thay vì phó mặc cho fr.id % 9 = 0.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -4643,7 +4724,7 @@ SELECT fr.addressee_id, fr.requester_id,
   FROM socialapp.t_friend_requests fr
   JOIN socialapp.t_users u ON u.id = fr.requester_id
  WHERE fr.status IN ('PENDING', 'ACCEPTED')
-   AND fr.id % 9 = 0;""", rows=400)
+   AND (fr.id % 9 = 0 OR (fr.requester_id = 9133 AND fr.addressee_id = 9224));""", rows=400)
 
     f.sql("""
 -- BOOK_PURCHASED: trỏ tới sách, post_id NULL.
@@ -4835,6 +4916,7 @@ def write_id_map(people, posts, books, projects, roadmaps, eng):
     """
     fx = eng["fixtures"]
     demo = [p for p in people if p["id"] in (DEMO_EXPERT, DEMO_NEWCOMER, 9499, 9500)]
+    suggestion_pair = [p for p in people if p["id"] in (9133, 9224)]
     lines = [
         "# Bảng ID mốc của bộ seed",
         "",
@@ -4857,6 +4939,24 @@ def write_id_map(people, posts, books, projects, roadmaps, eng):
         "",
         "Mật khẩu: tài khoản thường `12qwaszx`, ADMIN `1234qwer`.",
         "Email: `<username>@" + EMAIL_DOMAIN + "`",
+        "",
+        "## Cặp demo: gợi ý kết bạn (\"vì sao gợi ý người này\")",
+        "",
+        "9133 và 9224 CHƯA là bạn nhưng đứng #1 trong danh sách gợi ý của nhau — mỗi người đăng",
+        "nhập sẽ thấy người kia kèm đủ ba lý do: cùng vai trò MOBILE, tech stack khớp 100%",
+        "(Kotlin/Swift/Flutter/Dart/Firebase/Jetpack Compose), và hashtag trùng trên bài PUBLIC.",
+        "Có sẵn một lời mời PENDING (9133 → 9224) để demo luôn bước chấp nhận, và một lượt bình",
+        "luận + thích qua lại trên bài của 9133 (id 102143) cùng một đơn ứng tuyển ACCEPTED của",
+        "9224 vào một vị trí Mobile có sẵn (dự án 4012, vị trí 31) để demo thêm bảng tin/matchmaking",
+        "trên cùng hai tài khoản này.",
+        "",
+        "| id | username | vai | ghi chú |",
+        "|---|---|---|---|",
+    ]
+    for p in sorted(suggestion_pair, key=lambda x: x["id"]):
+        lines.append(
+            f"| {p['id']} | `{p['username']}` | Kỹ sư Mobile, {p['seniority']} | {p['full_name']} |")
+    lines += [
         "",
         "## Dải id",
         "",
@@ -4922,6 +5022,14 @@ def main():
     # không cặp nào bị dùng lại ở hai vai trò mâu thuẫn nhau.
     spare = build_non_friend_pairs(rng, people, edges, 340)
     pending, rejected, cancelled, blocks = spare[:180], spare[180:250], spare[250:300], spare[300:340]
+    # Cặp demo 9133/9224: một lời mời PENDING, gắn tay chứ không rút từ build_non_friend_pairs —
+    # thêm vào ĐÂY (sau khi `spare` đã cắt xong) không gọi rng() nào cả, nên không đẩy lệch chuỗi
+    # ngẫu nhiên của build_posts/build_engagement/... phía dưới. Cặp (9133, 9224) chưa là bạn
+    # (không nằm trong edges) và chưa xuất hiện ở pending/rejected/cancelled nào khác — 9133 đứng
+    # trước vì đó là chiều rows() dùng làm requester khi swap=False.
+    assert (9133, 9224) not in edges
+    assert (9133, 9224) not in pending
+    pending = pending + [(9133, 9224)]
 
     posts, quiz_posts, author_weights = build_posts(rng, people, edges)
     eng = build_engagement(rng, people, posts, quiz_posts, edges, author_weights)

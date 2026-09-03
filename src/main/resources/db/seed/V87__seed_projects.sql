@@ -1,5 +1,5 @@
 -- =============================================================================================
--- 50 dự án, 135 vị trí tuyển, 420 đơn ứng tuyển.
+-- 50 dự án, 135 vị trí tuyển, 421 đơn ứng tuyển.
 
 -- Flyway chạy file này qua chính pool của ứng dụng, nơi application.yml đặt
 -- statement_timeout = 15s cho MỌI kết nối. Trần đó đúng cho một request người dùng và sai cho một
@@ -651,7 +651,8 @@ INSERT INTO socialapp.t_project_applications
     (417, 4047, 126, 9241, 'Đọc mô tả thấy đúng thứ mình đang tìm, mong được tham gia.', 'REJECTED', now() - INTERVAL '157 days', now() - INTERVAL '157 days'),
     (418, 4019, 51, 9393, 'Mình mạnh phần kiểm thử, có thể nhận luôn việc dựng CI cho dự án.', 'PENDING', now() - INTERVAL '48 days', now() - INTERVAL '48 days'),
     (419, 4024, 65, 9085, 'Kinh nghiệm của mình hơi lệch so với mô tả nhưng rất muốn thử.', 'PENDING', now() - INTERVAL '43 days', now() - INTERVAL '43 days'),
-    (420, 4029, 76, 9290, 'Mình đã làm một dự án tương tự năm ngoái, gửi kèm liên kết trong hồ sơ.', 'REJECTED', now() - INTERVAL '187 days', now() - INTERVAL '187 days');
+    (420, 4029, 76, 9290, 'Mình đã làm một dự án tương tự năm ngoái, gửi kèm liên kết trong hồ sơ.', 'REJECTED', now() - INTERVAL '187 days', now() - INTERVAL '187 days'),
+    (421, 4012, 31, 9224, 'Stack Jetpack Compose + Flutter là đúng thứ mình làm hằng ngày, rất muốn tham gia dự án này.', 'ACCEPTED', now() - INTERVAL '6 days', now() - INTERVAL '6 days');
 
 -- Ba bảng này dùng SERIAL, nên sequence của chúng lấy qua pg_get_serial_sequence chứ không phải tên
 -- q_* như các bảng khác. Đây là chỗ dễ bỏ sót nhất trong cả bộ seed: lỗi không nổ lúc migrate mà nổ ở

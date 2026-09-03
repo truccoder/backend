@@ -39,6 +39,7 @@ import com.socialapp.friendships.dto.SentFriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -207,14 +208,21 @@ class FriendshipControllerTest {
           .thenReturn(
               List.of(
                   new FriendSuggestionDto(
-                      new UserProfileDto(3, "suggested", "Sug Gested", null), 4L)));
+                      new UserProfileDto(3, "suggested", "Sug Gested", null),
+                      4L,
+                      PrimaryRole.BACKEND,
+                      List.of("Java"),
+                      List.of("java"))));
 
       // When / Then
       mockMvc
           .perform(authed(get(SUGGESTIONS_URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$[0].profile.userId").value(3))
-          .andExpect(jsonPath("$[0].mutualFriends").value(4));
+          .andExpect(jsonPath("$[0].mutualFriends").value(4))
+          .andExpect(jsonPath("$[0].sharedRole").value("BACKEND"))
+          .andExpect(jsonPath("$[0].matchedSkills[0]").value("Java"))
+          .andExpect(jsonPath("$[0].sharedHashtags[0]").value("java"));
     }
 
     @Test

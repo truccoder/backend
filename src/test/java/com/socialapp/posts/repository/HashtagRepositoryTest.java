@@ -1,6 +1,7 @@
 package com.socialapp.posts.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -14,6 +15,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.AbstractIntegrationTest;
+import com.socialapp.hashtags.dto.AuthorHashtagDto;
 import com.socialapp.hashtags.dto.HashtagDto;
 import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.HashtagEntity;
@@ -288,22 +290,74 @@ class HashtagRepositoryTest extends AbstractIntegrationTest {
                   OffsetDateTime.now().plusDays(1), PageRequest.of(0, 10)))
           .isEmpty();
     }
+  }
 
-    private void savePost(
-        Integer authorId,
-        PostVisibility visibility,
-        ModerationStatus status,
-        HashtagEntity... tags) {
-      PostEntity post = new PostEntity();
-      post.setAuthorId(authorId);
-      post.setContent("trending post");
-      post.setVisibility(visibility);
-      post.setModerationStatus(status);
-      for (HashtagEntity tag : tags) {
-        post.getHashtags().add(tag);
-      }
-      postRepository.saveAndFlush(post);
+  @Nested
+  @DisplayName("findHashtagsByAuthors")
+  class FindHashtagsByAuthors {
+
+    @Test
+    @DisplayName("returns one row per (author, hashtag) pair, most-used tag first overall")
+    void returnsOneRowPerAuthorAndTag() {
+      // Every (author, tag) pair below has a distinct usage count, so the ORDER BY has no ties to
+      // break arbitrarily — the assertion can check the exact row order the query promises.
+      Integer author1 =
+          userRepository.saveAndFlush(user("hbfa-author1@example.com", "hbfaauthor1")).getId();
+      Integer author2 =
+          userRepository.saveAndFlush(user("hbfa-author2@example.com", "hbfaauthor2")).getId();
+
+      HashtagEntity java = hashtagRepository.saveAndFlush(tag("b31hbfajava", 40));
+      HashtagEntity kotlin = hashtagRepository.saveAndFlush(tag("b31hbfakotlin", 20));
+      HashtagEntity rust = hashtagRepository.saveAndFlush(tag("b31hbfarust", 5));
+
+      savePost(author1, PostVisibility.PUBLIC, ModerationStatus.APPROVED, java, kotlin);
+      savePost(author2, PostVisibility.PUBLIC, ModerationStatus.APPROVED, rust);
+
+      List<AuthorHashtagDto> result =
+          hashtagRepository.findHashtagsByAuthors(Set.of(author1, author2));
+
+      assertThat(result)
+          .extracting(AuthorHashtagDto::authorId, AuthorHashtagDto::hashtagName)
+          .containsExactly(
+              tuple(author1, "b31hbfajava"),
+              tuple(author1, "b31hbfakotlin"),
+              tuple(author2, "b31hbfarust"));
     }
+
+    @Test
+    @DisplayName("ignores friends-only and not-yet-approved posts")
+    void ignoresNonPublicOrUnapproved() {
+      Integer authorId =
+          userRepository.saveAndFlush(user("hbfa-author3@example.com", "hbfaauthor3")).getId();
+      HashtagEntity rust = hashtagRepository.saveAndFlush(tag("b31hbfarust", 0));
+
+      savePost(authorId, PostVisibility.FRIENDS, ModerationStatus.APPROVED, rust);
+      savePost(authorId, PostVisibility.PUBLIC, ModerationStatus.PENDING_REVIEW, rust);
+
+      assertThat(hashtagRepository.findHashtagsByAuthors(Set.of(authorId))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("returns nothing for an author who has not posted")
+    void emptyForAuthorWithNoPosts() {
+      Integer authorId =
+          userRepository.saveAndFlush(user("hbfa-author4@example.com", "hbfaauthor4")).getId();
+
+      assertThat(hashtagRepository.findHashtagsByAuthors(Set.of(authorId))).isEmpty();
+    }
+  }
+
+  private void savePost(
+      Integer authorId, PostVisibility visibility, ModerationStatus status, HashtagEntity... tags) {
+    PostEntity post = new PostEntity();
+    post.setAuthorId(authorId);
+    post.setContent("test post");
+    post.setVisibility(visibility);
+    post.setModerationStatus(status);
+    for (HashtagEntity tag : tags) {
+      post.getHashtags().add(tag);
+    }
+    postRepository.saveAndFlush(post);
   }
 
   private static HashtagEntity tag(String name, Integer usageCount) {

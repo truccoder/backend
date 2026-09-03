@@ -125,6 +125,11 @@ SELECT p.author_id, r.user_id, 'POST_LIKED',
    AND (r.post_id + r.user_id) % 7 = 0;
 
 -- POST_COMMENTED: cũng trỏ tới bài.
+--
+-- OR c.id IN (209002, 209003): bình luận của 9224 trên bài của
+-- 9133, và của 9001 (DEMO_EXPERT) trên bài khác của 9133 — cả hai cặp demo — ép có thông báo
+-- chắc chắn thay vì phó mặc cho c.id % 3 = 0, con số mà id thật của một bình luận cụ thể có
+-- thể trật một cách hoàn toàn tình cờ.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -138,7 +143,7 @@ SELECT p.author_id, c.author_id, 'POST_COMMENTED',
   JOIN socialapp.t_users u ON u.id = c.author_id
  WHERE p.author_id <> c.author_id
    AND c.parent_id IS NULL
-   AND c.id % 3 = 0;
+   AND (c.id % 3 = 0 OR c.id IN (209002, 209003));
 
 -- USER_MENTIONED: trỏ tới BÌNH LUẬN, nên post_id BẮT BUỘC có, lấy thẳng từ chính hàng bình luận.
 -- Bình luận mà dấu @ là địa chỉ email KHÔNG lọt vào đây: điều kiện dưới đây chỉ nhận nội dung bắt
@@ -160,6 +165,10 @@ SELECT target.id, c.author_id, 'USER_MENTIONED',
    AND target.id <> c.author_id;
 
 -- COMMENT_LIKED: cũng trỏ tới bình luận, cùng luật post_id.
+--
+-- OR (...): 9133 thích bình luận của 9224, và cũng thích bình luận của 9001 (hai cặp demo) —
+-- cùng lý do ép-chắc-chắn như POST_COMMENTED ở trên, thay vì phó mặc cho
+-- (cr.comment_id + cr.user_id) % 11 = 0.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -172,9 +181,14 @@ SELECT c.author_id, cr.user_id, 'COMMENT_LIKED',
   JOIN socialapp.t_comments c ON c.id = cr.comment_id
   JOIN socialapp.t_users u ON u.id = cr.user_id
  WHERE c.author_id <> cr.user_id
-   AND (cr.comment_id + cr.user_id) % 11 = 0;
+   AND ((cr.comment_id + cr.user_id) % 11 = 0
+        OR (cr.comment_id IN (209002, 209003)
+            AND cr.user_id = 9133));
 
 -- FRIEND_REQUEST và FRIEND_ACCEPTED: không nói về bài viết nào, nên post_id là NULL.
+--
+-- OR (fr.requester_id = 9133 AND fr.addressee_id = 9224): lời mời của cặp demo gợi ý kết bạn —
+-- cùng lý do ép-chắc-chắn như hai khối trên, thay vì phó mặc cho fr.id % 9 = 0.
 INSERT INTO socialapp.t_notifications
     (recipient_id, actor_id, type, title, body, reference_id, reference_type, post_id,
      channel, is_read, sent_at, created_at)
@@ -190,7 +204,7 @@ SELECT fr.addressee_id, fr.requester_id,
   FROM socialapp.t_friend_requests fr
   JOIN socialapp.t_users u ON u.id = fr.requester_id
  WHERE fr.status IN ('PENDING', 'ACCEPTED')
-   AND fr.id % 9 = 0;
+   AND (fr.id % 9 = 0 OR (fr.requester_id = 9133 AND fr.addressee_id = 9224));
 
 -- BOOK_PURCHASED: trỏ tới sách, post_id NULL.
 INSERT INTO socialapp.t_notifications

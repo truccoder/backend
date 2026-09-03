@@ -12,6 +12,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import com.socialapp.hashtags.dto.AuthorHashtagDto;
 import com.socialapp.hashtags.dto.HashtagDto;
 import com.socialapp.posts.entity.HashtagEntity;
 
@@ -130,4 +131,28 @@ public interface HashtagRepository extends JpaRepository<HashtagEntity, Integer>
               + "WHERE name = ANY(CAST(:names AS text[]))",
       nativeQuery = true)
   void decrementUsage(@Param("names") String[] names);
+
+  /**
+   * Every hashtag on a PUBLIC, APPROVED post authored by one of {@code authorIds}, one row per
+   * (author, hashtag) pair, most-used tag first within each author.
+   *
+   * <p>Backs {@code FriendshipService}'s "why suggested" reasons: two strangers who post about the
+   * same topics have something concrete in common, and the topic vocabulary already exists as
+   * hashtags rather than needing a new taxonomy just for this.
+   *
+   * <p>Restricted to PUBLIC + APPROVED for the same reason as {@link #findTrendingSince} — the
+   * result is shown to someone who is not yet this author's friend, so a friends-only or
+   * not-yet-moderated post must not leak what its author wrote about through this side door.
+   */
+  @Query(
+      """
+      SELECT new com.socialapp.hashtags.dto.AuthorHashtagDto(p.authorId, h.name)
+      FROM PostEntity p
+      JOIN p.hashtags h
+      WHERE p.authorId IN :authorIds
+        AND p.visibility = com.socialapp.posts.entity.enums.PostVisibility.PUBLIC
+        AND p.moderationStatus = com.socialapp.moderation.enums.ModerationStatus.APPROVED
+      ORDER BY h.usageCount DESC, h.name ASC
+      """)
+  List<AuthorHashtagDto> findHashtagsByAuthors(@Param("authorIds") Collection<Integer> authorIds);
 }
