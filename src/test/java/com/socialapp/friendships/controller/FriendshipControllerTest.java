@@ -31,12 +31,15 @@ import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.dto.FriendListResponseDto;
+import com.socialapp.friendships.dto.FriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.dto.PendingFriendRequestDto;
 import com.socialapp.friendships.dto.SentFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
 import com.socialapp.security.config.CustomAuthenticationEntryPoint;
@@ -205,14 +208,21 @@ class FriendshipControllerTest {
           .thenReturn(
               List.of(
                   new FriendSuggestionDto(
-                      new UserProfileDto(3, "suggested", "Sug Gested", null), 4L)));
+                      new UserProfileDto(3, "suggested", "Sug Gested", null),
+                      4L,
+                      PrimaryRole.BACKEND,
+                      List.of("Java"),
+                      List.of("java"))));
 
       // When / Then
       mockMvc
           .perform(authed(get(SUGGESTIONS_URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$[0].profile.userId").value(3))
-          .andExpect(jsonPath("$[0].mutualFriends").value(4));
+          .andExpect(jsonPath("$[0].mutualFriends").value(4))
+          .andExpect(jsonPath("$[0].sharedRole").value("BACKEND"))
+          .andExpect(jsonPath("$[0].matchedSkills[0]").value("Java"))
+          .andExpect(jsonPath("$[0].sharedHashtags[0]").value("java"));
     }
 
     @Test
@@ -253,29 +263,32 @@ class FriendshipControllerTest {
               "http://cdn.example.com/avatar2.png",
               FriendRequestStatus.PENDING,
               OffsetDateTime.parse("2026-01-01T00:00:00Z"));
-      when(friendshipService.getPendingRequests(currentUser.getId())).thenReturn(List.of(request));
+      when(friendshipService.getPendingRequests(eq(currentUser.getId()), isNull(), anyInt()))
+          .thenReturn(new FriendRequestPageResponseDto(List.of(request), null, false));
 
       // When / Then
       mockMvc
           .perform(authed(get(FRIENDSHIPS_URL + "/requests/pending")))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$[0].id").value(5))
-          .andExpect(jsonPath("$[0].requesterId").value(2))
-          .andExpect(jsonPath("$[0].requesterFullName").value("Friend Two"))
-          .andExpect(jsonPath("$[0].status").value("PENDING"));
+          .andExpect(jsonPath("$.requests[0].id").value(5))
+          .andExpect(jsonPath("$.requests[0].requesterId").value(2))
+          .andExpect(jsonPath("$.requests[0].requesterFullName").value("Friend Two"))
+          .andExpect(jsonPath("$.requests[0].status").value("PENDING"));
     }
 
     @Test
     @DisplayName("shouldReturn200AndEmptyList_whenUserHasNoIncomingRequests")
     void shouldReturn200AndEmptyList_whenUserHasNoIncomingRequests() throws Exception {
       // Given
-      when(friendshipService.getPendingRequests(currentUser.getId())).thenReturn(List.of());
+      when(friendshipService.getPendingRequests(eq(currentUser.getId()), isNull(), anyInt()))
+          .thenReturn(new FriendRequestPageResponseDto(List.of(), null, false));
 
       // When / Then
       mockMvc
           .perform(authed(get(FRIENDSHIPS_URL + "/requests/pending")))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$").isEmpty());
+          .andExpect(jsonPath("$.requests").isEmpty())
+          .andExpect(jsonPath("$.hasMore").value(false));
     }
 
     @Test
@@ -309,16 +322,17 @@ class FriendshipControllerTest {
               null,
               FriendRequestStatus.PENDING,
               OffsetDateTime.parse("2026-01-02T00:00:00Z"));
-      when(friendshipService.getSentRequests(currentUser.getId())).thenReturn(List.of(request));
+      when(friendshipService.getSentRequests(eq(currentUser.getId()), isNull(), anyInt()))
+          .thenReturn(new SentFriendRequestPageResponseDto(List.of(request), null, false));
 
       // When / Then
       mockMvc
           .perform(authed(get(FRIENDSHIPS_URL + "/requests/sent")))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$[0].id").value(7))
-          .andExpect(jsonPath("$[0].addresseeId").value(3))
-          .andExpect(jsonPath("$[0].addresseeFullName").value("Friend Three"))
-          .andExpect(jsonPath("$[0].status").value("PENDING"));
+          .andExpect(jsonPath("$.requests[0].id").value(7))
+          .andExpect(jsonPath("$.requests[0].addresseeId").value(3))
+          .andExpect(jsonPath("$.requests[0].addresseeFullName").value("Friend Three"))
+          .andExpect(jsonPath("$.requests[0].status").value("PENDING"));
     }
 
     @Test

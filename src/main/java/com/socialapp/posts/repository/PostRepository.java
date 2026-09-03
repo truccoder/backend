@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -14,10 +15,40 @@ import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.enums.PostVisibility;
 
+import jakarta.persistence.LockModeType;
+
 public interface PostRepository extends JpaRepository<PostEntity, Integer> {
+
+  /**
+   * Locks the post row for the rest of the transaction.
+   *
+   * <p>For the RSVP capacity check, which reads the GOING count and then inserts: without a lock
+   * each concurrent RSVP counts against a snapshot that does not yet include the others, and an
+   * event with maxAttendees=10 accepts more than ten. Same pattern and same reason as {@code
+   * ProjectPositionRepository.findByIdForUpdate}.
+   */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select p from PostEntity p where p.id = :id")
+  java.util.Optional<PostEntity> findByIdForUpdate(@Param("id") Integer id);
+
   List<PostEntity> findByModerationStatus(ModerationStatus status);
 
+  /**
+   * An author's posts in one moderation state.
+   *
+   * <p>No production caller — it is kept for the integration and repository tests, which use it to
+   * assert what actually reached the database after a request. That is a real use: an assertion
+   * helper that reads through the same mapping the application does catches a mapping bug an
+   * in-memory check would miss.
+   */
   List<PostEntity> findByAuthorIdAndModerationStatus(Integer authorId, ModerationStatus status);
+
+  /**
+   * Paged variant, for the feed rebuild — which walks every approved post in the database and so
+   * must not load them all at once. The unpaged form above is fine for its callers, which read
+   * only the small moderation queues.
+   */
+  Page<PostEntity> findByModerationStatus(ModerationStatus status, Pageable pageable);
 
   @Query(
       """
@@ -71,6 +102,11 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
    * <p>{@code excludedAuthorIds} carries the caller's block set and must never be empty — {@code
    * NOT IN ()} is not valid SQL. Callers pass a sentinel id no user can have; see {@code
    * PostQueryService}.
+   *
+   * <p>{@code hashtag} is the folded tag name a client clicked, or {@code null} for the unfiltered
+   * feed. It is matched with a correlated {@code EXISTS} rather than a {@code JOIN p.hashtags}: a
+   * join over the many-to-many multiplies a post row by its tag count, which would put duplicates
+   * on the page and break the {@code limit + 1} cursor. The subquery keeps one row per post.
    */
   @Query(
       """
@@ -79,11 +115,15 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
         AND p.moderationStatus = com.socialapp.moderation.enums.ModerationStatus.APPROVED
         AND p.authorId NOT IN :excludedAuthorIds
         AND (:cursor IS NULL OR p.id < :cursor)
+        AND (:hashtag IS NULL OR EXISTS (
+              SELECT ph.id FROM PostEntity ph JOIN ph.hashtags h
+              WHERE ph.id = p.id AND h.name = :hashtag))
       ORDER BY p.id DESC
       """)
   List<PostEntity> findPublicFeed(
       @Param("excludedAuthorIds") Collection<Integer> excludedAuthorIds,
       @Param("cursor") Integer cursor,
+      @Param("hashtag") String hashtag,
       Pageable pageable);
 
   /**
@@ -98,6 +138,15 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
    *
    * <p>The pattern still needs three characters before trigram matching can help; a one- or
    * two-character query has no full trigram to look up and falls back to a scan by design.
+   *
+   * <p><b>The moderation predicate is not optional.</b> This query filtered visibility and blocks
+   * but not {@code moderation_status}, so a post an admin had REJECTED — or one that {@code
+   * PostReportService.escalateIfEnoughReporters} had just pulled to PENDING_REVIEW — stayed fully
+   * findable here, making a takedown cosmetic as far as search was concerned. {@code
+   * findPublicFeed} above and {@code PostVisibilityService.isVisibleTo} both check status first;
+   * this was the one read path that did not. The author is exempted, matching {@code isVisibleTo},
+   * so you can still find your own post while it is awaiting review. It must stay in both the
+   * main query and the {@code countQuery} or the total will not match the rows returned.
    */
   @Query(
       value =
@@ -107,6 +156,7 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
                                  OR f_unaccent(LOWER(p.event_details ->> 'eventTitle'))
                                       LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
                                 AND p.author_id NOT IN :excludedAuthorIds
+                                AND (p.moderation_status = 'APPROVED' OR p.author_id = :currentUserId)
                                 AND (p.visibility = 'PUBLIC'
                                      OR p.author_id = :currentUserId
                                      OR (p.author_id IN :friendIds AND p.visibility IN ('PUBLIC', 'FRIENDS')))
@@ -124,6 +174,7 @@ public interface PostRepository extends JpaRepository<PostEntity, Integer> {
                                  OR f_unaccent(LOWER(p.event_details ->> 'eventTitle'))
                                       LIKE f_unaccent(LOWER(CONCAT('%', :query, '%'))) ESCAPE '\\')
                                 AND p.author_id NOT IN :excludedAuthorIds
+                                AND (p.moderation_status = 'APPROVED' OR p.author_id = :currentUserId)
                                 AND (p.visibility = 'PUBLIC'
                                      OR p.author_id = :currentUserId
                                      OR (p.author_id IN :friendIds AND p.visibility IN ('PUBLIC', 'FRIENDS')))
