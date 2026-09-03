@@ -3,7 +3,14 @@
 .gradle
 .docker-data
 build
-docker
 *.md
 .gitignore
 .editorconfig
+
+# `docker/` is deliberately NOT excluded wholesale. The image build runs
+# docker/minio/generate-seed-objects.py in a dedicated stage (see Dockerfile) to bake the seed
+# images into the runtime image. Only the dev-only pieces below are dropped:
+#   - docker/minio/.cache: ~25 MB of images from earlier local runs; the build fetches its own.
+#   - docker/postgres: local-only init scripts.
+docker/minio/.cache
+docker/postgres

@@ -35,6 +35,7 @@ import com.socialapp.bookstore.dto.BookReviewResponseDto;
 import com.socialapp.bookstore.dto.RatingBreakdownDto;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookService;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.moderation.service.BanDetailsService;
@@ -512,10 +513,15 @@ class BookControllerTest {
     @DisplayName("shouldReturn200AndCursorPage_happyPath")
     void shouldReturnCursorPage() throws Exception {
       // Given
-      when(bookService.getLibraryPage(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+      when(bookService.getLibraryPage(any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
           .thenReturn(
               new BookPageResponseDto(
-                  List.of(BookResponseDto.builder().id(31).title("Khong Gia Dinh").build()),
+                  List.of(
+                      BookResponseDto.builder()
+                          .id(31)
+                          .title("Khong Gia Dinh")
+                          .category(LearningCategory.BACKEND)
+                          .build()),
                   31,
                   true));
 
@@ -524,15 +530,48 @@ class BookControllerTest {
           .perform(authed(get(BOOKS_URL)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.items[0].id").value(31))
+          // Nhãn đi kèm từng hàng, không chỉ trong bộ lọc: thẻ sách hiển thị chủ đề của nó.
+          .andExpect(jsonPath("$.items[0].category").value("BACKEND"))
           .andExpect(jsonPath("$.nextCursor").value(31))
           .andExpect(jsonPath("$.hasMore").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldPassCategoryThrough_whenProvided")
+    void shouldPassCategoryThrough() throws Exception {
+      // Given
+      when(bookService.getLibraryPage(any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
+          .thenReturn(new BookPageResponseDto(List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(BOOKS_URL)).param("category", "MOBILE"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(bookService)
+          .getLibraryPage(
+              org.mockito.ArgumentMatchers.isNull(),
+              org.mockito.ArgumentMatchers.anyInt(),
+              org.mockito.ArgumentMatchers.eq(LearningCategory.MOBILE),
+              any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenCategoryIsNotAValidEnumValue")
+    void shouldRejectUnknownCategory() throws Exception {
+      // EP: category phải là một hằng số của LearningCategory. Bỏ qua giá trị lạ rồi trả về toàn
+      // bộ Thư viện sẽ trông y hệt một bộ lọc hỏng — người dùng bấm tab và thấy mọi thứ.
+      mockMvc
+          .perform(authed(get(BOOKS_URL)).param("category", "KHONG_CO_THAT"))
+          .andExpect(status().isBadRequest());
     }
 
     @Test
     @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
     void shouldPassParamsThrough() throws Exception {
       // Given
-      when(bookService.getLibraryPage(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+      when(bookService.getLibraryPage(any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
           .thenReturn(new BookPageResponseDto(List.of(), null, false));
 
       // When
@@ -543,7 +582,10 @@ class BookControllerTest {
       // Then
       verify(bookService)
           .getLibraryPage(
-              org.mockito.ArgumentMatchers.eq(20), org.mockito.ArgumentMatchers.eq(5), any());
+              org.mockito.ArgumentMatchers.eq(20),
+              org.mockito.ArgumentMatchers.eq(5),
+              org.mockito.ArgumentMatchers.isNull(),
+              any());
     }
 
     @Test
@@ -562,6 +604,65 @@ class BookControllerTest {
       // /books/author/{id} is guest-readable because it is a section of a public profile; the
       // whole catalogue is not part of any profile.
       mockMvc.perform(get(BOOKS_URL)).andExpect(status().isUnauthorized());
+    }
+  }
+
+  // =====================================================================
+  // GET /v1/api/books/purchased  (FE docs/backend-plan.md B37 — the "Sách đã mua" tab)
+  // =====================================================================
+
+  @Nested
+  @DisplayName("GET /v1/api/books/purchased")
+  class GetPurchasedBooksTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndCursorPage_happyPath")
+    void shouldReturnCursorPage() throws Exception {
+      // Given
+      when(bookService.getPurchasedPage(eq(currentUser.getId()), any(), anyInt()))
+          .thenReturn(
+              new BookPageResponseDto(
+                  List.of(BookResponseDto.builder().id(31).title("Effective Java").build()),
+                  31,
+                  true));
+
+      // When / Then — same {items, nextCursor, hasMore} contract as /books
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.items[0].id").value(31))
+          .andExpect(jsonPath("$.nextCursor").value(31))
+          .andExpect(jsonPath("$.hasMore").value(true));
+    }
+
+    @Test
+    @DisplayName("shouldPassCursorAndLimitThrough_whenProvided")
+    void shouldPassParamsThrough() throws Exception {
+      // Given
+      when(bookService.getPurchasedPage(eq(currentUser.getId()), any(), anyInt()))
+          .thenReturn(new BookPageResponseDto(List.of(), null, false));
+
+      // When
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")).param("cursor", "20").param("limit", "5"))
+          .andExpect(status().isOk());
+
+      // Then
+      verify(bookService).getPurchasedPage(currentUser.getId(), 20, 5);
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitExceedsTheCap_boundary")
+    void shouldRejectLimitAboveCap() throws Exception {
+      mockMvc
+          .perform(authed(get(BOOKS_URL + "/purchased")).param("limit", "51"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledWithNoAuthorizationHeader")
+    void shouldReturn401_whenCalledWithNoAuthorizationHeader() throws Exception {
+      mockMvc.perform(get(BOOKS_URL + "/purchased")).andExpect(status().isUnauthorized());
     }
   }
 }

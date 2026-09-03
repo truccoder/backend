@@ -3,6 +3,7 @@ package com.socialapp.posts.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -244,12 +245,13 @@ class PostQueryServiceTest {
       when(blockQueryService.blockedPairIds(VIEWER_ID)).thenReturn(Set.of());
       ArgumentCaptor<java.util.Collection<Integer>> excluded =
           ArgumentCaptor.forClass(java.util.Collection.class);
-      when(postRepository.findPublicFeed(excluded.capture(), eq(null), any(Pageable.class)))
+      when(postRepository.findPublicFeed(
+              excluded.capture(), eq(null), eq(null), any(Pageable.class)))
           .thenReturn(List.of());
       when(feedPostDataMapper.toFeedPostDataPage(anyList())).thenReturn(List.of());
 
       // When
-      postQueryService.getPublicFeed(VIEWER_ID, null, 20);
+      postQueryService.getPublicFeed(VIEWER_ID, null, null, 20);
 
       // Then
       assertThat(excluded.getValue()).containsExactly(-1);
@@ -262,15 +264,52 @@ class PostQueryServiceTest {
       when(blockQueryService.blockedPairIds(VIEWER_ID)).thenReturn(Set.of(7, 8));
       ArgumentCaptor<java.util.Collection<Integer>> excluded =
           ArgumentCaptor.forClass(java.util.Collection.class);
-      when(postRepository.findPublicFeed(excluded.capture(), eq(null), any(Pageable.class)))
+      when(postRepository.findPublicFeed(
+              excluded.capture(), eq(null), eq(null), any(Pageable.class)))
           .thenReturn(List.of());
       when(feedPostDataMapper.toFeedPostDataPage(anyList())).thenReturn(List.of());
 
       // When
-      postQueryService.getPublicFeed(VIEWER_ID, null, 20);
+      postQueryService.getPublicFeed(VIEWER_ID, null, null, 20);
 
       // Then
       assertThat(excluded.getValue()).containsExactlyInAnyOrder(7, 8);
+    }
+
+    @Test
+    @DisplayName("folds the hashtag filter before it reaches the query (#ReactHooks -> reacthooks)")
+    void normalizesHashtag() {
+      // Given
+      when(blockQueryService.blockedPairIds(VIEWER_ID)).thenReturn(Set.of());
+      ArgumentCaptor<String> hashtag = ArgumentCaptor.forClass(String.class);
+      when(postRepository.findPublicFeed(
+              anyCollection(), eq(null), hashtag.capture(), any(Pageable.class)))
+          .thenReturn(List.of());
+      when(feedPostDataMapper.toFeedPostDataPage(anyList())).thenReturn(List.of());
+
+      // When
+      postQueryService.getPublicFeed(VIEWER_ID, null, "#ReactHooks", 20);
+
+      // Then
+      assertThat(hashtag.getValue()).isEqualTo("reacthooks");
+    }
+
+    @Test
+    @DisplayName("a hashtag that folds to nothing is passed as null, i.e. no filter")
+    void blankHashtagBecomesNull() {
+      // Given
+      when(blockQueryService.blockedPairIds(VIEWER_ID)).thenReturn(Set.of());
+      ArgumentCaptor<String> hashtag = ArgumentCaptor.forClass(String.class);
+      when(postRepository.findPublicFeed(
+              anyCollection(), eq(null), hashtag.capture(), any(Pageable.class)))
+          .thenReturn(List.of());
+      when(feedPostDataMapper.toFeedPostDataPage(anyList())).thenReturn(List.of());
+
+      // When
+      postQueryService.getPublicFeed(VIEWER_ID, null, "  #  ", 20);
+
+      // Then
+      assertThat(hashtag.getValue()).isNull();
     }
   }
 }

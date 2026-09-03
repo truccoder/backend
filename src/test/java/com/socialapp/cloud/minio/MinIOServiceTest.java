@@ -1,6 +1,7 @@
 package com.socialapp.cloud.minio;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -22,11 +23,18 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.socialapp.common.exception.StorageException;
+
 import io.minio.BucketExistsArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.Result;
 import io.minio.SetBucketPolicyArgs;
+import io.minio.StatObjectArgs;
+import io.minio.StatObjectResponse;
+import io.minio.errors.ErrorResponseException;
+import io.minio.errors.ServerException;
+import io.minio.messages.ErrorResponse;
 import io.minio.messages.Item;
 
 /**
@@ -122,6 +130,87 @@ class MinIOServiceTest {
       verify(minioClient).putObject(putObjectCaptor.capture());
       assertThat(putObjectCaptor.getValue().bucket()).isEqualTo(BUCKET);
       verify(minioClient, never()).makeBucket(any());
+    }
+  }
+
+  // =====================================================================
+  // objectExists
+  // =====================================================================
+
+  @Nested
+  @DisplayName("objectExists")
+  class ObjectExistsTests {
+
+    @Test
+    @DisplayName("should return true when statObject succeeds")
+    void shouldReturnTrue_whenObjectIsThere() throws Exception {
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenReturn(mock(StatObjectResponse.class));
+
+      assertThat(minIOService.objectExists(BUCKET, OBJECT)).isTrue();
+    }
+
+    @Test
+    @DisplayName("should return false when MinIO answers NoSuchKey")
+    void shouldReturnFalse_whenObjectIsAbsent() throws Exception {
+      ErrorResponse notFound =
+          new ErrorResponse(
+              "NoSuchKey", "The specified key does not exist.", BUCKET, OBJECT, null, null, null);
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ErrorResponseException(notFound, null, null));
+
+      assertThat(minIOService.objectExists(BUCKET, OBJECT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("should raise StorageException when the stat call itself fails")
+    void shouldThrowStorageException_whenStatFails() throws Exception {
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ServerException("Internal error", 500, "trace-id"));
+
+      assertThatThrownBy(() -> minIOService.objectExists(BUCKET, OBJECT))
+          .isInstanceOf(StorageException.class);
+    }
+  }
+
+  // =====================================================================
+  // objectSize
+  // =====================================================================
+
+  @Nested
+  @DisplayName("objectSize")
+  class ObjectSizeTests {
+
+    @Test
+    @DisplayName("returns the stored size when the object is there")
+    void returnsSize_whenObjectIsThere() throws Exception {
+      StatObjectResponse response = mock(StatObjectResponse.class);
+      when(response.size()).thenReturn(4096L);
+      when(minioClient.statObject(any(StatObjectArgs.class))).thenReturn(response);
+
+      assertThat(minIOService.objectSize(BUCKET, OBJECT)).isEqualTo(4096L);
+    }
+
+    @Test
+    @DisplayName("returns -1 when MinIO answers NoSuchKey")
+    void returnsMinusOne_whenObjectIsAbsent() throws Exception {
+      ErrorResponse notFound =
+          new ErrorResponse(
+              "NoSuchKey", "The specified key does not exist.", BUCKET, OBJECT, null, null, null);
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ErrorResponseException(notFound, null, null));
+
+      assertThat(minIOService.objectSize(BUCKET, OBJECT)).isEqualTo(-1L);
+    }
+
+    @Test
+    @DisplayName("raises StorageException when the stat call itself fails")
+    void throwsStorageException_whenStatFails() throws Exception {
+      when(minioClient.statObject(any(StatObjectArgs.class)))
+          .thenThrow(new ServerException("Internal error", 500, "trace-id"));
+
+      assertThatThrownBy(() -> minIOService.objectSize(BUCKET, OBJECT))
+          .isInstanceOf(StorageException.class);
     }
   }
 

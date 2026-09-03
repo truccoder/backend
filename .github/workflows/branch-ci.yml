@@ -12,6 +12,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Hai bước validate đứng TRƯỚC checkout và setup-java một cách cố ý. Chúng chỉ cần
+      # GITHUB_REF và payload của event, không cần mã nguồn lẫn JDK — mà setup-java còn khôi phục
+      # cache Gradle, tức là vài phút. Đặt sau, một commit message sai định dạng phải chờ hết chỗ
+      # đó rồi mới được báo đỏ.
+      - name: Validate branch name
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "Branch: $BRANCH_NAME"
+
+          # Bỏ qua việc kiểm tra nếu đang ở nhánh main
+          if [[ "$BRANCH_NAME" == "main" ]]; then
+            echo "Skipping branch name validation for main branch."
+            exit 0
+          fi
+
+          if [[ ! "$BRANCH_NAME" =~ ^task\/[A-Za-z0-9]+.*$ ]]; then
+            echo "❌ Invalid branch name format."
+            exit 1
+          fi
+
+      # ⚠️ COMMIT_MSG phải đi qua `env`, KHÔNG được viết COMMIT_MSG="${{ github.event... }}".
+      #
+      # Cách cũ dán thẳng nội dung message vào script trước khi bash đọc. Một message chứa dấu
+      # backtick — ví dụ "make `docker compose up` enough for MinIO" — nằm trong nháy kép là
+      # command substitution: runner chạy thật lệnh đó, ngay trong repo vừa checkout, rồi treo cho
+      # tới khi hết giờ job. Đó không phải lỗi lý thuyết, nó đã xảy ra ngày 2026-08-26 và kéo theo
+      # `wait-for-branch-ci` bên pr.yml đỏ vì timeout.
+      #
+      # Qua `env` thì bash chỉ thấy một biến môi trường và không phân tích lại nội dung của nó.
+      - name: Validate commit message
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          echo "Commit message: $COMMIT_MSG"
+
+          if [[ ! "$COMMIT_MSG" =~ ^\[[A-Za-z0-9]+\] ]]; then
+            echo "❌ Invalid commit message format."
+            exit 1
+          fi
+
       - name: Checkout source
         uses: actions/checkout@v4
 
@@ -21,33 +61,6 @@ jobs:
           distribution: temurin
           java-version: 17
           cache: gradle
-
-      - name: Validate branch name
-        run: |
-          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          echo "Branch: $BRANCH_NAME"
-          
-          # Bỏ qua việc kiểm tra nếu đang ở nhánh main
-          if [[ "$BRANCH_NAME" == "main" ]]; then
-            echo "Skipping branch name validation for main branch."
-            exit 0
-          fi
-          
-          if [[ ! "$BRANCH_NAME" =~ ^task\/[A-Za-z0-9]+.*$ ]]; then
-            echo "❌ Invalid branch name format."
-            exit 1
-          fi
-
-      - name: Validate commit message
-        run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
-
-          echo "Commit message: $COMMIT_MSG"
-
-          if [[ ! "$COMMIT_MSG" =~ ^\[[A-Za-z0-9]+\] ]]; then
-            echo "❌ Invalid commit message format."
-            exit 1
-          fi
 
       - name: Grant execute permission
         run: chmod +x gradlew
