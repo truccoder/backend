@@ -153,6 +153,10 @@ class AppealServiceTest {
       // The disputed violation travels with the response so the user's list is readable without
       // a second call per row.
       assertThat(result.getViolationType()).isEqualTo(ViolationType.SPAM);
+      // B50: same "which post" context as UserViolationDto (B47), so the appeal list can say what
+      // is being disputed without a second lookup.
+      assertThat(result.getPostId()).isEqualTo(11);
+      assertThat(result.getPostExcerpt()).isEqualTo("Check out my new project, link in bio!");
     }
 
     @Test
@@ -222,6 +226,9 @@ class AppealServiceTest {
       assertThat(result.getStatus()).isEqualTo(AppealStatus.APPROVED);
       assertThat(result.getReviewerNote()).isEqualTo("You were right");
       assertThat(result.getReviewedAt()).isNotNull();
+      // Nothing left to describe: the disputed violation (and its postId/postExcerpt) is gone.
+      assertThat(result.getPostId()).isNull();
+      assertThat(result.getPostExcerpt()).isNull();
 
       // B44: the appellant is told they won, not left to notice their own appeal list changed.
       verify(notificationService).send(notificationCaptor.capture());
@@ -324,6 +331,8 @@ class AppealServiceTest {
       AppealDto dto = result.getContent().get(0);
       assertThat(dto.getUserFullName()).isEqualTo("Some One");
       assertThat(dto.getViolationType()).isEqualTo(ViolationType.SPAM);
+      assertThat(dto.getPostId()).isEqualTo(11);
+      assertThat(dto.getPostExcerpt()).isEqualTo("Check out my new project, link in bio!");
     }
   }
 }

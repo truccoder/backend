@@ -255,12 +255,15 @@ mạch.
 ## MoMo trong buổi demo
 
 `MomoProperties.requestType` mặc định là **`payWithATM`** — màn hình thẻ, dễ quay video. Trên
-sandbox nó đậu ở resultCode 7002 vĩnh viễn và không bao giờ tự settle, nên ở profile `dev` hãy gọi
+sandbox nó đậu ở resultCode 7002 vĩnh viễn và không bao giờ tự settle, nên hãy gọi
 `POST /v1/api/payments/{transactionRef}/dev-settle` để đưa đơn về `COMPLETED`.
 
-> **Production BẮT BUỘC đặt `MOMO_REQUEST_TYPE=captureWallet`.** `dev-settle` là `@Profile("dev")`
-> nên không tồn tại ở đó; để nguyên mặc định thì mọi đơn hàng thật đậu `PENDING` mãi mãi, và không
-> có gì báo lỗi — đơn vẫn tạo được, người mua vẫn được chuyển sang MoMo.
+> **`dev-settle` không còn mang `@Profile("dev")` (quyết định 2026-09-04)** — nó tồn tại ở mọi
+> profile, kể cả production, để buổi demo không phụ thuộc `SPRING_PROFILES_ACTIVE` đang là gì.
+> Đánh đổi: bất kỳ người dùng đã đăng nhập nào cũng tự đánh dấu đơn mua của họ là `COMPLETED` mà
+> không trả tiền — free sách, ở mọi môi trường triển khai. Nếu vẫn muốn né rủi ro này thì đặt
+> `MOMO_REQUEST_TYPE=captureWallet` để luồng mua tự settle thật trên sandbox, không cần endpoint
+> này nữa.
 
 Bộ seed có **đúng một** giao dịch `PENDING` mới tinh, để chạy được nhánh từ chối mua lại
 (`PENDING_PAYMENT_STALE_MINUTES = 15`). Nó cố ý nằm ở một quyển **không** thuộc kịch bản demo:

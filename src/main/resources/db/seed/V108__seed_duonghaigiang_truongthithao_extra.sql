@@ -9,13 +9,17 @@
 --
 -- Bao phủ: bài viết đủ 8 PostType × 3 PostVisibility, thêm bạn bè (Postgres + Neo4j, xem
 -- friend-graph.cypher), thêm dự án đã đăng (đủ ba ProjectStatus) và dự án đã tham gia (đủ bốn
--- ApplicationStatus), thêm sách đã đăng + đã mua, thêm bản giải thích AI (Kho lưu trữ), thêm vi
+-- ApplicationStatus), thêm sách đã đăng + đã mua + đánh giá (cả hai chiều: người khác đánh giá
+-- sách mới đăng, 9001/9133 đánh giá sách đã mua), thêm bản giải thích AI (Kho lưu trữ), thêm vi
 -- phạm và khiếu nại (đủ ba AppealStatus).
 --
 -- KHÔNG bao phủ ở đây (cần bước ngoài Flyway, xem ghi chú cuối file):
 --   · Đồ thị bạn bè Neo4j — cạnh mới đã được thêm vào friend-graph.cypher, cần
 --     NEO4J_SEED_ON_START=true ở lần khởi động kế tiếp (hoặc nạp tay bằng cypher-shell).
 --   · Chat Stream — cần chạy lại scripts/seed/seed-stream-chat.mjs (có key Stream thật).
+--   · Object MinIO của 6 quyển sách mới (bìa/nội dung/preview) — key đã khai trong
+--     seed-manifest.tsv, cần `docker compose up minio-seed-objects minio-init` lại (dev) hoặc
+--     bước tương đương ở production để MinIOSeedObjectInitializer nạp chúng.
 -- =============================================================================================
 
 SET LOCAL statement_timeout = 0;
@@ -34,7 +38,8 @@ SET LOCAL statement_timeout = 0;
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 
 -- EVENT
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, event_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, event_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Buổi chia sẻ: Vận hành PostgreSQL ở quy mô lớn — 30 phút trình bày, 30 phút hỏi đáp, đăng ký sớm còn chỗ nhé cả nhà.',
      'PUBLIC', 9001, 'EVENT', 'APPROVED',
      '{"eventTitle":"Vận hành PostgreSQL ở quy mô lớn","eventDescription":"Chia sẻ kinh nghiệm đánh index và giao dịch cho hệ thống chịu tải cao.","startTime":"2026-10-10T18:30:00+07:00","endTime":"2026-10-10T21:00:00+07:00","timezone":"Asia/Ho_Chi_Minh","location":"Toà nhà Innovation Hub, Quận 1","onlineUrl":null,"maxAttendees":60}'::jsonb,
@@ -58,10 +63,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Cà phê cuối tuần với vài đồng nghiệp cũ, bàn chuyện chuyển sang Kotlin Multiplatform.',
      'PRIVATE', 9133, 'EVENT', 'APPROVED',
      '{"eventTitle":"Cà phê Kotlin Multiplatform","eventDescription":"Trao đổi kinh nghiệm chia sẻ code giữa Android và iOS.","startTime":"2026-11-12T09:00:00+07:00","endTime":"2026-11-12T11:00:00+07:00","timezone":"Asia/Ho_Chi_Minh","location":"Quán cà phê góc đường Nguyễn Huệ","onlineUrl":null,"maxAttendees":8}'::jsonb,
-     now() - INTERVAL '3 days', now() - INTERVAL '3 days');
+     now() - INTERVAL '3 days', now() - INTERVAL '3 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, event_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- CODE_SNIPPET (bài PUBLIC của 9001 cố ý REJECTED — mục tiêu vi phạm ở mục 11)
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, code_snippet_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, code_snippet_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Đoạn cấu hình connection pool Hikari mình dùng cho service chịu tải cao, chia sẻ cho ai đang tối ưu tương tự.',
      'PUBLIC', 9001, 'CODE_SNIPPET', 'REJECTED',
      '{"language":"yaml","code":"spring:\n  datasource:\n    hikari:\n      maximum-pool-size: 30\n      minimum-idle: 10\n      connection-timeout: 3000\n      statement-timeout: 15000"}'::jsonb,
@@ -85,10 +96,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Ghi riêng: cấu hình ProGuard tạm thời để build release không lỗi, cần dọn lại sau.',
      'PRIVATE', 9133, 'CODE_SNIPPET', 'APPROVED',
      '{"language":"groovy","code":"proguardFiles getDefaultProguardFile(\"proguard-android-optimize.txt\"), \"proguard-rules.pro\""}'::jsonb,
-     now() - INTERVAL '6 days', now() - INTERVAL '6 days');
+     now() - INTERVAL '6 days', now() - INTERVAL '6 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, code_snippet_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- ARTICLE
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, article_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, article_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Vì sao service của mình chuyển từ REST thuần sang thêm một lớp CQRS cho phần đọc báo cáo. Bài dài, có ví dụ thật.',
      'PUBLIC', 9001, 'ARTICLE', 'APPROVED',
      '{"title":"Khi nào đáng tách CQRS cho phần đọc","coverImage":null,"summary":"Ghi lại quyết định tách mô hình đọc/ghi sau khi báo cáo tổng hợp làm chậm cả API ghi."}'::jsonb,
@@ -112,10 +129,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Ghi chú riêng: so sánh Flutter và Kotlin Multiplatform cho dự án cá nhân sắp tới của mình.',
      'PRIVATE', 9133, 'ARTICLE', 'APPROVED',
      '{"title":"Flutter hay Kotlin Multiplatform cho dự án riêng","coverImage":null,"summary":"Cân nhắc giữa tốc độ phát triển và mức độ chia sẻ code gốc."}'::jsonb,
-     now() - INTERVAL '11 days', now() - INTERVAL '11 days');
+     now() - INTERVAL '11 days', now() - INTERVAL '11 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, article_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- QNA (bài FRIENDS của cả hai cố ý PENDING_REVIEW — hàng đợi kiểm duyệt có việc)
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, qna_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, qna_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Có ai từng gặp deadlock khi hai transaction cùng cập nhật ngược thứ tự hai bảng chưa? Đã thử sắp lại thứ tự lock nhưng vẫn thỉnh thoảng dính.',
      'PUBLIC', 9001, 'QNA', 'APPROVED',
      '{"isResolved":false,"bountyPoints":50,"acceptedAnswerId":null}'::jsonb,
@@ -139,10 +162,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Ghi chú riêng: đã thử ba cách khác nhau để giữ trạng thái cuộn khi xoay màn hình, cách thứ ba mới ổn.',
      'PRIVATE', 9133, 'QNA', 'APPROVED',
      '{"isResolved":true,"bountyPoints":0,"acceptedAnswerId":null}'::jsonb,
-     now() - INTERVAL '21 days', now() - INTERVAL '21 days');
+     now() - INTERVAL '21 days', now() - INTERVAL '21 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, qna_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- POLL
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, poll_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, poll_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Team backend hỏi nhanh: dự án của bạn đang dùng gì để quản lý migration?',
      'PUBLIC', 9001, 'POLL', 'APPROVED',
      '{"question":"Dự án của bạn đang dùng gì để quản lý migration?","options":[{"id":1,"text":"Flyway","votesCount":41},{"id":2,"text":"Liquibase","votesCount":12},{"id":3,"text":"Tự viết script","votesCount":8},{"id":4,"text":"Không dùng gì cả","votesCount":3}],"allowMultipleVotes":false,"endDate":"2026-10-30T23:59:59+07:00"}'::jsonb,
@@ -166,10 +195,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Khảo sát riêng: nên đặt tên package theo tính năng hay theo tầng kiến trúc?',
      'PRIVATE', 9133, 'POLL', 'APPROVED',
      '{"question":"Nên đặt tên package theo tính năng hay theo tầng?","options":[{"id":1,"text":"Theo tính năng","votesCount":3},{"id":2,"text":"Theo tầng kiến trúc","votesCount":1}],"allowMultipleVotes":false,"endDate":"2026-12-10T23:59:59+07:00"}'::jsonb,
-     now() - INTERVAL '7 days', now() - INTERVAL '7 days');
+     now() - INTERVAL '7 days', now() - INTERVAL '7 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, poll_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- LINK (bài PUBLIC của 9133 cố ý REJECTED — mục tiêu vi phạm ở mục 11)
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, link_details, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, link_details, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Đọc được bài này về connection pooling khá hay, để dành đọc lại.',
      'PUBLIC', 9001, 'LINK', 'APPROVED',
      '{"url":"https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing","title":"About Pool Sizing — HikariCP wiki","description":"Công thức ước lượng kích thước connection pool hợp lý theo số lõi CPU.","thumbnailUrl":null}'::jsonb,
@@ -193,10 +228,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Lưu riêng: bài viết về App Thinning cho iOS, để đọc kỹ hơn sau.',
      'PRIVATE', 9133, 'LINK', 'APPROVED',
      '{"url":"https://developer.apple.com/documentation/xcode/reducing-your-app-s-size","title":"Reducing your app''s size — Apple Developer","description":"Tài liệu chính thức của Apple về giảm dung lượng ứng dụng.","thumbnailUrl":null}'::jsonb,
-     now() - INTERVAL '10 days', now() - INTERVAL '10 days');
+     now() - INTERVAL '10 days', now() - INTERVAL '10 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, link_details, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- BOOK (bài giới thiệu, KHÔNG kèm t_books — sách đăng bán nằm riêng ở mục 8)
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Vừa đọc xong một cuốn về Vận hành PostgreSQL ở quy mô lớn, kinh nghiệm thực chiến rất đáng đọc.',
      'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '20 days', now() - INTERVAL '20 days'),
     ('Giới thiệu riêng nhóm: cuốn sách về thiết kế API bền vững, ai đang làm backend nên đọc.',
@@ -208,10 +249,16 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Giới thiệu riêng nhóm Mobile: cuốn sách về Kotlin Multiplatform, đội mình đang tham khảo.',
      'FRIENDS', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '41 days', now() - INTERVAL '41 days'),
     ('Ghi riêng: sách cần đọc tiếp về kiến trúc offline-first.',
-     'PRIVATE', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '2 days', now() - INTERVAL '2 days');
+     'PRIVATE', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '2 days', now() - INTERVAL '2 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- REGULAR (bài PUBLIC của cả hai cố ý REJECTED — mục tiêu vi phạm ở mục 11)
-INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, created_at, updated_at) VALUES
+INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
+SELECT * FROM (VALUES
     ('Vừa dọn xong một chuỗi liên kết quảng cáo lặp lại nhiều lần trong nhóm, mọi người cẩn thận với các đường dẫn này nhé.',
      'PUBLIC', 9001, 'REGULAR', 'REJECTED', now() - INTERVAL '3 days', now() - INTERVAL '3 days'),
     ('Riêng tư: ghi lại quyết định kiến trúc của quý này để sau còn nhớ vì sao chọn hướng đó.',
@@ -223,7 +270,12 @@ INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, modera
     ('Riêng tư nhóm: ghi lại lý do đội chọn Jetpack Compose thay vì tiếp tục XML layout.',
      'FRIENDS', 9133, 'REGULAR', 'APPROVED', now() - INTERVAL '52 days', now() - INTERVAL '52 days'),
     ('Nhắc bản thân: kiểm tra lại kích thước gói cài trước khi phát hành bản tới.',
-     'PRIVATE', 9133, 'REGULAR', 'APPROVED', now() - INTERVAL '2 days', now() - INTERVAL '2 days');
+     'PRIVATE', 9133, 'REGULAR', 'APPROVED', now() - INTERVAL '2 days', now() - INTERVAL '2 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 -- 2. HASHTAG cho các bài mới — tra theo TÊN, không đoán id, vì id hashtag không nằm trong tài
@@ -481,7 +533,16 @@ WITH candidate_9001 AS (
             WHERE a.position_id = pos.id AND a.applicant_id = 9001
        )
      ORDER BY pos.id
-     LIMIT 4
+     -- Chặn ở ĐÚNG bốn đơn TỔNG CỘNG, không phải "bốn đơn MỚI mỗi lần chạy": không có vế trừ đi số
+     -- đã có, mỗi lần chạy lại sẽ chọn bốn vị trí TIẾP THEO (NOT EXISTS chỉ chặn nộp trùng vào
+     -- CÙNG một vị trí, không chặn việc có thêm đơn mới) — xác minh bằng tay đã thấy 9001 có 16 đơn
+     -- sau vài lần chạy thay vì 4.
+     LIMIT GREATEST(0, 4 - (
+         SELECT COUNT(*) FROM socialapp.t_project_applications a
+           JOIN socialapp.t_project_positions pos2 ON pos2.id = a.position_id
+           JOIN socialapp.t_projects proj2 ON proj2.id = pos2.project_id
+          WHERE a.applicant_id = 9001 AND proj2.id BETWEEN 4001 AND 4050
+     ))
 ),
 status_map AS (SELECT * FROM (VALUES (1,'PENDING'),(2,'ACCEPTED'),(3,'REJECTED'),(4,'REMOVED')) AS v(rn, status))
 INSERT INTO socialapp.t_project_applications (project_id, position_id, applicant_id, message, status, created_at, updated_at)
@@ -507,7 +568,14 @@ WITH candidate_9133 AS (
             WHERE a.position_id = pos.id AND a.applicant_id = 9133
        )
      ORDER BY pos.id DESC
-     LIMIT 4
+     -- Cùng lý do chặn tổng ở khối 9001 phía trên: không trừ đi số đã có thì mỗi lần chạy lại chọn
+     -- thêm bốn vị trí mới thay vì dừng ở bốn.
+     LIMIT GREATEST(0, 4 - (
+         SELECT COUNT(*) FROM socialapp.t_project_applications a
+           JOIN socialapp.t_project_positions pos2 ON pos2.id = a.position_id
+           JOIN socialapp.t_projects proj2 ON proj2.id = pos2.project_id
+          WHERE a.applicant_id = 9133 AND proj2.id BETWEEN 4001 AND 4050
+     ))
 ),
 status_map AS (SELECT * FROM (VALUES (1,'PENDING'),(2,'ACCEPTED'),(3,'REJECTED'),(4,'REMOVED')) AS v(rn, status))
 INSERT INTO socialapp.t_project_applications (project_id, position_id, applicant_id, message, status, created_at, updated_at)
@@ -524,59 +592,82 @@ SELECT setval(pg_get_serial_sequence('socialapp.t_project_applications', 'id'),
               GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_project_applications), 1), true);
 
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
--- 6. SÁCH — ba đầu sách đăng bán mỗi tài khoản, cộng bốn giao dịch mua mỗi tài khoản.
+-- 6. SÁCH — ba đầu sách đăng bán mỗi tài khoản, cộng bốn giao dịch mua mỗi tài khoản, cộng đánh
+--    giá cho cả hai chiều (người khác đánh giá sách mới đăng; 9001/9133 đánh giá sách đã mua).
 --
--- CÁC CỘT *_key mượn NGUYÊN VẸN từ sách 3001 (miễn phí) và 3002 (có phí) — hai id mốc tài liệu
--- hoá trong README ("Sách mốc") — thay vì khai object MinIO mới: seed này không đi kèm bước nạp
--- MinIO, và một key trỏ tới object không tồn tại tệ hơn NULL (xem quy ước ở README).
+-- SÁU QUYỂN NÀY LÀ SÁCH THẬT (cùng quy ước "SÁCH LÀ SÁCH THẬT, BÌA LÀ BÌA THẬT" của V85):
+-- author_id là NGƯỜI ĐĂNG lên gian sách, không phải tác giả — same as toàn bộ danh mục V85. ISBN
+-- tra qua Open Library (dùng đúng tham số ?default=false, xem crawl kèm request này), bìa tải từ
+-- covers.openlibrary.org. Bản đầu của mục này BỊA tên sách tiếng Việt rồi mượn key/bìa của sách
+-- 3001/3002 — sai và trùng lặp (ba quyển khác nhau cùng hiện bìa Clean Code / The Go Programming
+-- Language). Bản này thay bằng sáu quyển thật cùng chủ đề, mỗi quyển một bìa thật của chính nó.
+-- Nội dung file (PDF/EPUB) vẫn là tài liệu mẫu một trang — như mọi quyển KHÔNG có mặt trong
+-- book-previews.json (chỉ 80 quyển gốc của V85 được crawl sẵn) — không phải trang trắng, không
+-- phải bản sao có bản quyền.
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 
 INSERT INTO socialapp.t_posts (content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
-VALUES
-    ('Mới đăng sách: Kiến trúc Hexagonal cho hệ thống Spring Boot.', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '18 days', now() - INTERVAL '18 days'),
-    ('Mới đăng sách: Vận hành PostgreSQL ở quy mô lớn (bản miễn phí).', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '23 days', now() - INTERVAL '23 days'),
-    ('Mới đăng sách: Thiết kế API bền vững cho hệ thống phân tán.', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '27 days', now() - INTERVAL '27 days'),
-    ('Mới đăng sách: Jetpack Compose thực chiến.', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '19 days', now() - INTERVAL '19 days'),
-    ('Mới đăng sách: Kiến trúc offline-first cho ứng dụng di động (bản miễn phí).', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '24 days', now() - INTERVAL '24 days'),
-    ('Mới đăng sách: Kotlin Multiplatform trong dự án thật.', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '31 days', now() - INTERVAL '31 days');
+SELECT * FROM (VALUES
+    ('Mới đăng sách: Get Your Hands Dirty on Clean Architecture — về kiến trúc Hexagonal cho hệ thống Spring Boot.', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '18 days', now() - INTERVAL '18 days'),
+    ('Mới đăng sách: PostgreSQL Administration Cookbook (bản miễn phí) — vận hành PostgreSQL ở quy mô lớn.', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '23 days', now() - INTERVAL '23 days'),
+    ('Mới đăng sách: RESTful Web APIs — thiết kế API bền vững cho hệ thống phân tán.', 'PUBLIC', 9001, 'BOOK', 'APPROVED', now() - INTERVAL '27 days', now() - INTERVAL '27 days'),
+    ('Mới đăng sách: Android UI Development with Jetpack Compose — Jetpack Compose thực chiến.', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '19 days', now() - INTERVAL '19 days'),
+    ('Mới đăng sách: Building Progressive Web Apps (bản miễn phí) — nhiều kỹ thuật offline-first áp dụng được cho cả mobile.', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '24 days', now() - INTERVAL '24 days'),
+    ('Mới đăng sách: Simplifying Application Development with Kotlin Multiplatform Mobile.', 'PUBLIC', 9133, 'BOOK', 'APPROVED', now() - INTERVAL '31 days', now() - INTERVAL '31 days')
+) AS v(content, visibility, author_id, post_type, moderation_status, created_at, updated_at)
+WHERE NOT EXISTS (
+    SELECT 1 FROM socialapp.t_posts existing
+     WHERE existing.author_id = v.author_id AND existing.content = v.content
+);
 
 INSERT INTO socialapp.t_books
     (author_id, post_id, title, description, file_key, cover_image_key, preview_file_key,
      file_format, file_size_bytes, total_pages, preview_pages, price, currency, is_free,
      download_count, avg_rating, review_count, category, created_at, updated_at)
 SELECT b.author_id, p.id, b.title, b.description,
-       src.file_key, src.cover_image_key, src.preview_file_key, src.file_format,
-       src.file_size_bytes, src.total_pages, src.preview_pages,
-       b.price, 'VND', b.is_free, 0, 0.0, 0, b.category,
+       b.file_key, b.cover_key, b.preview_key, b.format,
+       b.size_bytes, b.total_pages, 1, b.price, 'VND', b.is_free, 0, 0.0, 0, b.category,
        now() - INTERVAL '18 days', now() - INTERVAL '18 days'
   FROM (VALUES
-      (9001, 'Mới đăng sách: Kiến trúc Hexagonal cho hệ thống Spring Boot.',
-       'Kiến trúc Hexagonal cho hệ thống Spring Boot',
-       'Ghi lại cách tách phần lõi nghiệp vụ khỏi framework, để đổi database hay đổi giao thức không đụng tới logic chính.',
-       149000::bigint, FALSE, 'BACKEND'::text, 3002),
-      (9001, 'Mới đăng sách: Vận hành PostgreSQL ở quy mô lớn (bản miễn phí).',
-       'Vận hành PostgreSQL ở quy mô lớn',
-       'Kinh nghiệm đánh index, giao dịch và sao lưu cho hệ thống chịu tải cao.',
-       0::bigint, TRUE, 'BACKEND'::text, 3001),
-      (9001, 'Mới đăng sách: Thiết kế API bền vững cho hệ thống phân tán.',
-       'Thiết kế API bền vững cho hệ thống phân tán',
-       'Đặt tên tài nguyên, xử lý lỗi nhất quán và phân trang kiểu cursor.',
-       199000::bigint, FALSE, 'BACKEND'::text, 3002),
-      (9133, 'Mới đăng sách: Jetpack Compose thực chiến.',
-       'Jetpack Compose thực chiến',
-       'Từ state hoisting tới recomposition có chọn lọc, kèm ví dụ thực tế.',
-       179000::bigint, FALSE, 'MOBILE'::text, 3002),
-      (9133, 'Mới đăng sách: Kiến trúc offline-first cho ứng dụng di động (bản miễn phí).',
-       'Kiến trúc offline-first cho ứng dụng di động',
-       'Ghi trước, đồng bộ sau, và cách giải quyết xung đột dữ liệu giữa nhiều thiết bị.',
-       0::bigint, TRUE, 'MOBILE'::text, 3001),
-      (9133, 'Mới đăng sách: Kotlin Multiplatform trong dự án thật.',
-       'Kotlin Multiplatform trong dự án thật',
-       'Chia sẻ logic giữa Android và iOS mà không đánh đổi trải nghiệm gốc.',
-       159000::bigint, FALSE, 'MOBILE'::text, 3002)
-  ) AS b(author_id, post_content, title, description, price, is_free, category, source_book_id)
+      (9001, 'Mới đăng sách: Get Your Hands Dirty on Clean Architecture — về kiến trúc Hexagonal cho hệ thống Spring Boot.',
+       'Get Your Hands Dirty on Clean Architecture',
+       'Get Your Hands Dirty on Clean Architecture — Tom Hombergs. Tách phần lõi nghiệp vụ khỏi framework trong một ứng dụng Spring Boot mẫu, để đổi database hay đổi giao thức không đụng tới logic chính.',
+       'books/9001/9781839211966.pdf', 'covers/9001/9781839211966.jpg',
+       'previews/9001/9781839211966-preview.pdf', 'PDF'::text,
+       3_150_000::bigint, 268, 149000::bigint, FALSE, 'BACKEND'::text),
+      (9001, 'Mới đăng sách: PostgreSQL Administration Cookbook (bản miễn phí) — vận hành PostgreSQL ở quy mô lớn.',
+       'PostgreSQL Administration Cookbook, 9.5/9.6 Edition',
+       'PostgreSQL Administration Cookbook, 9.5/9.6 Edition — Simon Riggs, Gianni Ciolli, Gabriele Bartolini. Kinh nghiệm đánh index, giao dịch và sao lưu cho hệ thống chịu tải cao.',
+       'books/9001/9781785883187.epub', 'covers/9001/9781785883187.jpg',
+       'previews/9001/9781785883187-preview.epub', 'EPUB'::text,
+       2_480_000::bigint, 210, 0::bigint, TRUE, 'BACKEND'::text),
+      (9001, 'Mới đăng sách: RESTful Web APIs — thiết kế API bền vững cho hệ thống phân tán.',
+       'RESTful Web APIs: Services for a Changing World',
+       'RESTful Web APIs: Services for a Changing World — Leonard Richardson, Michael Amundsen, Sam Ruby. Đặt tên tài nguyên, xử lý lỗi nhất quán và phân trang kiểu cursor.',
+       'books/9001/9781449358068.pdf', 'covers/9001/9781449358068.jpg',
+       'previews/9001/9781449358068-preview.pdf', 'PDF'::text,
+       4_020_000::bigint, 302, 199000::bigint, FALSE, 'BACKEND'::text),
+      (9133, 'Mới đăng sách: Android UI Development with Jetpack Compose — Jetpack Compose thực chiến.',
+       'Android UI Development with Jetpack Compose',
+       'Android UI Development with Jetpack Compose — Thomas Künneth. Từ state hoisting tới recomposition có chọn lọc, kèm ví dụ thực tế.',
+       'books/9133/9781801812160.epub', 'covers/9133/9781801812160.jpg',
+       'previews/9133/9781801812160-preview.epub', 'EPUB'::text,
+       3_640_000::bigint, 256, 179000::bigint, FALSE, 'MOBILE'::text),
+      (9133, 'Mới đăng sách: Building Progressive Web Apps (bản miễn phí) — nhiều kỹ thuật offline-first áp dụng được cho cả mobile.',
+       'Building Progressive Web Apps',
+       'Building Progressive Web Apps: Bringing the Power of Native to the Browser — Tal Ater. Ghi trước, đồng bộ sau, và cách giải quyết xung đột dữ liệu khi mất mạng.',
+       'books/9133/9781491961650.pdf', 'covers/9133/9781491961650.jpg',
+       'previews/9133/9781491961650-preview.pdf', 'PDF'::text,
+       2_910_000::bigint, 188, 0::bigint, TRUE, 'MOBILE'::text),
+      (9133, 'Mới đăng sách: Simplifying Application Development with Kotlin Multiplatform Mobile.',
+       'Simplifying Application Development with Kotlin Multiplatform Mobile',
+       'Simplifying Application Development with Kotlin Multiplatform Mobile — Robert Nagy. Chia sẻ logic giữa Android và iOS mà không đánh đổi trải nghiệm gốc.',
+       'books/9133/9781801812580.epub', 'covers/9133/9781801812580.jpg',
+       'previews/9133/9781801812580-preview.epub', 'EPUB'::text,
+       3_320_000::bigint, 231, 159000::bigint, FALSE, 'MOBILE'::text)
+  ) AS b(author_id, post_content, title, description, file_key, cover_key, preview_key, format,
+         size_bytes, total_pages, price, is_free, category)
   JOIN socialapp.t_posts p ON p.content = b.post_content
-  JOIN socialapp.t_books src ON src.id = b.source_book_id
  WHERE NOT EXISTS (SELECT 1 FROM socialapp.t_books existing WHERE existing.post_id = p.id);
 
 WITH candidate_paid_books AS (
@@ -617,6 +708,75 @@ SELECT cb.id, 9133, cb.price, 'VND', sm.status, 'SEED-EXTRA-' || cb.id || '-9133
  WHERE cb.rn <= 4
    AND NOT EXISTS (SELECT 1 FROM socialapp.t_book_purchases bp WHERE bp.book_id = cb.id AND bp.buyer_id = 9133);
 
+-- Đánh giá, chiều 1: bạn bè để lại rating cho ba quyển sách mới đăng của mỗi tài khoản. Tra theo
+-- TIÊU ĐỀ (như t_books ở trên), không đoán id.
+INSERT INTO socialapp.t_book_reviews (book_id, user_id, rating, feedback, created_at, updated_at)
+SELECT b.id, r.reviewer, r.rating, r.feedback,
+       now() - INTERVAL '1 day' * r.age, now() - INTERVAL '1 day' * r.age
+  FROM socialapp.t_books b
+  JOIN (VALUES
+      ('Get Your Hands Dirty on Clean Architecture', 9005, 5,
+       'Tách lõi nghiệp vụ rõ ràng, áp dụng được ngay vào dự án đang làm.', 10),
+      ('Get Your Hands Dirty on Clean Architecture', 9010, 4,
+       'Ví dụ sát thực tế, phần đầu hơi dài dòng.', 14),
+      ('Get Your Hands Dirty on Clean Architecture', 9023, 5,
+       'Đọc lại lần hai vẫn thấy thêm được thứ mới.', 8),
+      ('PostgreSQL Administration Cookbook, 9.5/9.6 Edition', 9044, 5,
+       'Miễn phí mà chất lượng hơn nhiều sách trả phí khác.', 20),
+      ('PostgreSQL Administration Cookbook, 9.5/9.6 Edition', 9048, 4,
+       'Phần đánh index rất thực tế, đáng đọc.', 25),
+      ('PostgreSQL Administration Cookbook, 9.5/9.6 Edition', 9065, 3,
+       'Ổn nhưng chưa đủ sâu về phần sao lưu.', 30),
+      ('RESTful Web APIs: Services for a Changing World', 9073, 5,
+       'Đúng thứ mình cần cho dự án đang thiết kế lại API.', 5),
+      ('RESTful Web APIs: Services for a Changing World', 9077, 5,
+       'Phân trang kiểu cursor giải thích rất dễ hiểu.', 12),
+      ('RESTful Web APIs: Services for a Changing World', 9080, 4,
+       'Hợp với người đã có nền tảng, người mới sẽ hơi nặng.', 18),
+      ('Android UI Development with Jetpack Compose', 9006, 5,
+       'Ví dụ recomposition rất trực quan, làm theo được ngay.', 9),
+      ('Android UI Development with Jetpack Compose', 9013, 4,
+       'Nội dung chắc nhưng phần state hoisting hơi nhanh.', 16),
+      ('Android UI Development with Jetpack Compose', 9027, 5,
+       'Đáng tiền, áp dụng được vào app đang làm ở công ty.', 6),
+      ('Building Progressive Web Apps', 9034, 5,
+       'Miễn phí mà giải quyết đúng vấn đề mình đang gặp.', 22),
+      ('Building Progressive Web Apps', 9061, 4,
+       'Phần xử lý xung đột dữ liệu rất hữu ích.', 27),
+      ('Building Progressive Web Apps', 9096, 3,
+       'Ý tưởng hay nhưng ví dụ còn hơi đơn giản.', 33),
+      ('Simplifying Application Development with Kotlin Multiplatform Mobile', 9122, 5,
+       'Chia sẻ logic đa nền tảng giải thích rất rõ ràng.', 7),
+      ('Simplifying Application Development with Kotlin Multiplatform Mobile', 9155, 5,
+       'Đọc xong áp dụng được ngay vào việc đang làm.', 13),
+      ('Simplifying Application Development with Kotlin Multiplatform Mobile', 9172, 4,
+       'Hợp với người đã có nền tảng Kotlin sẵn.', 19)
+  ) AS r(title, reviewer, rating, feedback, age) ON r.title = b.title
+ WHERE NOT EXISTS (
+     SELECT 1 FROM socialapp.t_book_reviews br
+      WHERE br.book_id = b.id AND br.user_id = r.reviewer
+ );
+
+-- Đánh giá, chiều 2: 9001/9133 tự để lại rating cho các quyển họ đã MUA (giao dịch COMPLETED ở
+-- trên). Rating và câu chữ chọn tất định theo (book_id, buyer_id) để chạy lại vẫn ra cùng dữ liệu.
+INSERT INTO socialapp.t_book_reviews (book_id, user_id, rating, feedback, created_at, updated_at)
+SELECT bp.book_id, bp.buyer_id,
+       (ARRAY[3, 4, 4, 5, 5])[1 + (bp.book_id + bp.buyer_id) % 5],
+       (ARRAY['Đọc xong áp dụng được ngay vào việc đang làm.',
+              'Ví dụ sát thực tế, không phải kiểu bài tập trong lớp.',
+              'Đáng tiền, nhất là mấy chương cuối.',
+              'Hợp với người đã có nền tảng, người mới sẽ hơi nặng.'
+             ])[1 + (bp.book_id + bp.buyer_id) % 4],
+       now() - INTERVAL '1 day' * (5 + bp.book_id % 20), now() - INTERVAL '1 day' * (5 + bp.book_id % 20)
+  FROM socialapp.t_book_purchases bp
+ WHERE bp.buyer_id IN (9001, 9133)
+   AND bp.payment_status = 'COMPLETED'
+   AND bp.transaction_ref LIKE 'SEED-EXTRA-%'
+   AND NOT EXISTS (
+       SELECT 1 FROM socialapp.t_book_reviews br
+        WHERE br.book_id = bp.book_id AND br.user_id = bp.buyer_id
+   );
+
 UPDATE socialapp.t_books b
    SET download_count = COALESCE(p.total, 0)
   FROM (SELECT book_id, COUNT(*) AS total
@@ -624,10 +784,26 @@ UPDATE socialapp.t_books b
          WHERE payment_status = 'COMPLETED' GROUP BY book_id) p
  WHERE p.book_id = b.id;
 
+-- avg_rating/review_count được TÍNH LẠI (như V85), giới hạn ở những quyển vừa đụng tới ở trên: sáu
+-- quyển mới đăng, cộng những quyển thật mà 9001/9133 vừa để lại đánh giá với tư cách người mua.
+WITH touched_books AS (
+    SELECT id FROM socialapp.t_books WHERE author_id IN (9001, 9133)
+    UNION
+    SELECT book_id FROM socialapp.t_book_reviews WHERE user_id IN (9001, 9133)
+)
+UPDATE socialapp.t_books b
+   SET avg_rating = COALESCE(r.avg_rating, 0.0),
+       review_count = COALESCE(r.total, 0)
+  FROM (SELECT book_id, ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS total
+          FROM socialapp.t_book_reviews GROUP BY book_id) r
+ WHERE r.book_id = b.id AND b.id IN (SELECT id FROM touched_books);
+
 SELECT setval('socialapp.q_books_id',
               GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_books), 1) + 1, false);
 SELECT setval('socialapp.q_book_purchases_id',
               GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_book_purchases), 1), true);
+SELECT setval('socialapp.q_book_reviews_id',
+              GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_book_reviews), 1), true);
 SELECT setval('socialapp.q_posts_id',
               GREATEST((SELECT COALESCE(MAX(id), 0) FROM socialapp.t_posts), 1) + 1, false);
 
@@ -783,4 +959,11 @@ END $$;
 --    9001-9599 trên Stream, đừng chạy vào app Stream có người dùng thật):
 --      STREAM_API_KEY=... STREAM_API_SECRET=... MINIO_URL=http://localhost:9000 \
 --        node scripts/seed/seed-stream-chat.mjs --reset
+--
+-- 3. Object MinIO của 6 quyển sách mới: seed-manifest.tsv đã có 18 dòng mới (bìa có nguồn thật
+--    trỏ tới covers.openlibrary.org theo ISBN; nội dung/preview để trống vì không nằm trong
+--    book-previews.json). Dev: chạy lại
+--      docker compose up minio-seed-objects minio-init
+--    Production: MinIOSeedObjectInitializer tự đọc manifest mới ở lần khởi động kế tiếp khi
+--    minio.seed-objects-on-start=true (application-prod.yml đã bật).
 -- =============================================================================================

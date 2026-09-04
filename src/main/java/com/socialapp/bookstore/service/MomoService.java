@@ -220,13 +220,11 @@ public class MomoService {
    * screen that is easy to fill in by hand — never leaves result code 7002 on the sandbox. Without
    * this, "buy a book" cannot be demonstrated end to end at all.
    *
-   * <p><b>Its only guard is the {@code dev} profile</b>, applied at
-   * {@code DevPaymentController}, which is the one bean that reaches this method. That gate is
-   * off by default everywhere — including production, where {@code SPRING_PROFILES_ACTIVE} comes
-   * from an {@code .env} maintained in the infra repo and can silently arrive empty (see the
-   * warning at the top of {@code application-prod.yml}). Gating on {@code !prod} would therefore
-   * have handed every signed-in user a free copy of any book the day that variable went missing;
-   * requiring {@code dev} to be named explicitly fails in the harmless direction instead.
+   * <p><b>Reachable in every profile, including production</b> (2026-09-04 decision), via
+   * {@code DevPaymentController}, which is the one bean that reaches this method and carries no
+   * {@code @Profile} gate. That is a deliberate trade: any signed-in caller can settle their own
+   * purchase without MoMo actually collecting money, i.e. free books, in exchange for the demo
+   * flow working regardless of which profile a deployment happens to run under.
    *
    * <p>Ownership is still checked, and still 404s rather than 403s, for the same reason
    * {@link #syncPaymentStatus} does: even on a developer machine this must not be a way to settle —

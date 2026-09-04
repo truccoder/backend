@@ -116,6 +116,8 @@ class AppealControllerTest {
         .userId(USER_ID)
         .violationId(3L)
         .violationType(ViolationType.SPAM)
+        .postId(11)
+        .postExcerpt("Check out my new project, link in bio!")
         .reason("It was a link to my own project")
         .status(status)
         .build();
@@ -189,7 +191,9 @@ class AppealControllerTest {
               authed(post(URL + "/appeals")).contentType(MediaType.APPLICATION_JSON).content(BODY))
           .andExpect(status().isCreated())
           .andExpect(jsonPath("$.status").value("PENDING"))
-          .andExpect(jsonPath("$.violationType").value("SPAM"));
+          .andExpect(jsonPath("$.violationType").value("SPAM"))
+          .andExpect(jsonPath("$.postId").value(11))
+          .andExpect(jsonPath("$.postExcerpt").value("Check out my new project, link in bio!"));
     }
 
     @Test

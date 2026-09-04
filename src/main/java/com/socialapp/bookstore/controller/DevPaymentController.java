@@ -1,6 +1,5 @@
 package com.socialapp.bookstore.controller;
 
-import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,8 +12,7 @@ import com.socialapp.security.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 
 /**
- * The one way to finish a purchase without MoMo actually collecting money. <b>Registered only
- * under the {@code dev} profile</b>; anywhere else this bean does not exist and its path 404s.
+ * The one way to finish a purchase without MoMo actually collecting money.
  *
  * <p>Why it is needed: MoMo's sandbox offers two flows and neither can be completed by one person
  * at a desk. {@code captureWallet} shows a QR that has to be paid from a phone running the MoMo
@@ -24,18 +22,12 @@ import lombok.RequiredArgsConstructor;
  * all. Set {@code MOMO_REQUEST_TYPE=payWithATM} for the card screen, then call this to close the
  * order.
  *
- * <p>Why a separate class rather than a method on {@link PaymentController}: {@code @Profile}
- * decides whether a <i>bean</i> is created, so it cannot gate one handler method of a controller
- * that must otherwise always exist. Splitting it out is what makes "off unless the profile is
- * named" true of the endpoint itself instead of of a runtime check someone could later remove.
- *
- * <p>Why {@code dev} and not {@code !prod}: production's {@code SPRING_PROFILES_ACTIVE} is set from
- * an {@code .env} kept in the infra repo, and a missing variable there leaves it empty rather than
- * failing — see the warning at the top of {@code application-prod.yml}. Under {@code !prod} that
- * silent gap would publish this endpoint to every signed-in user, i.e. free books. Requiring the
- * profile to be named explicitly means the failure mode is "the demo endpoint is missing".
+ * <p>Registered in every profile, including production — 2026-09-04 decision to keep the demo
+ * flow reachable everywhere a VPS deploy might run it, without depending on which profile name
+ * happens to be active. This intentionally lets any signed-in caller settle their own purchase
+ * without MoMo actually collecting money, i.e. free books. Only pull this back under
+ * {@code @Profile("dev")} or an admin check if that stops being acceptable.
  */
-@Profile("dev")
 @RestController
 @RequestMapping("/v1/api/payments")
 @RequiredArgsConstructor

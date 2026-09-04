@@ -33,9 +33,10 @@ public class MomoProperties {
    * the sandbox it never finishes: five consecutive end-to-end attempts each parked at result code
    * 7002 ("đang được xử lý bởi nhà cung cấp") and none ever answered 0. Since MoMo only sends the
    * browser to {@code redirectUrl} once an order settles, choosing it means the purchase stays
-   * PENDING for ever unless something else finishes the job — see the {@code dev} profile's
+   * PENDING for ever unless something else finishes the job — see
    * {@code POST /v1/api/payments/{transactionRef}/dev-settle}, which exists precisely so a demo can
-   * use the card screen and still reach COMPLETED.
+   * use the card screen and still reach COMPLETED. That endpoint carries no profile gate, so it is
+   * reachable regardless of which flow is chosen here.
    *
    * <p>Configurable rather than hard-coded because which one is wanted depends on what is being
    * shown, not on what the code should do, and a demo should not need a rebuild to switch.

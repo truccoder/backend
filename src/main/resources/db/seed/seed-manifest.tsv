@@ -1138,4 +1138,27 @@ previews/9470/9781847941107-preview.pdf	book-preview
 previews/9477/9780977616640-preview.pdf	book-preview	
 previews/9484/9781593273897-preview.epub	book-preview	
 previews/9491/9780134277554-preview.pdf	book-preview	
-previews/9498/9781430219125-preview.pdf	book-preview	
+previews/9498/9781430219125-preview.pdf	book-preview
+
+# V108 — 3 sách đăng thêm mỗi tài khoản (9001, 9133). SÁCH THẬT, BÌA THẬT, cùng quy ước với danh
+# mục 80 quyển của V85 — ISBN tra qua Open Library, bìa tải qua covers.openlibrary.org (đã xác
+# minh không phải ảnh placeholder 1x1 trước khi ghi vào đây). Nội dung PDF/EPUB vẫn là tài liệu mẫu
+# một trang: các quyển này không nằm trong book-previews.json (chỉ 80 quyển gốc được crawl sẵn).
+books/9001/9781839211966.pdf	book-file
+previews/9001/9781839211966-preview.pdf	book-preview
+covers/9001/9781839211966.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781839211966-L.jpg
+books/9001/9781785883187.epub	book-file
+previews/9001/9781785883187-preview.epub	book-preview
+covers/9001/9781785883187.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781785883187-L.jpg
+books/9001/9781449358068.pdf	book-file
+previews/9001/9781449358068-preview.pdf	book-preview
+covers/9001/9781449358068.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781449358068-L.jpg
+books/9133/9781801812160.epub	book-file
+previews/9133/9781801812160-preview.epub	book-preview
+covers/9133/9781801812160.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781801812160-L.jpg
+books/9133/9781491961650.pdf	book-file
+previews/9133/9781491961650-preview.pdf	book-preview
+covers/9133/9781491961650.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781491961650-L.jpg
+books/9133/9781801812580.epub	book-file
+previews/9133/9781801812580-preview.epub	book-preview
+covers/9133/9781801812580.jpg	book-cover	https://covers.openlibrary.org/b/isbn/9781801812580-L.jpg

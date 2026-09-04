@@ -293,6 +293,8 @@ public class AppealService {
         .violationId(appeal.getViolationId())
         .violationType(violation == null ? null : violation.getViolationType())
         .violationDescription(violation == null ? null : violation.getDescription())
+        .postId(violation == null ? null : violation.getPostId())
+        .postExcerpt(violation == null ? null : violation.getPostExcerpt())
         .reason(appeal.getReason())
         .status(appeal.getStatus())
         .reviewerNote(appeal.getReviewerNote())

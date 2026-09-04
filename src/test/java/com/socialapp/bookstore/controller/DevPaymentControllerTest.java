@@ -20,7 +20,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
@@ -40,17 +39,10 @@ import com.socialapp.security.repository.UserRepository;
  * System/API integration tests for {@link DevPaymentController}, per ISTQB CTFL v4.0.1 Section
  * 2.2.2, using {@code @WebMvcTest} + {@code MockMvc}. {@link MomoService} is mocked.
  *
- * <p><b>{@code @ActiveProfiles} is load-bearing here, not boilerplate.</b> The controller is
- * annotated {@code @Profile("dev")}, so without it there is no bean and every case below would 404
- * — which is exactly the behaviour {@link DevPaymentControllerDisabledTest} asserts, separately,
- * because it is the whole security argument for the endpoint.
+ * <p>Registered in every profile (no {@code @Profile} gate), so no profile juggling is needed here
+ * beyond the "test" profile every other {@code @WebMvcTest} in this module runs under.
  */
 @WebMvcTest(DevPaymentController.class)
-// "test" comes from build.gradle's `systemProperty 'spring.profiles.active', 'test'`, which
-// supplies the test JWT secret and disables scheduling. @ActiveProfiles REPLACES that rather than
-// adding to it, so naming "dev" alone drops the test profile and the context then fails to start
-// on JwtProperties#secret. Both, in this order.
-@ActiveProfiles({"test", "dev"})
 @Import({
   SecurityConfig.class,
   CustomAuthenticationEntryPoint.class,
