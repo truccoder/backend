@@ -36,7 +36,7 @@ public class GithubController {
     githubService.unlinkAccount(currentUser);
   }
 
-  /** 404s via {@code NotFoundException} when the user has no linked GitHub account. */
+  /** 200 with zeroed-out counts (B43), not 404, when the user has no linked GitHub account. */
   @GetMapping("/stats/{userId}")
   public GithubStatsResponse getStats(@PathVariable Integer userId) {
     return githubService.getGithubStats(userId);

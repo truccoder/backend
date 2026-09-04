@@ -1,10 +1,12 @@
 package com.socialapp.matchmaking.repository;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -24,6 +26,20 @@ public interface ProjectPositionRepository extends JpaRepository<ProjectPosition
   Optional<ProjectPositionEntity> findByIdForUpdate(@Param("id") Integer id);
 
   /**
+   * One position with its project and the project's author loaded — what every owner-scoped
+   * position operation (edit, delete, change status) needs to run its ownership check without a
+   * lazy load, {@code open-in-view} being off.
+   */
+  @Query(
+      """
+      SELECT p FROM ProjectPositionEntity p
+      JOIN FETCH p.project pr
+      JOIN FETCH pr.author
+      WHERE p.id = :id
+      """)
+  Optional<ProjectPositionEntity> findByIdWithProjectAuthor(@Param("id") Integer id);
+
+  /**
    * Every position belonging to any of {@code projectIds}, in one query.
    *
    * <p>This is what keeps the project list at two queries instead of one per project: the caller
@@ -36,4 +52,31 @@ public interface ProjectPositionRepository extends JpaRepository<ProjectPosition
       ORDER BY p.id ASC
       """)
   List<ProjectPositionEntity> findByProjectIdIn(@Param("projectIds") List<Integer> projectIds);
+
+  /**
+   * Records the cached job-description render — its object key and when it was produced.
+   *
+   * <p>A bulk update on purpose. Setting the two fields on the entity and saving it would fire
+   * {@code @UpdateTimestamp} on {@code updatedAt}, and since {@code JobDescriptionService} decides
+   * staleness by comparing {@code jdRenderedAt} against {@code updatedAt}, the row would come back
+   * stale the instant it was written — an endpoint that re-renders the same PDF on every single
+   * request. JPQL bulk updates bypass the timestamp (and the {@code @Version} bump, which is also
+   * right: the version exists for the accept/quantity race, and caching a document is not a change
+   * to the role).
+   *
+   * <p>{@code flushAutomatically} so any pending change to this row is written before the update
+   * rather than after it; nothing is cleared, because the caller has already read what it needs.
+   */
+  @Modifying(flushAutomatically = true)
+  @Query(
+      """
+      UPDATE ProjectPositionEntity p
+         SET p.jdObjectKey = :objectKey,
+             p.jdRenderedAt = :renderedAt
+       WHERE p.id = :id
+      """)
+  void markJobDescriptionRendered(
+      @Param("id") Integer id,
+      @Param("objectKey") String objectKey,
+      @Param("renderedAt") OffsetDateTime renderedAt);
 }

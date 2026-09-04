@@ -56,6 +56,24 @@ public class ReputationService {
     }
   }
 
+  /**
+   * Reverses every event of one type whose {@code sourceId} begins with {@code sourceIdPrefix},
+   * then rebuilds {@code recipientId}'s score from the now-clean ledger.
+   *
+   * <p>Used when a post is deleted: its {@code REACTION_RECEIVED} events are keyed {@code
+   * "{postId}:{reactorId}"} and all belong to the one author, so a full {@link #reconcile} of
+   * that author after the bulk delete is both correct and simpler than summing the deleted
+   * points. A no-op when nothing matched.
+   */
+  @Transactional
+  public void revokeByPrefix(Integer recipientId, RepSourceType sourceType, String sourceIdPrefix) {
+    int deleted =
+        reputationEventRepository.deleteBySourceTypeAndSourceIdPrefix(sourceType, sourceIdPrefix);
+    if (deleted > 0) {
+      reconcile(recipientId);
+    }
+  }
+
   public RepLevel repLevel(int score) {
     return RepLevel.forScore(score);
   }
@@ -81,6 +99,7 @@ public class ReputationService {
         .currentLevelMin(level.getMin())
         .nextLevelMin(next != null ? next.getMin() : null)
         .verifiedExpert(verifiedExpert)
+        .username(user.getUsername())
         .build();
   }
 

@@ -32,6 +32,17 @@ public class AppealDto {
   private ViolationType violationType;
   private String violationDescription;
 
+  /**
+   * The disputed post, and a snapshot of its content taken when the violation was recorded — same
+   * fields and same reasoning as {@code UserViolationDto.postId}/{@code postExcerpt} (B47): {@code
+   * postId} goes null if the post is later deleted ({@code ON DELETE SET NULL}), so the excerpt is
+   * what keeps "which post" answerable. Both null once the appeal is approved and its violation
+   * erased, same as {@code violationType}/{@code violationDescription} above.
+   */
+  private Integer postId;
+
+  private String postExcerpt;
+
   private String reason;
   private AppealStatus status;
   private String reviewerNote;

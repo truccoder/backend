@@ -21,7 +21,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.common.exception.ConflictException;
+import com.socialapp.common.exception.ForbiddenException;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.common.exception.ValidationException;
 import com.socialapp.github.entity.GithubStatsEntity;
 import com.socialapp.github.repository.GithubStatsRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
@@ -85,6 +88,16 @@ class SkillVerificationServiceTest {
     return dto;
   }
 
+  private static UserRoadmapProgressEntity progressWith(VerificationStatus status) {
+    return UserRoadmapProgressEntity.builder()
+        .id(PROGRESS_ID)
+        .user(user(USER_ID))
+        .node(node(NODE_ID))
+        .tier(VerificationTier.MOD_VERIFIED)
+        .status(status)
+        .build();
+  }
+
   private static UserRoadmapProgressEntity pendingProgress() {
     return UserRoadmapProgressEntity.builder()
         .id(PROGRESS_ID)
@@ -133,6 +146,65 @@ class SkillVerificationServiceTest {
     }
 
     @Test
+    @DisplayName("should refuse SELF_VERIFIED on a claim a reviewer already rejected")
+    void shouldThrowValidationException_whenSelfVerifyingARejectedClaim() {
+      // Given — an admin has ruled on this node and said no. Before the guard, re-submitting at
+      // the SELF_VERIFIED tier wrote VERIFIED straight over that decision: the person whose claim
+      // was refused erasing the refusal, and taking the self-verified points for it.
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
+      when(nodeRepository.findById(NODE_ID)).thenReturn(Optional.of(node(NODE_ID)));
+      when(progressRepository.findByUserIdAndNodeId(USER_ID, NODE_ID))
+          .thenReturn(Optional.of(progressWith(VerificationStatus.REJECTED)));
+
+      // When / Then
+      assertThatThrownBy(
+              () ->
+                  skillVerificationService.submitVerificationRequest(
+                      USER_ID, request(VerificationTier.SELF_VERIFIED, null)))
+          .isInstanceOf(ValidationException.class)
+          .hasMessageContaining("rejected");
+      verify(progressRepository, never()).save(any());
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should refuse SELF_VERIFIED while a reviewer decision is still pending")
+    void shouldThrowValidationException_whenSelfVerifyingAPendingClaim() {
+      // Given
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
+      when(nodeRepository.findById(NODE_ID)).thenReturn(Optional.of(node(NODE_ID)));
+      when(progressRepository.findByUserIdAndNodeId(USER_ID, NODE_ID))
+          .thenReturn(Optional.of(pendingProgress()));
+
+      // When / Then
+      assertThatThrownBy(
+              () ->
+                  skillVerificationService.submitVerificationRequest(
+                      USER_ID, request(VerificationTier.SELF_VERIFIED, null)))
+          .isInstanceOf(ValidationException.class);
+      verify(progressRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("should still allow re-submitting a rejected claim for review")
+    void shouldAllowResubmission_whenTierGoesBackThroughReview() {
+      // Given — the guard is aimed at self-promotion only. Coming back with better proof at a
+      // reviewed tier is the intended way out of a rejection and must stay open.
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID)));
+      when(nodeRepository.findById(NODE_ID)).thenReturn(Optional.of(node(NODE_ID)));
+      when(progressRepository.findByUserIdAndNodeId(USER_ID, NODE_ID))
+          .thenReturn(Optional.of(progressWith(VerificationStatus.REJECTED)));
+
+      // When
+      skillVerificationService.submitVerificationRequest(
+          USER_ID, request(VerificationTier.MOD_VERIFIED, "https://example.com/better-proof"));
+
+      // Then
+      assertThat(captureSaved().getStatus()).isEqualTo(VerificationStatus.PENDING_APPROVAL);
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
     @DisplayName("should immediately verify a SELF_VERIFIED submission")
     void shouldVerifyImmediately_whenTierIsSelfVerified() {
       // Given
@@ -141,8 +213,9 @@ class SkillVerificationServiceTest {
       when(progressRepository.findByUserIdAndNodeId(USER_ID, NODE_ID)).thenReturn(Optional.empty());
 
       // When
-      skillVerificationService.submitVerificationRequest(
-          USER_ID, request(VerificationTier.SELF_VERIFIED, "https://example.com/proof"));
+      var result =
+          skillVerificationService.submitVerificationRequest(
+              USER_ID, request(VerificationTier.SELF_VERIFIED, "https://example.com/proof"));
 
       // Then
       UserRoadmapProgressEntity saved = captureSaved();
@@ -150,6 +223,10 @@ class SkillVerificationServiceTest {
       assertThat(saved.getVerifiedAt()).isNotNull();
       verify(reputationEventPublisher)
           .award(USER_ID, RepSourceType.ROADMAP_SELF_VERIFIED, USER_ID + ":" + NODE_ID);
+      // B21: the outcome is handed straight back, no follow-up read needed.
+      assertThat(result.getStatus()).isEqualTo(VerificationStatus.VERIFIED);
+      assertThat(result.getNodeId()).isEqualTo(NODE_ID);
+      assertThat(result.getTier()).isEqualTo(VerificationTier.SELF_VERIFIED);
     }
 
     @Test
@@ -372,8 +449,43 @@ class SkillVerificationServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> skillVerificationService.approveRequest(PROGRESS_ID, MODERATOR_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("should refuse a moderator approving their own claim")
+    void shouldThrowForbiddenException_whenModeratorApprovesOwnRequest() {
+      // Given — the claimant and the reviewer are the same account. Only admins reach this method,
+      // so this is not a privilege check; it is the same no-self-crediting rule the rest of the
+      // codebase applies, on the largest award in the system (ROADMAP_NODE_VERIFIED, 20 points).
+      when(progressRepository.findById(PROGRESS_ID)).thenReturn(Optional.of(pendingProgress()));
+
+      // When / Then
+      assertThatThrownBy(() -> skillVerificationService.approveRequest(PROGRESS_ID, USER_ID))
+          .isInstanceOf(ForbiddenException.class);
+      verify(progressRepository, never()).save(any());
+      verifyNoInteractions(reputationEventPublisher);
+    }
+
+    @Test
+    @DisplayName("should clear the self-verified award before granting the verified one")
+    void shouldRevokeSelfVerifiedAward_whenApproving() {
+      // Given — the ledger de-duplicates on (userId, sourceType, sourceId). The tier picks the
+      // source type while sourceId is the node, so a node self-verified first and properly
+      // verified later produced two rows for one skill: 5 + 20 instead of 20.
+      when(progressRepository.findById(PROGRESS_ID)).thenReturn(Optional.of(pendingProgress()));
+      when(userRepository.findById(MODERATOR_ID)).thenReturn(Optional.of(user(MODERATOR_ID)));
+
+      // When
+      skillVerificationService.approveRequest(PROGRESS_ID, MODERATOR_ID);
+
+      // Then
+      String sourceId = USER_ID + ":" + NODE_ID;
+      verify(reputationEventPublisher)
+          .revoke(USER_ID, RepSourceType.ROADMAP_SELF_VERIFIED, sourceId);
+      verify(reputationEventPublisher)
+          .award(USER_ID, RepSourceType.ROADMAP_NODE_VERIFIED, sourceId);
     }
 
     @Test
@@ -480,7 +592,7 @@ class SkillVerificationServiceTest {
 
       // When / Then
       assertThatThrownBy(() -> skillVerificationService.rejectRequest(PROGRESS_ID, MODERATOR_ID))
-          .isInstanceOf(IllegalStateException.class);
+          .isInstanceOf(ConflictException.class);
       verify(userRepository, never()).findById(any());
     }
 

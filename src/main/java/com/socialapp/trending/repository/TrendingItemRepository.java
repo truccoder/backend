@@ -1,6 +1,7 @@
 package com.socialapp.trending.repository;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -80,4 +81,16 @@ public interface TrendingItemRepository extends JpaRepository<TrendingItemEntity
   Optional<TrendingItemEntity> findBySourceAndSourceId(TrendingSource source, String sourceId);
 
   boolean existsBySourceAndSourceId(TrendingSource source, String sourceId);
+
+  /**
+   * The source ids already stored for one source, out of the ones offered.
+   *
+   * <p>The crawler used to ask {@code existsBySourceAndSourceId} per item, which is a query per
+   * crawled row every hour. One query for the batch, then an in-memory check.
+   */
+  @Query(
+      "SELECT t.sourceId FROM TrendingItemEntity t "
+          + "WHERE t.source = :source AND t.sourceId IN :sourceIds")
+  List<String> findExistingSourceIds(
+      @Param("source") TrendingSource source, @Param("sourceIds") List<String> sourceIds);
 }

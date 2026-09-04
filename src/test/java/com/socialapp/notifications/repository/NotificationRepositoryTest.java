@@ -61,6 +61,20 @@ class NotificationRepositoryTest extends AbstractIntegrationTest {
         .build();
   }
 
+  private static NotificationEntity notificationReferencing(
+      Integer recipientId, String referenceType, Integer referenceId, Integer postId) {
+    return NotificationEntity.builder()
+        .recipientId(recipientId)
+        .type(NotificationType.POST_LIKED)
+        .title("Someone liked your post")
+        .channel(NotificationChannel.PUSH)
+        .isRead(false)
+        .referenceType(referenceType)
+        .referenceId(referenceId)
+        .postId(postId)
+        .build();
+  }
+
   @Nested
   @DisplayName("findByRecipientIdOrderByCreatedAtDesc")
   class FindByRecipientIdOrderByCreatedAtDesc {
@@ -212,6 +226,106 @@ class NotificationRepositoryTest extends AbstractIntegrationTest {
           .get()
           .extracting(NotificationEntity::getIsRead)
           .isEqualTo(false);
+    }
+  }
+
+  @Nested
+  @DisplayName("deleteAllForPost")
+  class DeleteAllForPost {
+
+    @Test
+    @DisplayName("deletes a notification whose referenceType is POST and referenceId is the post")
+    void deletesPostReference() {
+      // Given
+      NotificationEntity onThePost =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "POST", 500, null));
+
+      // When
+      notificationRepository.deleteAllForPost(500);
+      entityManager.clear();
+
+      // Then
+      assertThat(notificationRepository.findById(onThePost.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("deletes a notification about a comment under the post, keyed by postId")
+    void deletesCommentUnderThePost() {
+      // Given: a COMMENT_LIKED-style row — referenceId is the comment id, postId carries the post
+      NotificationEntity onACommentUnderThePost =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "COMMENT", 9001, 500));
+
+      // When
+      notificationRepository.deleteAllForPost(500);
+      entityManager.clear();
+
+      // Then
+      assertThat(notificationRepository.findById(onACommentUnderThePost.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("leaves notifications about an unrelated post untouched")
+    void leavesUnrelatedPostsAlone() {
+      // Given
+      NotificationEntity unrelated =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "POST", 999, null));
+
+      // When
+      notificationRepository.deleteAllForPost(500);
+      entityManager.clear();
+
+      // Then
+      assertThat(notificationRepository.findById(unrelated.getId())).isPresent();
+    }
+  }
+
+  @Nested
+  @DisplayName("deleteByReferenceTypeAndReferenceId")
+  class DeleteByReferenceTypeAndReferenceIdTests {
+
+    @Test
+    @DisplayName("deletes every notification pointing at the given comment")
+    void deletesNotificationsForComment() {
+      // Given
+      NotificationEntity commentLiked =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "COMMENT", 7001, null));
+      NotificationEntity mentioned =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "COMMENT", 7001, null));
+
+      // When
+      notificationRepository.deleteByReferenceTypeAndReferenceId("COMMENT", 7001);
+      // Unlike the JPQL bulk DELETE above, a derived delete-by query removes managed entities and
+      // only issues DELETE at flush — clear() alone would silently drop the pending removal.
+      entityManager.flush();
+      entityManager.clear();
+
+      // Then
+      assertThat(notificationRepository.findById(commentLiked.getId())).isEmpty();
+      assertThat(notificationRepository.findById(mentioned.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("leaves a notification for a different comment untouched")
+    void leavesOtherCommentsAlone() {
+      // Given
+      NotificationEntity otherComment =
+          notificationRepository.saveAndFlush(
+              notificationReferencing(recipientId, "COMMENT", 7002, null));
+
+      // When
+      notificationRepository.deleteByReferenceTypeAndReferenceId("COMMENT", 7001);
+      // Unlike the JPQL bulk DELETE above, a derived delete-by query removes managed entities and
+      // only issues DELETE at flush — clear() alone would silently drop the pending removal.
+      entityManager.flush();
+      entityManager.clear();
+
+      // Then
+      assertThat(notificationRepository.findById(otherComment.getId())).isPresent();
     }
   }
 }

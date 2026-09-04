@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -14,7 +17,10 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -27,6 +33,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.ListOperations;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -40,8 +50,11 @@ import com.socialapp.bookstore.repository.BookRepository;
 import com.socialapp.bookstore.service.BookReviewService;
 import com.socialapp.bookstore.service.BookStorageService;
 import com.socialapp.common.exception.NotFoundException;
+import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.newsfeed.dto.FeedBookSummaryDto;
 import com.socialapp.newsfeed.dto.FeedPostDataDto;
+import com.socialapp.newsfeed.dto.FeedRebuildResultDto;
 import com.socialapp.newsfeed.dto.FeedResponseDto;
 import com.socialapp.newsfeed.dto.FeedScope;
 import com.socialapp.newsfeed.entity.UserInteractionEntity;
@@ -62,10 +75,10 @@ import com.socialapp.posts.entity.QuizDetails;
 import com.socialapp.posts.entity.QuizQuestion;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 import com.socialapp.posts.repository.CommentRepository;
 import com.socialapp.posts.repository.PostReactionRepository;
 import com.socialapp.posts.repository.PostRepository;
-import com.socialapp.search.service.FriendshipQueryService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -86,7 +99,7 @@ class NewsfeedServiceTest {
 
   @Mock private StringRedisTemplate redisTemplate;
   @Mock private ObjectMapper objectMapper;
-  @Mock private FriendshipQueryService friendshipQueryService;
+  @Mock private FriendshipService friendshipService;
   @Mock private UserInteractionRepository userInteractionRepository;
   @Mock private PostRepository postRepository;
   @Mock private UserRepository userRepository;
@@ -99,9 +112,11 @@ class NewsfeedServiceTest {
 
   @Mock private ZSetOperations<String, String> zSetOperations;
   @Mock private ValueOperations<String, String> valueOperations;
+  @Mock private ListOperations<String, String> listOperations;
 
   @Mock private BlockQueryService blockQueryService;
   @Mock private SkillTagResolver skillTagResolver;
+  @Mock private SeenPostTracker seenPostTracker;
 
   private NewsfeedService newsfeedService;
 
@@ -121,7 +136,7 @@ class NewsfeedServiceTest {
         new NewsfeedService(
             redisTemplate,
             objectMapper,
-            friendshipQueryService,
+            friendshipService,
             userInteractionRepository,
             postRepository,
             userRepository,
@@ -134,7 +149,8 @@ class NewsfeedServiceTest {
                 postReactionRepository,
                 commentRepository),
             blockQueryService,
-            skillTagResolver);
+            skillTagResolver,
+            seenPostTracker);
   }
 
   @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
@@ -216,7 +232,7 @@ class NewsfeedServiceTest {
       post.setTags(null);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -233,7 +249,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -255,7 +271,7 @@ class NewsfeedServiceTest {
       post.setLocationDetails(location);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -271,7 +287,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.BOOK);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       BookEntity book =
           BookEntity.builder()
               .id(50)
@@ -301,7 +317,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.BOOK);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(bookRepository.findByPostId(POST_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -323,7 +339,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 1), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -331,9 +347,12 @@ class NewsfeedServiceTest {
       // When
       newsfeedService.fanOutPost(POST_ID);
 
-      // Then
-      verify(zSetOperations).add(eq("feed:" + FRIEND_ID), anyString(), any(Double.class));
-      verify(zSetOperations).add(eq("feed:" + TAGGED_ID), anyString(), any(Double.class));
+      // Then — the audience (friends plus tagged users, minus the author, who already got the post
+      // added directly) goes to Redis in one pipelined batch rather than two commands per
+      // recipient, so the assertion is that the pipeline ran and the notification went to the right
+      // person. NewsfeedService#addToFeeds carries the per-recipient detail.
+      verify(redisTemplate)
+          .executePipelined(org.mockito.ArgumentMatchers.<RedisCallback<Object>>any());
       verify(notificationService, org.mockito.Mockito.times(1)).send(notificationCaptor.capture());
       assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(TAGGED_ID);
       assertThat(notificationCaptor.getValue().getBody()).isEqualTo("Alice tagged you in a post");
@@ -348,7 +367,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "   ")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -370,7 +389,7 @@ class NewsfeedServiceTest {
       post.getTags().add(new PostTagEntity(new PostTagId(POST_ID, 0), TAGGED_ID));
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, null)));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -390,7 +409,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -417,7 +436,7 @@ class NewsfeedServiceTest {
       newsfeedService.fanOutPost(POST_ID);
 
       // Then
-      verify(friendshipQueryService, never()).getFriendIds(any());
+      verify(friendshipService, never()).getFriendIds(any());
     }
 
     @Test
@@ -437,7 +456,7 @@ class NewsfeedServiceTest {
 
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -472,7 +491,7 @@ class NewsfeedServiceTest {
       author.setEliteScore(5_000);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(author));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
@@ -495,7 +514,7 @@ class NewsfeedServiceTest {
       PostEntity post = post(POST_ID, AUTHOR_ID, PostVisibility.PUBLIC, PostType.REGULAR);
       when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Alice")));
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(postReactionRepository.countByIdPostId(POST_ID)).thenReturn(7L);
       when(commentRepository.countByPostId(POST_ID)).thenReturn(3L);
       when(objectMapper.writeValueAsString(any())).thenReturn("{}");
@@ -514,11 +533,11 @@ class NewsfeedServiceTest {
   }
 
   // =====================================================================
-  // updateCachedLikeCount / updateCachedCommentCount
+  // updateCachedReactions / updateCachedCommentCount
   // =====================================================================
 
   @Nested
-  @DisplayName("updateCachedLikeCount / updateCachedCommentCount")
+  @DisplayName("updateCachedReactions / updateCachedCommentCount")
   class UpdateCachedCountersTests {
 
     @Test
@@ -533,10 +552,12 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(any())).thenReturn("{\"likeCount\":5}");
 
       // When
-      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+      newsfeedService.updateCachedReactions(POST_ID, 5, Map.of(ReactionType.INSIGHT, 5L));
 
-      // Then
+      // Then — the total and its breakdown are written together, in one read-modify-write over
+      // the same entry: two calls would leave a window where the chips disagree with the number
       assertThat(cachedPost.getLikeCount()).isEqualTo(5);
+      assertThat(cachedPost.getReactionSummary()).containsEntry(ReactionType.INSIGHT, 5L);
       verify(valueOperations)
           .set(eq("feedpost:" + POST_ID), eq("{\"likeCount\":5}"), eq(Duration.ofDays(7)));
     }
@@ -591,7 +612,7 @@ class NewsfeedServiceTest {
       when(valueOperations.get("feedpost:" + POST_ID)).thenReturn(null);
 
       // When
-      newsfeedService.updateCachedLikeCount(POST_ID, 5);
+      newsfeedService.updateCachedReactions(POST_ID, 5, Map.of());
 
       // Then
       verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
@@ -607,7 +628,7 @@ class NewsfeedServiceTest {
           .thenThrow(new RuntimeException("boom"));
 
       // When / Then — a broken cache entry must not fail the user's like
-      assertThatCode(() -> newsfeedService.updateCachedLikeCount(POST_ID, 5))
+      assertThatCode(() -> newsfeedService.updateCachedReactions(POST_ID, 5, Map.of()))
           .doesNotThrowAnyException();
       verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
     }
@@ -634,7 +655,7 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(data)).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       long before = System.currentTimeMillis();
 
       // When
@@ -662,7 +683,7 @@ class NewsfeedServiceTest {
       when(objectMapper.writeValueAsString(data)).thenReturn("{}");
       when(redisTemplate.opsForValue()).thenReturn(valueOperations);
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
 
       // When / Then
       assertThatCode(() -> newsfeedService.fanOutPost(data, null)).doesNotThrowAnyException();
@@ -719,7 +740,7 @@ class NewsfeedServiceTest {
     @DisplayName("should remove the post from the author's and friends' feeds with no tagged users")
     void shouldRemoveFromAuthorAndFriendFeeds_withNoTaggedUsers() {
       // Given
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
       // When
@@ -735,7 +756,7 @@ class NewsfeedServiceTest {
     @DisplayName("should also remove the post from tagged users' feeds when present")
     void shouldAlsoRemoveFromTaggedUserFeeds_whenTaggedUsersPresent() {
       // Given
-      when(friendshipQueryService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
       when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
 
       // When
@@ -1111,6 +1132,484 @@ class NewsfeedServiceTest {
 
       // Then — the untouched tab must not pay for the new one
       verifyNoInteractions(skillTagResolver);
+    }
+  }
+
+  // =====================================================================
+  // rebuildAll
+  // =====================================================================
+
+  @Nested
+  @DisplayName("rebuildAll")
+  class RebuildAllTests {
+
+    private PostEntity approved(Integer id, Integer authorId) {
+      return post(id, authorId, PostVisibility.PUBLIC, PostType.REGULAR);
+    }
+
+    @Test
+    @DisplayName("should fan out every approved post and report how many")
+    void shouldFanOutEveryApprovedPost() {
+      // Given — seeded posts are written straight into Postgres and never pass through the
+      // publish path, so no feed contains them; this is the only way they reach Redis
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID), approved(2, AUTHOR_ID))));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of(FRIEND_ID));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(2);
+      assertThat(result.skipped()).isZero();
+    }
+
+    @Test
+    @DisplayName("should not re-notify tagged users")
+    void shouldNotNotifyTaggedUsers() {
+      // Given — a post tagging somebody. The single-argument fanOutPost also runs
+      // notifyTaggedUsers, which is why the rebuild calls the two-argument form instead: nobody
+      // should be told they were tagged in a post from three months ago because an operator
+      // rebuilt a cache.
+      PostEntity tagged = approved(1, AUTHOR_ID);
+      tagged.getTags().add(new PostTagEntity(new PostTagId(1, 0), TAGGED_ID));
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(tagged)));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      newsfeedService.rebuildAll();
+
+      // Then
+      verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    @DisplayName("should count a post it cannot rebuild and carry on with the rest")
+    void shouldSkipAndContinue_whenOnePostFails() {
+      // Given — the first post's author row is gone. Aborting the run there would cost the other
+      // posts their fan-out over one broken row.
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, 999), approved(2, AUTHOR_ID))));
+      when(userRepository.findById(999)).thenReturn(Optional.empty());
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(1);
+      assertThat(result.skipped()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("should walk every page rather than stopping after the first")
+    void shouldWalkEveryPage() {
+      // Given — two pages. Reading only the first would silently rebuild a prefix of the database
+      // and still report success, which is worse than failing.
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of(approved(1, AUTHOR_ID)), PageRequest.of(0, 1), 2))
+          .thenReturn(new PageImpl<>(List.of(approved(2, AUTHOR_ID)), PageRequest.of(1, 1), 2));
+      when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(user(AUTHOR_ID, "Author")));
+      when(friendshipService.getFriendIds(AUTHOR_ID)).thenReturn(List.of());
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("should report zero on an empty database rather than failing")
+    void shouldReturnZeros_whenThereAreNoApprovedPosts() {
+      // Given
+      when(postRepository.findByModerationStatus(eq(ModerationStatus.APPROVED), any()))
+          .thenReturn(new PageImpl<>(List.of()));
+
+      // When
+      FeedRebuildResultDto result = newsfeedService.rebuildAll();
+
+      // Then
+      assertThat(result.processed()).isZero();
+      assertThat(result.skipped()).isZero();
+    }
+  }
+
+  // =====================================================================
+  // Seen-post de-prioritisation
+  // =====================================================================
+
+  /**
+   * The ranking half of the seen-post demotion.
+   *
+   * <p>What a seen post is worth is this class's business; where the seen set lives, when it expires
+   * and how it is written belong to {@link SeenPostTracker} and are asserted in its own tests. So the
+   * tracker is mocked here, and these tests say only what the feed does with the answers it gets.
+   *
+   * <p>{@link LinkedHashSet} rather than {@code Set.of} throughout, because ordering is the entire
+   * subject and {@code Set.of} has none — the driver returns an ordered set and every assertion below
+   * depends on that.
+   */
+  @Nested
+  @DisplayName("getFeed - seen-post de-prioritisation")
+  class GetFeedSeenDemotionTests {
+
+    private static final long HOUR = 3600_000L;
+
+    private final double now = System.currentTimeMillis();
+
+    private Set<ZSetOperations.TypedTuple<String>> window(Object... idsAndScores) {
+      Set<ZSetOperations.TypedTuple<String>> tuples = new LinkedHashSet<>();
+      for (int i = 0; i < idsAndScores.length; i += 2) {
+        tuples.add(
+            ZSetOperations.TypedTuple.of((String) idsAndScores[i], (Double) idsAndScores[i + 1]));
+      }
+      return tuples;
+    }
+
+    /** Stubs the payload read so that ids come back out as posts carrying the matching id. */
+    @SuppressWarnings("unchecked")
+    private void givenPayloadsForAnyIds() throws Exception {
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(any(List.class)))
+          .thenAnswer(
+              invocation -> {
+                List<String> keys = invocation.getArgument(0);
+                return keys.stream().map(key -> "json-" + key).toList();
+              });
+      when(objectMapper.readValue(anyString(), eq(FeedPostDataDto.class)))
+          .thenAnswer(
+              invocation -> {
+                String json = invocation.getArgument(0);
+                int postId = Integer.parseInt(json.replace("json-feedpost:", ""));
+                return feedPost(postId, AUTHOR_ID, OffsetDateTime.now());
+              });
+    }
+
+    /** The reader is mid-session, and {@code seenIds} are the posts they have already scrolled by. */
+    private void givenSeen(List<String> allIds, String... seenIds) {
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, null)).thenReturn("feedorder:" + AUTHOR_ID);
+      Set<String> seen = Set.of(seenIds);
+      when(seenPostTracker.seenAt(eq(AUTHOR_ID), anyList()))
+          .thenAnswer(
+              invocation -> {
+                List<String> ids = invocation.getArgument(1);
+                return ids.stream().map(id -> seen.contains(id) ? now : null).toList();
+              });
+    }
+
+    @Test
+    @DisplayName("should take the unchanged fast path when the reader has seen nothing")
+    void shouldTakeFastPath_whenNothingSeen() {
+      // Given: the first request of every session
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(false);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0L, 2L)).thenReturn(Set.of());
+
+      // When
+      newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then: nearly every reader is in this case and must keep paying exactly the old cost
+      verify(zSetOperations, never()).reverseRangeWithScores(anyString(), anyLong(), anyLong());
+      verify(seenPostTracker, never()).seenAt(any(), anyList());
+    }
+
+    @Test
+    @DisplayName("should sink a seen post below an equally recent unseen one")
+    void shouldSinkSeenPostBelowUnseenPost() throws Exception {
+      // Given: 1 is newer than 2, but the reader has already scrolled past 1
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - HOUR));
+      givenSeen(List.of("1", "2"), "1");
+      givenPayloadsForAnyIds();
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 5);
+
+      // Then: the unseen post is now first
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(2, 1);
+    }
+
+    @Test
+    @DisplayName("should keep a seen post in the feed rather than removing it")
+    void shouldNotRemoveSeenPost() throws Exception {
+      // Given: every post has been seen. A hard filter would empty the feed here.
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - HOUR));
+      givenSeen(List.of("1", "2"), "1", "2");
+      givenPayloadsForAnyIds();
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 5);
+
+      // Then: both survive, in their original order — everything moved by the same amount. This is
+      // what keeps a feed holding only seed data from running dry.
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("should keep a seen post above an unseen one older than the penalty")
+    void shouldKeepSeenPostAboveMuchOlderUnseenPost() throws Exception {
+      // Given: 1 was seen but is fresh; 2 has never been seen but predates the 7-day penalty
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - 10 * 24 * HOUR));
+      givenSeen(List.of("1", "2"), "1");
+      givenPayloadsForAnyIds();
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 5);
+
+      // Then: a penalty, not a banishment — being seen costs a week of freshness, not the feed
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("should not fail on a feed entry that carries no score")
+    void shouldTolerateNullScore() throws Exception {
+      // Given: TypedTuple.getScore() is nullable, and an NPE here would be a 500 out of a sort
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", null));
+      givenSeen(List.of("1", "2"));
+      givenPayloadsForAnyIds();
+
+      // When / Then: the scoreless entry sorts last instead of blowing up
+      assertThat(newsfeedService.getFeed(AUTHOR_ID, 1, 5).getPosts())
+          .extracting(FeedPostDataDto::getPostId)
+          .containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("should serve the feed unranked when the seen lookup comes back empty")
+    void shouldFailOpen_whenSeenLookupReturnsNothing() throws Exception {
+      // Given: the tracker could not reach Redis and reported nothing rather than throwing
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - HOUR));
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, null)).thenReturn("feedorder:" + AUTHOR_ID);
+      when(seenPostTracker.seenAt(eq(AUTHOR_ID), anyList())).thenReturn(List.of());
+      givenPayloadsForAnyIds();
+
+      // When / Then: losing the demotion is acceptable, losing the feed is not
+      assertThat(newsfeedService.getFeed(AUTHOR_ID, 1, 5).getPosts())
+          .extracting(FeedPostDataDto::getPostId)
+          .containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("should freeze the ranked order when the first page is served")
+    void shouldSaveOrder_onFirstPage() throws Exception {
+      // Given
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - HOUR));
+      givenSeen(List.of("1", "2"), "1");
+      givenPayloadsForAnyIds();
+
+      // When
+      newsfeedService.getFeed(AUTHOR_ID, 1, 5);
+
+      // Then: the order page two will walk down is handed to the tracker to hold still
+      verify(seenPostTracker).saveOrder("feedorder:" + AUTHOR_ID, List.of("2", "1"));
+    }
+
+    @Test
+    @DisplayName("should serve a later page from the frozen order without re-ranking it")
+    void shouldReadOrder_onLaterPage() throws Exception {
+      // Given: page 2 of a scroll the reader is already in the middle of
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, null)).thenReturn("feedorder:" + AUTHOR_ID);
+      when(seenPostTracker.readOrder("feedorder:" + AUTHOR_ID, 2L, 3)).thenReturn(List.of("3"));
+      givenPayloadsForAnyIds();
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 2, 2);
+
+      // Then: the test that pins the whole design. Re-ranking here would push the posts the reader
+      // had just marked seen down into this very window and serve them page one again, forever.
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(3);
+      verify(zSetOperations, never()).reverseRangeWithScores(anyString(), anyLong(), anyLong());
+    }
+
+    @Test
+    @DisplayName("should fall back to the plain window when the frozen order has expired")
+    void shouldFallBack_whenSnapshotExpiredMidScroll() throws Exception {
+      // Given: the snapshot aged out while the reader was still scrolling
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, null)).thenReturn("feedorder:" + AUTHOR_ID);
+      when(seenPostTracker.readOrder("feedorder:" + AUTHOR_ID, 2L, 3)).thenReturn(List.of());
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 2L, 4L))
+          .thenReturn(new LinkedHashSet<>(List.of("9")));
+      givenPayloadsForAnyIds();
+
+      // When / Then: a repeated page is a blemish, an empty one looks like data loss
+      assertThat(newsfeedService.getFeed(AUTHOR_ID, 2, 2).getPosts())
+          .extracting(FeedPostDataDto::getPostId)
+          .containsExactly(9);
+    }
+
+    @Test
+    @DisplayName("should report hasMore from the ids read, not from the payloads that survived")
+    void shouldReportHasMoreFromIds_notFromDeserializedPayloads() throws Exception {
+      // Given: two ids, but one payload has aged out of the 7-day cache while its id survives in
+      // the 30-day feed index
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(false);
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange("feed:" + AUTHOR_ID, 0L, 1L))
+          .thenReturn(new LinkedHashSet<>(List.of("1", "2")));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(List.of("feedpost:1", "feedpost:2")))
+          .thenReturn(Arrays.asList("json-1", null));
+      when(objectMapper.readValue("json-1", FeedPostDataDto.class))
+          .thenReturn(feedPost(1, AUTHOR_ID, OffsetDateTime.now()));
+      when(objectMapper.readValue((String) isNull(), eq(FeedPostDataDto.class)))
+          .thenThrow(new IllegalArgumentException("no content"));
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 1);
+
+      // Then: the gap is in the payload cache, not at the end of the feed
+      assertThat(result.getPosts()).hasSize(1);
+      assertThat(result.isHasMore()).isTrue();
+    }
+
+    @Test
+    @DisplayName("should return an empty page rather than overflowing on an enormous page number")
+    void shouldNotOverflow_onEnormousPageNumber() {
+      // Given: page carries @Positive but no @Max, so this is a legal request today
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, null)).thenReturn("feedorder:" + AUTHOR_ID);
+      when(seenPostTracker.readOrder(anyString(), anyLong(), anyInt())).thenReturn(List.of());
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRange(anyString(), anyLong(), anyLong())).thenReturn(Set.of());
+
+      // When / Then: BVA — (page - 1) * size must not wrap negative into a subList
+      assertThat(newsfeedService.getFeed(AUTHOR_ID, Integer.MAX_VALUE, 50).getPosts()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should still drop blocked authors from a re-ranked page")
+    void shouldStillDropBlockedAuthors_whenRanked() throws Exception {
+      // Given: demotion and blocking applied to the same page
+      when(blockQueryService.blockedPairIds(AUTHOR_ID)).thenReturn(Set.of(FRIEND_ID));
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 999L))
+          .thenReturn(window("1", now, "2", now - HOUR));
+      givenSeen(List.of("1", "2"), "1");
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(List.of("feedpost:2", "feedpost:1")))
+          .thenReturn(List.of("json-2", "json-1"));
+      when(objectMapper.readValue("json-2", FeedPostDataDto.class))
+          .thenReturn(feedPost(2, FRIEND_ID, OffsetDateTime.now()));
+      when(objectMapper.readValue("json-1", FeedPostDataDto.class))
+          .thenReturn(feedPost(1, AUTHOR_ID, OffsetDateTime.now()));
+
+      // When
+      FeedResponseDto result = newsfeedService.getFeed(AUTHOR_ID, 1, 2);
+
+      // Then: 2 outranked 1 and was still removed, because the block filter runs on the payloads
+      assertThat(result.getPosts()).extracting(FeedPostDataDto::getPostId).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("should keep the seen penalty larger than every freshness boost combined")
+    void shouldKeepPenaltyLargerThanEveryBoost() {
+      // Given / Then: a guard, not a behaviour. If the boosts are ever tuned up past the penalty, a
+      // popular post by a close friend climbs straight back to where the reader already saw it, and
+      // nothing else in this suite would notice.
+      assertThat(NewsfeedService.SEEN_PENALTY_MILLIS)
+          .isGreaterThan(
+              2
+                  * (PostScoringService.ENGAGEMENT_BOOST_MILLIS
+                      + PostScoringService.AFFINITY_BOOST_MILLIS));
+    }
+  }
+
+  @Nested
+  @DisplayName("getFeed - SKILLS scope de-prioritisation")
+  class GetSkillFeedSeenDemotionTests {
+
+    @Test
+    @DisplayName("should read the same 300-post window whether or not anything has been seen")
+    void shouldNotNarrowTheCandidateWindow() {
+      // Given
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, FeedScope.SKILLS))
+          .thenReturn("feedorder:" + AUTHOR_ID + ":SKILLS");
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 299L))
+          .thenReturn(Set.of());
+
+      // When
+      newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then: ranking happens strictly inside the window. Penalising first and then taking the top
+      // 300 would push seen posts out of the tab altogether, which is the filter this must not be.
+      verify(zSetOperations).reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 299L);
+    }
+
+    @Test
+    @DisplayName("should keep the two tabs' frozen orders apart")
+    void shouldScopeTheSnapshotKey() throws Exception {
+      // Given
+      when(skillTagResolver.resolveTagsFor(AUTHOR_ID)).thenReturn(Set.of("java"));
+      when(seenPostTracker.hasSeenAnything(AUTHOR_ID)).thenReturn(true);
+      when(seenPostTracker.orderKey(AUTHOR_ID, FeedScope.SKILLS))
+          .thenReturn("feedorder:" + AUTHOR_ID + ":SKILLS");
+      when(seenPostTracker.seenAt(eq(AUTHOR_ID), anyList()))
+          .thenReturn(Arrays.asList((Double) null));
+      when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+      when(zSetOperations.reverseRangeWithScores("feed:" + AUTHOR_ID, 0L, 299L))
+          .thenReturn(new LinkedHashSet<>(List.of(ZSetOperations.TypedTuple.of("1", 10d))));
+      when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+      when(valueOperations.multiGet(List.of("feedpost:1"))).thenReturn(List.of("json-1"));
+      FeedPostDataDto post = feedPost(1, FRIEND_ID, OffsetDateTime.now());
+      post.setHashtags(List.of("java"));
+      when(objectMapper.readValue("json-1", FeedPostDataDto.class)).thenReturn(post);
+
+      // When
+      newsfeedService.getFeed(AUTHOR_ID, 1, 10, FeedScope.SKILLS);
+
+      // Then: switching tabs must not scramble the other tab's pagination
+      verify(seenPostTracker).saveOrder("feedorder:" + AUTHOR_ID + ":SKILLS", List.of("1"));
+    }
+  }
+
+  // =====================================================================
+  // markSeen
+  // =====================================================================
+
+  @Nested
+  @DisplayName("markSeen")
+  class MarkSeenTests {
+
+    @Test
+    @DisplayName("should hand the batch to the tracker under the caller's own id")
+    void shouldDelegateToTheTracker() {
+      // When
+      newsfeedService.markSeen(AUTHOR_ID, List.of(1, 2, 3));
+
+      // Then: how it is stored, capped and expired is SeenPostTrackerTest's subject, not this one's
+      verify(seenPostTracker).markSeen(AUTHOR_ID, List.of(1, 2, 3));
     }
   }
 }

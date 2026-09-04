@@ -10,6 +10,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,10 +33,14 @@ public class PersonalAccessTokenService {
 
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
+  /** Long enough to tell tokens apart, short enough to leave the secret's entropy intact. */
+  private static final int TOKEN_PREFIX_LENGTH = 12;
+
   @Transactional
   public CreateTokenResponseDto createToken(Integer userId, CreateTokenRequestDto request) {
     String rawToken = generateToken();
     String tokenHash = hashToken(rawToken);
+    String tokenPrefix = rawToken.substring(0, Math.min(TOKEN_PREFIX_LENGTH, rawToken.length()));
 
     OffsetDateTime expiresAt = null;
     if (Objects.nonNull(request.getExpiresInDays()) && request.getExpiresInDays() > 0) {
@@ -51,6 +56,7 @@ public class PersonalAccessTokenService {
         PersonalAccessTokenEntity.builder()
             .userId(userId)
             .tokenHash(tokenHash)
+            .tokenPrefix(tokenPrefix)
             .name(request.getName())
             .expiresAt(expiresAt)
             .vaultPermission(permission)
@@ -70,16 +76,24 @@ public class PersonalAccessTokenService {
     return validateTokenAndGetEntity(rawToken).getUserId();
   }
 
+  /**
+   * Resolves a raw PAT to its row, or rejects it.
+   *
+   * <p>{@link BadCredentialsException} (401), not {@code NotFoundException} (404): the Obsidian
+   * plugin presents this token *as* its credential, so an unknown or expired one is a failure to
+   * authenticate, not a missing resource. 404 told the plugin its endpoint was wrong when the real
+   * answer was "your token needs replacing".
+   */
   public PersonalAccessTokenEntity validateTokenAndGetEntity(String rawToken) {
     String tokenHash = hashToken(rawToken);
     PersonalAccessTokenEntity entity =
         tokenRepository
             .findByTokenHash(tokenHash)
-            .orElseThrow(() -> new NotFoundException("Invalid token"));
+            .orElseThrow(() -> new BadCredentialsException("Invalid token"));
 
     if (Objects.nonNull(entity.getExpiresAt())
         && OffsetDateTime.now().isAfter(entity.getExpiresAt())) {
-      throw new NotFoundException("Token expired");
+      throw new BadCredentialsException("Token expired");
     }
 
     entity.setLastUsedAt(OffsetDateTime.now());
@@ -94,6 +108,7 @@ public class PersonalAccessTokenService {
                 PersonalAccessTokenResponseDto.builder()
                     .id(token.getId())
                     .name(token.getName())
+                    .tokenPrefix(token.getTokenPrefix())
                     .expiresAt(token.getExpiresAt())
                     .lastUsedAt(token.getLastUsedAt())
                     .vaultPermission(token.getVaultPermission())

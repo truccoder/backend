@@ -145,6 +145,7 @@ class ReputationServiceTest {
       // Given
       UserEntity user = new UserEntity();
       user.setId(USER_ID);
+      user.setUsername("duonghaigiang");
       user.setEliteScore(120);
       when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
       when(userRoadmapProgressRepository.existsByUserIdAndStatus(
@@ -162,6 +163,8 @@ class ReputationServiceTest {
       assertThat(result.getCurrentLevelMin()).isEqualTo(RepLevel.CONTRIBUTOR.getMin());
       assertThat(result.getNextLevelMin()).isEqualTo(RepLevel.PRACTITIONER.getMin());
       assertThat(result.isVerifiedExpert()).isTrue();
+      // B38: /chats has no other way to map a userId back to a /u/{username} link
+      assertThat(result.getUsername()).isEqualTo("duonghaigiang");
     }
 
     @Test

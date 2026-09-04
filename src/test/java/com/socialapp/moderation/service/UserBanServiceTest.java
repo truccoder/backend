@@ -277,6 +277,54 @@ class UserBanServiceTest {
       verify(violationRepository).save(violationCaptor.capture());
       assertThat(violationCaptor.getValue().getSeverity()).isEqualTo(ViolationSeverity.LOW);
     }
+
+    // B47: a snapshot of the post taken at record time, so the panel can still say what was
+    // flagged after t_posts.id -> t_user_violations.post_id (ON DELETE SET NULL, V9) fires.
+
+    @Test
+    @DisplayName("should leave postExcerpt null when recorded through the 4-arg overload")
+    void shouldLeaveExcerptNull_whenNoExcerptGiven() {
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID, null)));
+      when(violationRepository.countRecentViolations(eq(USER_ID), any())).thenReturn(0L);
+      userBanService.recordViolation(USER_ID, POST_ID, ViolationType.SPAM, "d");
+      verify(violationRepository).save(violationCaptor.capture());
+      assertThat(violationCaptor.getValue().getPostExcerpt()).isNull();
+    }
+
+    @Test
+    @DisplayName("should collapse internal whitespace in the stored excerpt")
+    void shouldCollapseWhitespace_inExcerpt() {
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID, null)));
+      when(violationRepository.countRecentViolations(eq(USER_ID), any())).thenReturn(0L);
+      userBanService.recordViolation(
+          USER_ID, POST_ID, ViolationType.SPAM, "d", "Check this out\n\n  right now!  ");
+      verify(violationRepository).save(violationCaptor.capture());
+      assertThat(violationCaptor.getValue().getPostExcerpt())
+          .isEqualTo("Check this out right now!");
+    }
+
+    @Test
+    @DisplayName("should turn a blank post excerpt into null rather than an empty string")
+    void shouldTreatBlankExcerpt_asNull() {
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID, null)));
+      when(violationRepository.countRecentViolations(eq(USER_ID), any())).thenReturn(0L);
+      userBanService.recordViolation(USER_ID, POST_ID, ViolationType.SPAM, "d", "   ");
+      verify(violationRepository).save(violationCaptor.capture());
+      assertThat(violationCaptor.getValue().getPostExcerpt()).isNull();
+    }
+
+    @Test
+    @DisplayName("should cap a long post excerpt at 160 characters with an ellipsis")
+    void shouldCapExcerpt_atMaxLength() {
+      when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user(USER_ID, null)));
+      when(violationRepository.countRecentViolations(eq(USER_ID), any())).thenReturn(0L);
+      String longPost = "a".repeat(200);
+      userBanService.recordViolation(USER_ID, POST_ID, ViolationType.SPAM, "d", longPost);
+      verify(violationRepository).save(violationCaptor.capture());
+      assertThat(violationCaptor.getValue().getPostExcerpt())
+          .hasSize(161)
+          .isEqualTo("a".repeat(160) + "…");
+    }
   }
 
   // =====================================================================

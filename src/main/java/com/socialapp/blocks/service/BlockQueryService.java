@@ -1,5 +1,6 @@
 package com.socialapp.blocks.service;
 
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -7,6 +8,8 @@ import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.blocks.entity.UserBlockEntity;
+import com.socialapp.blocks.entity.UserBlockId;
 import com.socialapp.blocks.repository.UserBlockRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -89,5 +92,29 @@ public class BlockQueryService {
     Set<Integer> allowed = new HashSet<>(candidateIds);
     allowed.removeAll(blocked);
     return allowed;
+  }
+
+  /**
+   * Every block standing between any two of the given users, as the raw {@code (blocker, blocked)}
+   * pairs.
+   *
+   * <p>The group-chat question: not "may these two talk" but "may all of these be in one room". It
+   * returns the pairs rather than a boolean because the caller has to decide what it may say out
+   * loud — a block involving the requester is something they can already discover one pair at a
+   * time, while a block between two <em>other</em> members is a fact about two third parties that
+   * must not be spelled out to whoever is building the group. See {@code
+   * StreamChatService#createGroupChat}.
+   *
+   * <p>Fewer than two ids cannot contain a pair, so that case is answered without a query — which
+   * also keeps an empty {@code IN} list away from Postgres.
+   */
+  @Transactional(readOnly = true)
+  public List<UserBlockId> blocksAmong(Collection<Integer> userIds) {
+    if (userIds == null || userIds.size() < 2) {
+      return List.of();
+    }
+    return userBlockRepository.findBlocksAmong(userIds).stream()
+        .map(UserBlockEntity::getId)
+        .toList();
   }
 }

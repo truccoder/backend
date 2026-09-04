@@ -1,6 +1,7 @@
 package com.socialapp.friendships.service;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,9 +11,12 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.common.exception.ForbiddenException;
@@ -21,20 +25,27 @@ import com.socialapp.common.exception.ValidationException;
 import com.socialapp.friendships.cache.FriendSuggestionCache;
 import com.socialapp.friendships.cache.UserProfileCache;
 import com.socialapp.friendships.dto.FriendListResponseDto;
+import com.socialapp.friendships.dto.FriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.FriendSuggestionDto;
 import com.socialapp.friendships.dto.MutualFriendCountDto;
 import com.socialapp.friendships.dto.PendingFriendRequestDto;
 import com.socialapp.friendships.dto.SentFriendRequestDto;
+import com.socialapp.friendships.dto.SentFriendRequestPageResponseDto;
 import com.socialapp.friendships.dto.UserProfileDto;
 import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.repository.FriendRequestRepository;
 import com.socialapp.friendships.repository.FriendshipRepository;
+import com.socialapp.hashtags.dto.AuthorHashtagDto;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
+import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
+import com.socialapp.knowledge.service.ProfileMatchScorer;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -52,12 +63,22 @@ public class FriendshipService {
   private final UserProfessionalProfileRepository professionalProfileRepository;
   private final Neo4jClient neo4jClient;
   private final BlockQueryService blockQueryService;
+  private final HashtagRepository hashtagRepository;
 
   /**
    * Candidate pool pulled from Neo4j before background-based re-ranking and trimming to the
    * caller's requested limit; decoupled from that limit so the cached pool stays reusable.
    */
   private static final int SUGGESTION_POOL_SIZE = 50;
+
+  /**
+   * How many shared hashtags a single suggestion carries as a reason. A prolific poster can share
+   * dozens of tags with someone; the point is a recognisable "you both post about X", not a second
+   * profile page, so the list is capped the way {@code matchedSkills} isn't (tech stacks are
+   * user-curated and short by construction, tag history across every post someone has ever written
+   * is not).
+   */
+  private static final int MAX_SHARED_HASHTAGS = 5;
 
   @Transactional
   public void sendFriendRequest(Integer actorId, Integer addresseeId) {
@@ -111,6 +132,8 @@ public class FriendshipService {
             .type(NotificationType.FRIEND_REQUEST)
             .title("New friend request")
             .body(actorName(actorId) + " sent you a friend request")
+            .messageKey(NotificationMessages.FRIEND_REQUEST)
+            .messageArgs(NotificationMessages.args("actor", actorName(actorId)))
             .referenceId(entity.getId())
             .referenceType("FRIEND_REQUEST")
             .build());
@@ -139,9 +162,30 @@ public class FriendshipService {
     request.setStatus(FriendRequestStatus.ACCEPTED);
     friendRequestRepository.save(request);
 
-    friendshipRepository.mergeUser(request.getRequesterId());
-    friendshipRepository.mergeUser(request.getAddresseeId());
-    friendshipRepository.createFriendship(request.getRequesterId(), request.getAddresseeId());
+    // The graph write happens AFTER Postgres commits, not alongside it.
+    //
+    // These are two stores with two transaction managers and no shared transaction: JPA is
+    // @Primary and owns this method, while FriendshipRepository is a Neo4jRepository wired to
+    // neo4jTransactionManager (see Neo4jConfig). Written inline, the Cypher committed immediately
+    // and the row committed at the end of the method, so anything failing in between — the
+    // notification below, a constraint, a dropped connection — left the graph saying the two are
+    // friends while the request sat PENDING. That is the dangerous direction: getFriends, the
+    // suggestion query and the fan-out audience all read the graph, so the pair would see each
+    // other's FRIENDS-only posts off the back of a request nobody ever accepted, and unfriend
+    // could not clean it up because deleteAcceptedBetween would find no row.
+    //
+    // Deferring inverts the skew. If the graph write fails now, Postgres says ACCEPTED and the
+    // graph has no edge: the two are not yet friends anywhere it matters, nobody sees anything
+    // they should not, and re-accepting or a reconciliation pass repairs it. Same afterCommit
+    // pattern as BlockService, and for the same reason.
+    Integer requesterId = request.getRequesterId();
+    Integer addresseeId = request.getAddresseeId();
+    afterCommit(
+        () -> {
+          friendshipRepository.mergeUser(requesterId);
+          friendshipRepository.mergeUser(addresseeId);
+          friendshipRepository.createFriendship(requesterId, addresseeId);
+        });
 
     friendSuggestionCache.evict(request.getRequesterId());
     friendSuggestionCache.evict(request.getAddresseeId());
@@ -153,9 +197,34 @@ public class FriendshipService {
             .type(NotificationType.FRIEND_ACCEPTED)
             .title("Friend request accepted")
             .body(actorName(actorId) + " accepted your friend request")
+            .messageKey(NotificationMessages.FRIEND_ACCEPTED)
+            .messageArgs(NotificationMessages.args("actor", actorName(actorId)))
             .referenceId(request.getId())
             .referenceType("FRIEND_REQUEST")
             .build());
+  }
+
+  /**
+   * Runs {@code action} once the surrounding transaction has committed, or immediately when there
+   * is none.
+   *
+   * <p>Same helper, and the same reasoning, as {@code BlockService#afterCommit}: work that reaches
+   * a second store must not be done speculatively inside a transaction that may still roll back.
+   * Kept local rather than shared because the two modules have no dependency on one another and one
+   * short method is a smaller cost than a new coupling.
+   */
+  private void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            action.run();
+          }
+        });
   }
 
   @Transactional
@@ -251,56 +320,77 @@ public class FriendshipService {
    * <p>The sent-requests list needs no equivalent: blocking cancels pending requests in both
    * directions, so a request the caller sent to someone who then blocked them is already gone.
    */
-  public List<PendingFriendRequestDto> getPendingRequests(Integer userId) {
+  public FriendRequestPageResponseDto getPendingRequests(
+      Integer userId, Integer cursor, int limit) {
+    // limit + 1 to answer hasMore without a COUNT, and the cursor is taken from the last row READ
+    // rather than the last one kept — block filtering happens after, and a cursor taken after it
+    // would rewind whenever the last request on a page came from a blocked user.
+    List<FriendRequestEntity> rows =
+        friendRequestRepository.findIncomingForPage(
+            userId, FriendRequestStatus.PENDING, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = rows.size() > limit;
+    List<FriendRequestEntity> page = hasMore ? rows.subList(0, limit) : rows;
+    Integer nextCursor = hasMore ? page.get(page.size() - 1).getId() : null;
+
     Set<Integer> blockedIds = blockQueryService.blockedPairIds(userId);
     List<FriendRequestEntity> requests =
-        friendRequestRepository
-            .findByAddresseeIdAndStatusOrderByCreatedAtDesc(userId, FriendRequestStatus.PENDING)
-            .stream()
-            .filter(request -> !blockedIds.contains(request.getRequesterId()))
-            .toList();
+        page.stream().filter(request -> !blockedIds.contains(request.getRequesterId())).toList();
 
     Map<Integer, UserProfileDto> profilesById =
         loadProfiles(
             requests.stream().map(FriendRequestEntity::getRequesterId).collect(Collectors.toSet()));
 
-    return requests.stream()
-        .map(
-            request -> {
-              UserProfileDto profile = profilesById.get(request.getRequesterId());
-              return new PendingFriendRequestDto(
-                  request.getId(),
-                  request.getRequesterId(),
-                  profile != null ? profile.fullName() : null,
-                  profile != null ? profile.profilePictureUrl() : null,
-                  request.getStatus(),
-                  request.getCreatedAt());
-            })
-        .toList();
+    List<PendingFriendRequestDto> dtos =
+        requests.stream()
+            .map(
+                request -> {
+                  UserProfileDto profile = profilesById.get(request.getRequesterId());
+                  return new PendingFriendRequestDto(
+                      request.getId(),
+                      request.getRequesterId(),
+                      profile != null ? profile.username() : null,
+                      profile != null ? profile.fullName() : null,
+                      profile != null ? profile.profilePictureUrl() : null,
+                      request.getStatus(),
+                      request.getCreatedAt());
+                })
+            .toList();
+
+    return new FriendRequestPageResponseDto(dtos, nextCursor, hasMore);
   }
 
-  public List<SentFriendRequestDto> getSentRequests(Integer userId) {
-    List<FriendRequestEntity> requests =
-        friendRequestRepository.findByRequesterIdAndStatusOrderByCreatedAtDesc(
-            userId, FriendRequestStatus.PENDING);
+  public SentFriendRequestPageResponseDto getSentRequests(
+      Integer userId, Integer cursor, int limit) {
+    List<FriendRequestEntity> rows =
+        friendRequestRepository.findOutgoingForPage(
+            userId, FriendRequestStatus.PENDING, cursor, PageRequest.of(0, limit + 1));
+
+    boolean hasMore = rows.size() > limit;
+    List<FriendRequestEntity> requests = hasMore ? rows.subList(0, limit) : rows;
+    Integer nextCursor = hasMore ? requests.get(requests.size() - 1).getId() : null;
 
     Map<Integer, UserProfileDto> profilesById =
         loadProfiles(
             requests.stream().map(FriendRequestEntity::getAddresseeId).collect(Collectors.toSet()));
 
-    return requests.stream()
-        .map(
-            request -> {
-              UserProfileDto profile = profilesById.get(request.getAddresseeId());
-              return new SentFriendRequestDto(
-                  request.getId(),
-                  request.getAddresseeId(),
-                  profile != null ? profile.fullName() : null,
-                  profile != null ? profile.profilePictureUrl() : null,
-                  request.getStatus(),
-                  request.getCreatedAt());
-            })
-        .toList();
+    List<SentFriendRequestDto> dtos =
+        requests.stream()
+            .map(
+                request -> {
+                  UserProfileDto profile = profilesById.get(request.getAddresseeId());
+                  return new SentFriendRequestDto(
+                      request.getId(),
+                      request.getAddresseeId(),
+                      profile != null ? profile.username() : null,
+                      profile != null ? profile.fullName() : null,
+                      profile != null ? profile.profilePictureUrl() : null,
+                      request.getStatus(),
+                      request.getCreatedAt());
+                })
+            .toList();
+
+    return new SentFriendRequestPageResponseDto(dtos, nextCursor, hasMore);
   }
 
   public List<FriendSuggestionDto> getSuggestions(Integer userId, int limit) {
@@ -321,16 +411,39 @@ public class FriendshipService {
             ? pool
             : pool.stream().filter(s -> !blockedIds.contains(s.userId())).toList();
 
-    List<MutualFriendCountDto> topSuggestions =
-        rankByBackground(userId, visiblePool).stream().limit(limit).toList();
+    // Skipped entirely on an empty pool rather than left to rankByBackground's own guard: nothing
+    // downstream needs it, and a suggestions list a caller will never see is not worth a query.
+    UserProfessionalProfileEntity callerProfile =
+        visiblePool.isEmpty() ? null : professionalProfileRepository.findById(userId).orElse(null);
 
+    List<MutualFriendCountDto> topSuggestions =
+        rankByBackground(callerProfile, visiblePool).stream().limit(limit).toList();
+
+    // Everything from here on is about explaining the already-decided order, not changing it —
+    // computed only for the trimmed page, not the up-to-50-wide pool rankByBackground sorted.
     Set<Integer> suggestedIds =
         topSuggestions.stream().map(MutualFriendCountDto::userId).collect(Collectors.toSet());
     Map<Integer, UserProfileDto> profilesById = loadProfiles(suggestedIds);
+    Map<Integer, UserProfessionalProfileEntity> candidateProfiles =
+        professionalProfilesById(suggestedIds);
+    Map<Integer, List<String>> sharedHashtagsById = sharedHashtagsByCandidate(userId, suggestedIds);
 
     return topSuggestions.stream()
-        .map(s -> new FriendSuggestionDto(profilesById.get(s.userId()), s.mutualFriends()))
-        .filter(dto -> dto.profile() != null)
+        .map(
+            s -> {
+              UserProfileDto profile = profilesById.get(s.userId());
+              if (profile == null) {
+                return null;
+              }
+              UserProfessionalProfileEntity candidate = candidateProfiles.get(s.userId());
+              return new FriendSuggestionDto(
+                  profile,
+                  s.mutualFriends(),
+                  sharedRole(callerProfile, candidate),
+                  matchedSkills(callerProfile, candidate),
+                  sharedHashtagsById.getOrDefault(s.userId(), List.of()));
+            })
+        .filter(Objects::nonNull)
         .toList();
   }
 
@@ -341,23 +454,15 @@ public class FriendshipService {
    * is returned unchanged (already ranked by mutual friends from Neo4j).
    */
   private List<MutualFriendCountDto> rankByBackground(
-      Integer userId, List<MutualFriendCountDto> pool) {
-    if (pool.isEmpty()) {
-      return pool;
-    }
-
-    UserProfessionalProfileEntity callerProfile =
-        professionalProfileRepository.findById(userId).orElse(null);
-    if (callerProfile == null) {
+      UserProfessionalProfileEntity callerProfile, List<MutualFriendCountDto> pool) {
+    if (pool.isEmpty() || callerProfile == null) {
       return pool;
     }
 
     Set<Integer> candidateIds =
         pool.stream().map(MutualFriendCountDto::userId).collect(Collectors.toSet());
     Map<Integer, UserProfessionalProfileEntity> candidateProfiles =
-        professionalProfileRepository.findAllById(candidateIds).stream()
-            .collect(
-                Collectors.toMap(UserProfessionalProfileEntity::getUserId, Function.identity()));
+        professionalProfilesById(candidateIds);
 
     Comparator<MutualFriendCountDto> comparator =
         Comparator.comparing(
@@ -375,31 +480,96 @@ public class FriendshipService {
     return pool.stream().sorted(comparator).toList();
   }
 
-  // Both helpers below are only ever called from rankByBackground() with an already
-  // null-checked `caller` (see the `callerProfile == null` guard above), so `caller` itself is
-  // never null here.
+  private Map<Integer, UserProfessionalProfileEntity> professionalProfilesById(
+      Set<Integer> userIds) {
+    if (userIds.isEmpty()) {
+      return Map.of();
+    }
+    return professionalProfileRepository.findAllById(userIds).stream()
+        .collect(Collectors.toMap(UserProfessionalProfileEntity::getUserId, Function.identity()));
+  }
+
+  // The four helpers below are null-safe on BOTH sides: rankByBackground only ever calls them
+  // with a non-null caller (guarded above), but getSuggestions also uses sameRole/matchedSkills
+  // to build the reason on a caller that may have no professional profile at all — in which case
+  // "same background" is simply not one of the reasons, not a NullPointerException.
   private boolean sameRole(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    return candidate != null
-        && caller.getPrimaryRole() != null
-        && caller.getPrimaryRole().equals(candidate.getPrimaryRole());
+    return caller != null
+        && candidate != null
+        && ProfileMatchScorer.sameRole(caller.getPrimaryRole(), candidate.getPrimaryRole());
+  }
+
+  /** The caller's own {@code primaryRole} when it matches the candidate's, {@code null} otherwise. */
+  private PrimaryRole sharedRole(
+      UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
+    return sameRole(caller, candidate) ? caller.getPrimaryRole() : null;
   }
 
   private int techStackOverlap(
       UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
-    if (candidate == null
-        || caller.getKnownTechStack() == null
-        || candidate.getKnownTechStack() == null) {
-      return 0;
+    return caller == null || candidate == null
+        ? 0
+        : ProfileMatchScorer.skillOverlap(
+            caller.getKnownTechStack(), candidate.getKnownTechStack());
+  }
+
+  private List<String> matchedSkills(
+      UserProfessionalProfileEntity caller, UserProfessionalProfileEntity candidate) {
+    return caller == null || candidate == null
+        ? List.of()
+        : ProfileMatchScorer.matchedSkills(
+            caller.getKnownTechStack(), candidate.getKnownTechStack());
+  }
+
+  /**
+   * For each id in {@code candidateIds}, the hashtags {@code userId} and that candidate have both
+   * carried on a PUBLIC, APPROVED post, ordered by how popular the tag is overall and capped at
+   * {@link #MAX_SHARED_HASHTAGS}. A candidate with no overlap — including one who has never
+   * posted publicly, or hasn't used any tag the caller has — is absent from the map rather than
+   * mapped to an empty list, so callers can use {@code getOrDefault(id, List.of())} either way.
+   *
+   * <p>Independent of professional-profile data: this is the one reason that still works for a
+   * caller who has never filled in {@code UserProfessionalProfileEntity}, because it is built
+   * from what people actually posted rather than what they declared about themselves.
+   */
+  private Map<Integer, List<String>> sharedHashtagsByCandidate(
+      Integer userId, Set<Integer> candidateIds) {
+    if (candidateIds.isEmpty()) {
+      return Map.of();
     }
 
-    Set<String> callerStack =
-        caller.getKnownTechStack().stream().map(String::toLowerCase).collect(Collectors.toSet());
-    return (int)
-        candidate.getKnownTechStack().stream()
-            .map(String::toLowerCase)
-            .filter(callerStack::contains)
-            .count();
+    Set<Integer> authorIds = new HashSet<>(candidateIds);
+    authorIds.add(userId);
+    Map<Integer, List<String>> hashtagsByAuthor =
+        hashtagRepository.findHashtagsByAuthors(authorIds).stream()
+            .collect(
+                Collectors.groupingBy(
+                    AuthorHashtagDto::authorId,
+                    Collectors.mapping(AuthorHashtagDto::hashtagName, Collectors.toList())));
+
+    Set<String> callerTags = Set.copyOf(hashtagsByAuthor.getOrDefault(userId, List.of()));
+    if (callerTags.isEmpty()) {
+      return Map.of();
+    }
+
+    Map<Integer, List<String>> shared = new LinkedHashMap<>();
+    for (Integer candidateId : candidateIds) {
+      List<String> candidateTags = hashtagsByAuthor.get(candidateId);
+      if (candidateTags == null) {
+        continue;
+      }
+      List<String> overlap =
+          candidateTags.stream()
+              .filter(callerTags::contains)
+              .distinct()
+              .limit(MAX_SHARED_HASHTAGS)
+              .toList();
+      if (!overlap.isEmpty()) {
+        shared.put(candidateId, overlap);
+      }
+    }
+    return shared;
   }
 
   /**

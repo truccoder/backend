@@ -70,7 +70,8 @@ public class ModerationEventListener {
             authorId,
             postId,
             result.getViolations().get(0),
-            "AI moderation detected violation: " + result.getViolations());
+            "AI moderation detected violation: " + result.getViolations(),
+            event.getContent());
       }
 
       if (result.isApproved()) {

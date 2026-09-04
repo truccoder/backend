@@ -57,6 +57,7 @@ public class BookResponseMapper {
         .previewUrl(previewUrl)
         .coverImageUrl(bookStorageService.getCoverUrl(book.getCoverImageKey()))
         .fileFormat(book.getFileFormat())
+        .category(book.getCategory())
         .fileSizeBytes(book.getFileSizeBytes())
         .totalPages(book.getTotalPages())
         .previewPages(book.getPreviewPages())

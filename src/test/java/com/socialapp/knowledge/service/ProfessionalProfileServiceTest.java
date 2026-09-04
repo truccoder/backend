@@ -73,14 +73,16 @@ class ProfessionalProfileServiceTest {
     }
 
     @Test
-    @DisplayName("should reject when no profile exists")
-    void shouldThrowNotFoundException_whenProfileDoesNotExist() {
+    @DisplayName("should return null, not 404, when no profile has been set up yet")
+    void shouldReturnNull_whenProfileDoesNotExist() {
       // Given
       when(profileRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
-      // When / Then
-      assertThatThrownBy(() -> professionalProfileService.getProfile(USER_ID))
-          .isInstanceOf(NotFoundException.class);
+      // When
+      ProfessionalProfileResponseDto result = professionalProfileService.getProfile(USER_ID);
+
+      // Then
+      assertThat(result).isNull();
     }
   }
 

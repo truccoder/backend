@@ -37,7 +37,9 @@ public class GuestRateLimitProperties {
           "/v1/api/users/*/roadmap-progress",
           "/v1/api/github/stats/*",
           "/v1/api/books/author/*",
-          "/v1/api/trending");
+          "/v1/api/trending",
+          "/v1/api/hashtags/suggest",
+          "/v1/api/hashtags/trending");
 
   /**
    * Whether to read the client IP from {@code X-Forwarded-For} instead of the socket address.

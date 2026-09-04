@@ -8,6 +8,7 @@ import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 public record SentFriendRequestDto(
     Integer id,
     Integer addresseeId,
+    String addresseeUsername,
     String addresseeFullName,
     String addresseeProfilePictureUrl,
     FriendRequestStatus status,
