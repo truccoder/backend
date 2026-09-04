@@ -72,6 +72,16 @@ public interface UserRepository extends JpaRepository<UserEntity, Integer> {
    * V48__add_trigram_search_indexes.sql} are built on the wrapper, and Postgres matches an
    * expression index by the parsed expression. Plain {@code unaccent} still returns the right
    * users, just via a full scan of t_users.
+   *
+   * <p>Also matches a <b>verified</b> roadmap skill (B48 in {@code docs/backend-plan.md}): a
+   * reader searching "java" wants the people who have verified Java, the same expectation {@code
+   * ProjectRepository.searchIds} (B33) and {@code RoadmapRepository.search} (B36) already meet for
+   * projects and tracks. {@code EXISTS} rather than a join — a join would multiply a user's row by
+   * however many of their verified nodes match, same reasoning as B36. Only {@code VERIFIED}
+   * counts, matching the set {@code PublicProfileResponse.verifiedSkills} (B2) exposes: a pending
+   * claim is not a fact yet, and a rejected one is a record of being told no. The node-name
+   * trigram index from {@code V101__add_roadmap_node_search_index.sql} covers this match too — same
+   * {@code f_unaccent(lower(name))} expression as {@code RoadmapRepository.search}.
    */
   @Query(
       """
@@ -79,7 +89,14 @@ public interface UserRepository extends JpaRepository<UserEntity, Integer> {
                       WHERE (cast(function('f_unaccent', LOWER(u.fullName)) as string)
                               LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
                          OR cast(function('f_unaccent', LOWER(u.username)) as string)
-                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\')
+                              LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
+                         OR EXISTS (
+                              SELECT 1 FROM UserRoadmapProgressEntity p
+                              WHERE p.user = u
+                                AND p.status = com.socialapp.roadmap.enums.VerificationStatus.VERIFIED
+                                AND cast(function('f_unaccent', LOWER(p.node.name)) as string)
+                                      LIKE cast(function('f_unaccent', LOWER(CONCAT('%', :query, '%'))) as string) ESCAPE '\\'
+                            ))
                         AND u.id NOT IN :excludedIds
                       ORDER BY CASE WHEN u.id IN :friendIds THEN 0 ELSE 1 END, u.fullName ASC
                     """)

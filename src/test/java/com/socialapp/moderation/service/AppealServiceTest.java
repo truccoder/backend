@@ -69,6 +69,7 @@ class AppealServiceTest {
         .id(id)
         .userId(userId)
         .postId(11)
+        .postExcerpt("Check out my new project, link in bio!")
         .violationType(ViolationType.SPAM)
         .description("Admin manual review: repeated advertising")
         .build();
@@ -116,6 +117,10 @@ class AppealServiceTest {
       assertThat(result).hasSize(1);
       assertThat(result.get(0).isAppealPending()).isTrue();
       assertThat(result.get(0).getViolationType()).isEqualTo(ViolationType.SPAM);
+      // B47: the snapshot taken at record time, not re-derived from postId — it must survive the
+      // post being deleted later.
+      assertThat(result.get(0).getPostExcerpt())
+          .isEqualTo("Check out my new project, link in bio!");
     }
   }
 

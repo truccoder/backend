@@ -28,6 +28,7 @@ public class UserBanService {
 
   private static final int VIOLATIONS_BEFORE_BAN = 2;
   private static final int BAN_DURATION_DAYS = 7;
+  private static final int EXCERPT_MAX_LENGTH = 160;
 
   public boolean isUserBanned(Integer userId) {
     return userRepository.findById(userId).map(UserEntity::isBanned).orElse(false);
@@ -40,12 +41,30 @@ public class UserBanService {
   @Transactional
   public void recordViolation(
       Integer userId, Integer postId, ViolationType violationType, String description) {
+    recordViolation(userId, postId, violationType, description, null);
+  }
+
+  /**
+   * Records a violation, keeping a snapshot of what the post said (B47 in {@code
+   * docs/backend-plan.md}). {@code postExcerpt} should be the post's content as it stood at the
+   * moment of the decision — pass it here rather than re-reading {@code postId} later, since
+   * {@code t_posts.id} is {@code ON DELETE SET NULL} on this table (V9) and a post deleted after
+   * the fact would otherwise leave nothing to show for what was flagged.
+   */
+  @Transactional
+  public void recordViolation(
+      Integer userId,
+      Integer postId,
+      ViolationType violationType,
+      String description,
+      String postExcerpt) {
     ViolationSeverity severity = determineSeverity(violationType);
 
     UserViolationEntity violation =
         UserViolationEntity.builder()
             .userId(userId)
             .postId(postId)
+            .postExcerpt(excerptOf(postExcerpt))
             .violationType(violationType)
             .severity(severity)
             .description(description)
@@ -56,6 +75,20 @@ public class UserBanService {
         "Recorded violation for user {}: type={}, severity={}", userId, violationType, severity);
 
     evaluateAndBanIfNeeded(userId, postId);
+  }
+
+  /** Collapses whitespace and caps the length; blank input becomes {@code null}, not "". */
+  private static String excerptOf(String text) {
+    if (text == null) {
+      return null;
+    }
+    String collapsed = text.strip().replaceAll("\\s+", " ");
+    if (collapsed.isEmpty()) {
+      return null;
+    }
+    return collapsed.length() > EXCERPT_MAX_LENGTH
+        ? collapsed.substring(0, EXCERPT_MAX_LENGTH) + "…"
+        : collapsed;
   }
 
   /**

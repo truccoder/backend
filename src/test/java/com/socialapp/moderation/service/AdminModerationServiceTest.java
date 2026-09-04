@@ -317,7 +317,8 @@ class AdminModerationServiceTest {
               AUTHOR_ID,
               POST_ID,
               ViolationType.SEXUALLY_EXPLICIT,
-              "Admin manual review: explicit content");
+              "Admin manual review: explicit content",
+              post.moderatableText());
       verify(newsfeedService, never()).fanOutPost(any());
       verify(moderationLogRepository).save(logCaptor.capture());
       assertThat(logCaptor.getValue().getStatus()).isEqualTo(ModerationStatus.REJECTED);
@@ -347,7 +348,7 @@ class AdminModerationServiceTest {
       assertThatThrownBy(
               () -> adminModerationService.reviewPost(POST_ID, Likelihood.LIKELY, null, null))
           .isInstanceOf(ValidationException.class);
-      verify(userBanService, never()).recordViolation(any(), any(), any(), any());
+      verify(userBanService, never()).recordViolation(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -364,7 +365,7 @@ class AdminModerationServiceTest {
       verify(postRepository).save(postCaptor.capture());
       assertThat(postCaptor.getValue().getModerationStatus()).isEqualTo(ModerationStatus.APPROVED);
       verify(newsfeedService).fanOutPost(POST_ID);
-      verify(userBanService, never()).recordViolation(any(), any(), any(), any());
+      verify(userBanService, never()).recordViolation(any(), any(), any(), any(), any());
       verify(moderationLogRepository).save(logCaptor.capture());
       assertThat(logCaptor.getValue().getStatus()).isEqualTo(ModerationStatus.APPROVED);
       assertThat(logCaptor.getValue().getViolationType()).isNull();
@@ -384,7 +385,11 @@ class AdminModerationServiceTest {
       // Then
       verify(userBanService)
           .recordViolation(
-              AUTHOR_ID, POST_ID, ViolationType.SPAM, "Admin manual review: content violation");
+              AUTHOR_ID,
+              POST_ID,
+              ViolationType.SPAM,
+              "Admin manual review: content violation",
+              post.moderatableText());
     }
   }
 }

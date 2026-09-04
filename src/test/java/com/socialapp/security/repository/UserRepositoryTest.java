@@ -17,6 +17,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.AbstractIntegrationTest;
+import com.socialapp.roadmap.entity.RoadmapEntity;
+import com.socialapp.roadmap.entity.RoadmapNodeEntity;
+import com.socialapp.roadmap.entity.UserRoadmapProgressEntity;
+import com.socialapp.roadmap.enums.VerificationStatus;
+import com.socialapp.roadmap.enums.VerificationTier;
+import com.socialapp.roadmap.repository.RoadmapNodeRepository;
+import com.socialapp.roadmap.repository.RoadmapRepository;
+import com.socialapp.roadmap.repository.UserRoadmapProgressRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.entity.UserRole;
 
@@ -30,6 +38,25 @@ import com.socialapp.security.entity.UserRole;
 class UserRepositoryTest extends AbstractIntegrationTest {
 
   @Autowired private UserRepository userRepository;
+  @Autowired private RoadmapRepository roadmapRepository;
+  @Autowired private RoadmapNodeRepository roadmapNodeRepository;
+  @Autowired private UserRoadmapProgressRepository userRoadmapProgressRepository;
+
+  /** A verified (or not) roadmap skill for {@code user}, matched by {@code UserRepository.search}. */
+  private void giveSkill(UserEntity user, String nodeName, VerificationStatus status) {
+    RoadmapEntity roadmap =
+        roadmapRepository.save(RoadmapEntity.builder().name(nodeName + " Track").build());
+    RoadmapNodeEntity node =
+        roadmapNodeRepository.save(
+            RoadmapNodeEntity.builder().roadmap(roadmap).name(nodeName).build());
+    userRoadmapProgressRepository.save(
+        UserRoadmapProgressEntity.builder()
+            .user(user)
+            .node(node)
+            .tier(VerificationTier.SELF_VERIFIED)
+            .status(status)
+            .build());
+  }
 
   private static UserEntity user(String email, String username, String fullName) {
     UserEntity user = new UserEntity();
@@ -218,6 +245,49 @@ class UserRepositoryTest extends AbstractIntegrationTest {
       // Then
       assertThat(result.getContent()).hasSize(2);
       assertThat(result.getTotalElements()).isEqualTo(3);
+    }
+
+    // B48 in backend-plan.md: a reader searching "java" wants people who verified Java, not just
+    // people named Java, the same expectation B33/B36 already meet for projects and roadmap
+    // tracks.
+
+    @Test
+    @DisplayName("matches a user by a verified roadmap skill, not just name/username")
+    void matchesByVerifiedSkill() {
+      // Given
+      UserEntity skilled =
+          userRepository.saveAndFlush(user("skl1@example.com", "skl-holder", "Someone Else"));
+      userRepository.saveAndFlush(user("skl2@example.com", "skl-other", "Unrelated Person"));
+      giveSkill(skilled, "SkillQueryKafka", VerificationStatus.VERIFIED);
+
+      // When
+      Page<UserEntity> result =
+          userRepository.search("skillquerykafka", List.of(), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result.getContent())
+          .extracting(UserEntity::getId)
+          .containsExactly(skilled.getId());
+    }
+
+    @Test
+    @DisplayName("ignores a skill claim that is only pending or was rejected")
+    void ignoresUnverifiedSkill() {
+      // Given — verifiedSkills on PublicProfileResponse (B2) is VERIFIED-only, and search has to
+      // agree: a pending claim is not a fact yet, a rejected one is a record of being told no.
+      UserEntity pending =
+          userRepository.saveAndFlush(user("skl3@example.com", "skl-pending", "Pending Person"));
+      UserEntity rejected =
+          userRepository.saveAndFlush(user("skl4@example.com", "skl-rejected", "Rejected Person"));
+      giveSkill(pending, "SkillQueryRust", VerificationStatus.PENDING_APPROVAL);
+      giveSkill(rejected, "SkillQueryRust", VerificationStatus.REJECTED);
+
+      // When
+      Page<UserEntity> result =
+          userRepository.search("skillqueryrust", List.of(), List.of(-1), PageRequest.of(0, 10));
+
+      // Then
+      assertThat(result.getContent()).isEmpty();
     }
   }
 

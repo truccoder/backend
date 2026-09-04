@@ -157,7 +157,11 @@ public class AdminModerationService {
 
       String reason = Optional.ofNullable(feedback).orElse("content violation");
       userBanService.recordViolation(
-          post.getAuthorId(), post.getId(), violationType, "Admin manual review: " + reason);
+          post.getAuthorId(),
+          post.getId(),
+          violationType,
+          "Admin manual review: " + reason,
+          post.moderatableText());
 
       notifyAuthorOfRejection(post, violationType, reason);
 
