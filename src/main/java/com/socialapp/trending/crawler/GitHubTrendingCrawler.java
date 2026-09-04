@@ -69,6 +69,26 @@ public class GitHubTrendingCrawler extends AbstractTrendingCrawler {
     return items;
   }
 
+  /**
+   * GitHub's own generated card for a repository — the one that appears when a repo link is
+   * pasted into a chat client.
+   *
+   * <p>A static URL derived from {@code full_name}, so it needs no second request and no HTML to
+   * be fetched and parsed. Preferred over {@code owner.avatar_url}, which is also in the response:
+   * the avatar identifies the account, while this identifies the repository, and a page of
+   * trending repos from the same few large organisations would otherwise show the same picture
+   * over and over.
+   *
+   * <p>{@code null} for a repo with no {@code full_name} — the URL would be malformed, and a
+   * broken image is worse than none.
+   */
+  private String openGraphImage(String fullName) {
+    if (Objects.isNull(fullName) || fullName.isBlank()) {
+      return null;
+    }
+    return "https://opengraph.githubassets.com/1/" + fullName;
+  }
+
   @SuppressWarnings("unchecked")
   private CrawledItem mapToItem(Map<String, Object> repo) {
     String createdAt = (String) repo.get("created_at");
@@ -85,6 +105,7 @@ public class GitHubTrendingCrawler extends AbstractTrendingCrawler {
     return CrawledItem.builder()
         .title(fullName)
         .url((String) repo.get("html_url"))
+        .imageUrl(openGraphImage(fullName))
         .summary(description)
         .author(authorName)
         .score(Objects.nonNull(stars) ? stars.intValue() : 0)

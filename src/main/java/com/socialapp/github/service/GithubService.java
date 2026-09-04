@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.socialapp.common.exception.ConflictException;
 import com.socialapp.common.exception.ExternalApiException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.github.dto.GithubOAuthUrlResponse;
@@ -64,6 +65,13 @@ public class GithubService {
     entity.setAccessToken(accessToken);
     entity.setPublicReposCount(publicRepos);
     entity.setFollowersCount(followers);
+
+    // Persist the link before syncing, not after. syncGithubData swallows failures on the promise
+    // that "the account stays linked" — but for a first-time link the row was still transient at
+    // that point and only ever written inside performSync, three GitHub calls later. Any failure
+    // there discarded it: the OAuth round trip completed, the endpoint answered 200, and the
+    // account was not linked. Saving here makes the comment true.
+    githubStatsRepository.save(entity);
 
     // Initial sync will fetch pinned repos and graph
     syncGithubData(entity);
@@ -141,6 +149,16 @@ public class GithubService {
     githubStatsRepository.findByUserId(user.getId()).ifPresent(githubStatsRepository::delete);
   }
 
+  /**
+   * The owner's GitHub stats, or a zeroed-out response when no account is linked.
+   *
+   * <p>Not-linked is not the same failure as not-found (B43): this read backs every page with the
+   * app shell, so an unlinked account used to 404 on {@code /profile}, {@code /roadmap}, {@code
+   * /settings/*}, {@code /library} and {@code /projects} alike — the one signal a genuine 404
+   * would need to stand out against. {@code publicReposCount}/{@code followersCount} come back
+   * {@code 0} rather than {@code null} since they are already always-present counts on a linked
+   * account; the rest stay {@code null}, same as before linking ever happened.
+   */
   @Transactional(readOnly = true)
   public GithubStatsResponse getGithubStats(Integer userId) {
     return githubStatsRepository
@@ -155,7 +173,8 @@ public class GithubService {
                     .contributionGraph(entity.getContributionGraphJson())
                     .lastSyncedAt(entity.getLastSyncedAt())
                     .build())
-        .orElseThrow(() -> new NotFoundException("GitHub account not linked"));
+        .orElseGet(
+            () -> GithubStatsResponse.builder().publicReposCount(0).followersCount(0).build());
   }
 
   @Transactional
@@ -168,7 +187,7 @@ public class GithubService {
     // Basic rate limiting for manual sync: e.g. 1 hour
     if (entity.getLastSyncedAt() != null
         && entity.getLastSyncedAt().plusHours(1).isAfter(OffsetDateTime.now())) {
-      throw new IllegalStateException("Please wait at least 1 hour before syncing again");
+      throw new ConflictException("Please wait at least 1 hour before syncing again");
     }
 
     // performSync, not syncGithubData: a manual sync that fails silently is worse than one that

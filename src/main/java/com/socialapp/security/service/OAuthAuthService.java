@@ -56,37 +56,7 @@ public class OAuthAuthService {
     String picture = userInfo.has("picture") ? userInfo.get("picture").asText() : "";
     String sub = userInfo.has("sub") ? userInfo.get("sub").asText() : "";
 
-    boolean isNewUser = false;
-    boolean isAutoLinked = false;
-    UserEntity user = userRepository.findByEmailIgnoreCase(email).orElse(null);
-
-    if (user == null) {
-      isNewUser = true;
-      user = new UserEntity();
-      user.setEmail(email);
-      user.setFullName(name);
-      user.setUsername(generateUsername(email));
-      user.setProfilePictureUrl(picture);
-      user.setEmailVerified(true);
-      user.setAuthProvider(AuthProvider.GOOGLE);
-      user.setProviderId(sub);
-
-      user = userRepository.save(user);
-    } else {
-      if (user.isBanned()) {
-        throw new AccountBannedException(
-            banDetailsService.describe(user.getId(), user.getBannedUntil()));
-      }
-
-      if (user.getAuthProvider() == AuthProvider.LOCAL) {
-        isAutoLinked = true;
-        user.setAuthProvider(AuthProvider.GOOGLE);
-        user.setProviderId(sub);
-        userRepository.save(user);
-      }
-    }
-
-    return tokenService.issueTokens(user, isAutoLinked, isNewUser);
+    return resolveOAuthLogin(email, name, picture, sub, AuthProvider.GOOGLE);
   }
 
   public OAuthUrlResponseDto getGithubOAuthUrl() {
@@ -98,25 +68,12 @@ public class OAuthAuthService {
     String accessToken = githubApiClient.exchangeCodeForToken(code);
     JsonNode githubUser = githubApiClient.getAuthenticatedUser(accessToken);
 
-    String email = null;
-    JsonNode emailsNode = githubApiClient.getUserEmails(accessToken);
-    if (emailsNode != null && emailsNode.isArray()) {
-      for (JsonNode emailNode : emailsNode) {
-        if (emailNode.has("primary")
-            && emailNode.get("primary").asBoolean()
-            && emailNode.has("verified")
-            && emailNode.get("verified").asBoolean()) {
-          email = emailNode.get("email").asText();
-          break;
-        }
-      }
-    }
-
+    String email = extractVerifiedPrimaryEmail(githubApiClient.getUserEmails(accessToken));
     if (email == null) {
       throw new ValidationException("Failed to retrieve a verified primary email from GitHub");
     }
-
     email = EmailNormalizer.normalize(email);
+
     String name =
         githubUser.has("name") && !githubUser.get("name").isNull()
             ? githubUser.get("name").asText()
@@ -124,39 +81,75 @@ public class OAuthAuthService {
     String picture = githubUser.has("avatar_url") ? githubUser.get("avatar_url").asText() : "";
     String sub = githubUser.has("id") ? githubUser.get("id").asText() : "";
 
+    // KHÔNG tự động đồng bộ (sync) dữ liệu GitHub Stats ở đây nữa để tối ưu UX và cho phép user chủ
+    // động. Nếu muốn liên kết, user sẽ bấm nút từ Profile sau.
+
+    return resolveOAuthLogin(email, name, picture, sub, AuthProvider.GITHUB);
+  }
+
+  /** Picks the primary, verified email out of GitHub's {@code GET /user/emails} response. */
+  private String extractVerifiedPrimaryEmail(JsonNode emailsNode) {
+    if (emailsNode == null || !emailsNode.isArray()) {
+      return null;
+    }
+    for (JsonNode emailNode : emailsNode) {
+      if (isVerifiedPrimary(emailNode)) {
+        return emailNode.get("email").asText();
+      }
+    }
+    return null;
+  }
+
+  private boolean isVerifiedPrimary(JsonNode emailNode) {
+    return emailNode.has("primary")
+        && emailNode.get("primary").asBoolean()
+        && emailNode.has("verified")
+        && emailNode.get("verified").asBoolean();
+  }
+
+  /** Shared find-existing-or-create/auto-link/ban-check flow behind both OAuth providers. */
+  private AuthResponseDto resolveOAuthLogin(
+      String email, String name, String picture, String sub, AuthProvider provider) {
     boolean isNewUser = false;
     boolean isAutoLinked = false;
     UserEntity user = userRepository.findByEmailIgnoreCase(email).orElse(null);
 
     if (user == null) {
       isNewUser = true;
-      user = new UserEntity();
-      user.setEmail(email);
-      user.setFullName(name);
-      user.setUsername(generateUsername(email));
-      user.setProfilePictureUrl(picture);
-      user.setEmailVerified(true);
-      user.setAuthProvider(AuthProvider.GITHUB);
-      user.setProviderId(sub);
-
-      user = userRepository.save(user);
+      user = createOAuthUser(email, name, picture, sub, provider);
     } else {
-      if (user.isBanned()) {
-        throw new AccountBannedException(
-            banDetailsService.describe(user.getId(), user.getBannedUntil()));
-      }
-      if (user.getAuthProvider() == AuthProvider.LOCAL) {
-        isAutoLinked = true;
-        user.setAuthProvider(AuthProvider.GITHUB);
-        user.setProviderId(sub);
-        userRepository.save(user);
-      }
+      isAutoLinked = linkIfLocalAccount(user, sub, provider);
     }
 
-    // KHÔNG tự động đồng bộ (sync) dữ liệu GitHub Stats ở đây nữa để tối ưu UX và cho phép user chủ
-    // động. Nếu muốn liên kết, user sẽ bấm nút từ Profile sau.
-
     return tokenService.issueTokens(user, isAutoLinked, isNewUser);
+  }
+
+  private UserEntity createOAuthUser(
+      String email, String name, String picture, String sub, AuthProvider provider) {
+    UserEntity user = new UserEntity();
+    user.setEmail(email);
+    user.setFullName(name);
+    user.setUsername(generateUsername(email));
+    user.setProfilePictureUrl(picture);
+    user.setEmailVerified(true);
+    user.setAuthProvider(provider);
+    user.setProviderId(sub);
+    return userRepository.save(user);
+  }
+
+  /** Bans throw; a LOCAL account gets linked to the OAuth provider and returns {@code true}. */
+  private boolean linkIfLocalAccount(UserEntity user, String sub, AuthProvider provider) {
+    if (user.isBanned()) {
+      throw new AccountBannedException(
+          banDetailsService.describe(user.getId(), user.getBannedUntil()));
+    }
+    if (user.getAuthProvider() != AuthProvider.LOCAL) {
+      return false;
+    }
+    user.setAuthProvider(provider);
+    user.setProviderId(sub);
+    userRepository.save(user);
+    return true;
   }
 
   /**

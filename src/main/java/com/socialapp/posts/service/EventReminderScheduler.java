@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.repository.NotificationRepository;
@@ -96,6 +97,8 @@ public class EventReminderScheduler {
               .type(NotificationType.EVENT_REMINDER)
               .title("Event starting soon")
               .body(title + " starts within 24 hours")
+              .messageKey(NotificationMessages.EVENT_REMINDER)
+              .messageArgs(NotificationMessages.args("event", title))
               .referenceId(event.getId())
               .referenceType("POST")
               .build());

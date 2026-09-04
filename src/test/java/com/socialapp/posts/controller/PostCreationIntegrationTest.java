@@ -2,6 +2,7 @@ package com.socialapp.posts.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -53,7 +54,7 @@ class PostCreationIntegrationTest extends AbstractIntegrationTest {
   @Test
   @DisplayName(
       "POST /v1/api/posts should authenticate via JWT, persist the post to Postgres, and return"
-          + " 200 OK")
+          + " 201 with the new post id")
   void shouldCreateAndPersistPost_whenAuthenticatedUserSubmitsValidRequest() throws Exception {
     // Given: a real, persisted user and a real JWT issued for them by the app's own JwtProvider
     // (the same one JwtAuthenticationFilter uses to validate the Authorization header).
@@ -71,9 +72,11 @@ class PostCreationIntegrationTest extends AbstractIntegrationTest {
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-        .andExpect(status().isOk());
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.postId").isNumber())
+        .andExpect(jsonPath("$.moderationStatus").value("APPROVED"));
 
-    // Then: the post actually landed in the database — not just a 200 from a mocked service.
+    // Then: the post actually landed in the database — not just a 201 from a mocked service.
     List<PostEntity> savedPosts =
         postRepository.findByAuthorIdAndModerationStatus(author.getId(), ModerationStatus.APPROVED);
 

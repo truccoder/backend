@@ -18,6 +18,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.roadmap.dto.RoadmapDto;
 import com.socialapp.roadmap.dto.RoadmapNodeDto;
@@ -96,6 +97,41 @@ class RoadmapServiceTest {
       assertThat(result.getId()).isEqualTo(ROADMAP_ID);
       assertThat(result.getName()).isEqualTo("Backend Roadmap");
     }
+
+    @Test
+    @DisplayName("should persist the chosen category")
+    void shouldPersistChosenCategory() {
+      // Given
+      RoadmapDto dto = new RoadmapDto();
+      dto.setName("Mobile Roadmap");
+      dto.setCategory(LearningCategory.MOBILE);
+      ArgumentCaptor<RoadmapEntity> captor = ArgumentCaptor.forClass(RoadmapEntity.class);
+      when(roadmapRepository.save(captor.capture())).thenReturn(roadmap(ROADMAP_ID));
+
+      // When
+      roadmapService.createRoadmap(dto);
+
+      // Then
+      assertThat(captor.getValue().getCategory()).isEqualTo(LearningCategory.MOBILE);
+    }
+
+    @Test
+    @DisplayName("should fall back to OTHER when no category is given, and say so in the reply")
+    void shouldDefaultToOtherWhenCategoryOmitted() {
+      // Given: cột là NOT NULL ở V76, nên bỏ trống phải thành OTHER chứ không phải null — và
+      // phản hồi phải nói ra giá trị đã lưu, nếu không client vẫn tưởng lộ trình không có chủ đề.
+      RoadmapDto dto = new RoadmapDto();
+      dto.setName("Backend Roadmap");
+      ArgumentCaptor<RoadmapEntity> captor = ArgumentCaptor.forClass(RoadmapEntity.class);
+      when(roadmapRepository.save(captor.capture())).thenReturn(roadmap(ROADMAP_ID));
+
+      // When
+      RoadmapDto result = roadmapService.createRoadmap(dto);
+
+      // Then
+      assertThat(captor.getValue().getCategory()).isEqualTo(LearningCategory.OTHER);
+      assertThat(result.getCategory()).isEqualTo(LearningCategory.OTHER);
+    }
   }
 
   // =====================================================================
@@ -133,6 +169,22 @@ class RoadmapServiceTest {
       assertThat(result.get(0).getId()).isEqualTo(ROADMAP_ID);
       assertThat(result.get(0).getName()).isEqualTo("Backend Roadmap");
       assertThat(result.get(0).getDescription()).isEqualTo("Learn Spring");
+    }
+
+    @Test
+    @DisplayName("should carry the category into the DTO the tabs are built from")
+    void shouldMapCategory() {
+      // Given: FE gom nhóm phía client, nên nhãn phải có mặt trong CHÍNH danh sách này — không
+      // có endpoint nào khác để đi hỏi lại.
+      RoadmapEntity entity = roadmap(ROADMAP_ID);
+      entity.setCategory(LearningCategory.DEVOPS);
+      when(roadmapRepository.findAll()).thenReturn(List.of(entity));
+
+      // When
+      List<RoadmapDto> result = roadmapService.getAllRoadmaps();
+
+      // Then
+      assertThat(result.get(0).getCategory()).isEqualTo(LearningCategory.DEVOPS);
     }
   }
 

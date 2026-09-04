@@ -56,6 +56,24 @@ public class DevToCrawler extends AbstractTrendingCrawler {
     return items;
   }
 
+  /**
+   * The article's cover, falling back to the auto-generated social card.
+   *
+   * <p>Both fields are already in the response being parsed, so this costs no extra request.
+   * {@code cover_image} is the picture the author chose and is often absent; {@code social_image}
+   * is dev.to's own generated card and is almost always present, which makes it the right
+   * fallback rather than the first choice — a real cover says more about the article than a
+   * rendering of its title does.
+   */
+  private String coverImage(Map<String, Object> article) {
+    String cover = (String) article.get("cover_image");
+    if (Objects.nonNull(cover) && !cover.isBlank()) {
+      return cover;
+    }
+    String social = (String) article.get("social_image");
+    return Objects.nonNull(social) && !social.isBlank() ? social : null;
+  }
+
   private CrawledItem mapToItem(Map<String, Object> article) {
     String publishedAtStr = (String) article.get("published_at");
     OffsetDateTime publishedAt =
@@ -68,6 +86,7 @@ public class DevToCrawler extends AbstractTrendingCrawler {
     return CrawledItem.builder()
         .title((String) article.get("title"))
         .url((String) article.get("url"))
+        .imageUrl(coverImage(article))
         .summary((String) article.get("description"))
         .author((String) article.getOrDefault("readable_publish_date", ""))
         .score(Objects.nonNull(reactions) ? reactions.intValue() : 0)

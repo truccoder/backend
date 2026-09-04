@@ -1,8 +1,11 @@
 package com.socialapp.security.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -19,6 +22,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -37,6 +41,7 @@ import com.socialapp.security.config.CustomAuthenticationEntryPoint;
 import com.socialapp.security.config.JwtAuthenticationFilter;
 import com.socialapp.security.config.JwtProvider;
 import com.socialapp.security.config.SecurityConfig;
+import com.socialapp.security.dto.UpdateProfileRequest;
 import com.socialapp.security.dto.UserResponse;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.entity.UserRole;
@@ -130,6 +135,7 @@ class ProfileControllerTest {
         user.getEmail(),
         user.getUsername(),
         user.getFullName(),
+        null,
         null,
         user.isEmailVerified(),
         user.getRole(),
@@ -248,6 +254,98 @@ class ProfileControllerTest {
                   .header("Authorization", "Bearer " + VALID_TOKEN)
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(requestJson))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndPassTheCoverUrlThrough_happyPath")
+    void shouldAcceptACoverImageUrl() throws Exception {
+      // Given - a URL, not a file: POST /v1/api/media stores the image and hands back the URL
+      // that is saved here, so there is no second multipart endpoint to keep in step
+      mockAuthenticatedAs(currentUser);
+      UserEntity updated = sampleUser(currentUser.getId(), currentUser.getEmail(), false);
+      when(profileService.updateProfile(eq(currentUser.getId()), any()))
+          .thenReturn(sampleUserResponse(updated));
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(PROFILE_URL)
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(
+                      "{\"fullName\":\"Someone\","
+                          + "\"coverImageUrl\":\"http://localhost:9000/post-media/c.png\"}"))
+          .andExpect(status().isOk());
+
+      ArgumentCaptor<UpdateProfileRequest> request =
+          ArgumentCaptor.forClass(UpdateProfileRequest.class);
+      verify(profileService).updateProfile(eq(currentUser.getId()), request.capture());
+      assertThat(request.getValue().coverImageUrl())
+          .isEqualTo("http://localhost:9000/post-media/c.png");
+    }
+
+    @Test
+    @DisplayName("shouldReturn200_whenCoverImageUrlIsEmpty_theRemoveSignal")
+    void shouldAcceptAnEmptyCoverUrl() throws Exception {
+      // Given - empty is how a cover is removed, and must not fail the http/https pattern
+      mockAuthenticatedAs(currentUser);
+      UserEntity updated = sampleUser(currentUser.getId(), currentUser.getEmail(), false);
+      when(profileService.updateProfile(eq(currentUser.getId()), any()))
+          .thenReturn(sampleUserResponse(updated));
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(PROFILE_URL)
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"fullName\":\"Someone\",\"coverImageUrl\":\"\"}"))
+          .andExpect(status().isOk());
+    }
+
+    @ParameterizedTest
+    @DisplayName("shouldReturn422_whenCoverImageUrlIsNotAnHttpUrl_security")
+    @ValueSource(
+        strings = {
+          "javascript:alert(1)",
+          "data:text/html,<h1>x</h1>",
+          "file:///etc/passwd",
+          "not a url at all"
+        })
+    void shouldReturn422_whenCoverUrlIsNotHttp(String hostile) throws Exception {
+      // Given - EP: this value is rendered straight into an image source on every profile page,
+      // and the field is a plain String on the wire whatever this backend put in it
+      mockAuthenticatedAs(currentUser);
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(PROFILE_URL)
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"fullName\":\"Someone\",\"coverImageUrl\":\"" + hostile + "\"}"))
+          .andExpect(status().isUnprocessableEntity());
+
+      verify(profileService, never()).updateProfile(any(), any());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenCoverImageUrlExceedsTheColumn_boundary")
+    void shouldReturn422_whenCoverUrlTooLong() throws Exception {
+      // Given - BVA on @Size(max = 512), which is the column width: 513 characters must fail as
+      // a 422 rather than as a database error
+      mockAuthenticatedAs(currentUser);
+      String prefix = "http://localhost:9000/";
+      String longUrl = prefix + "a".repeat(513 - prefix.length());
+
+      // When / Then
+      mockMvc
+          .perform(
+              put(PROFILE_URL)
+                  .header("Authorization", "Bearer " + VALID_TOKEN)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"fullName\":\"Someone\",\"coverImageUrl\":\"" + longUrl + "\"}"))
           .andExpect(status().isUnprocessableEntity());
     }
 
