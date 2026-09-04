@@ -22,13 +22,17 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialapp.friendships.service.FriendshipService;
+import com.socialapp.matchmaking.service.ProjectQueryService;
 import com.socialapp.moderation.service.BanDetailsService;
+import com.socialapp.roadmap.service.RoadmapService;
 import com.socialapp.search.dto.BookDto;
+import com.socialapp.search.dto.MentionSuggestionDto;
 import com.socialapp.search.dto.SearchResult;
 import com.socialapp.search.dto.SuggestionDto;
 import com.socialapp.search.dto.SuggestionType;
 import com.socialapp.search.dto.UserDto;
-import com.socialapp.search.service.FriendshipQueryService;
+import com.socialapp.search.service.MentionSuggestService;
 import com.socialapp.search.service.SearchService;
 import com.socialapp.search.service.SuggestService;
 import com.socialapp.security.config.CustomAccessDeniedHandler;
@@ -80,7 +84,16 @@ class SearchControllerTest {
   // /search/suggest now goes through its own service — see SuggestService for why the type-ahead
   // path is kept off the results-page code.
   @MockBean private SuggestService suggestService;
-  @MockBean private FriendshipQueryService friendshipQueryService;
+
+  // The @-dropdown has its own service again: a mention row is a text insertion, not a search hit.
+  @MockBean private MentionSuggestService mentionSuggestService;
+
+  @MockBean private FriendshipService friendshipService;
+
+  // B33: the /search projects and roadmaps branches are served by the domains' own read services.
+  @MockBean private ProjectQueryService projectQueryService;
+  @MockBean private RoadmapService roadmapService;
+
   @MockBean private JwtProvider jwtProvider;
 
   @MockBean
@@ -90,6 +103,7 @@ class SearchControllerTest {
   @MockBean private UserRepository userRepository;
 
   private static final String SEARCH_URL = "/v1/api/search";
+  private static final String MENTIONS_URL = "/v1/api/search/mentions";
   private static final String VALID_TOKEN = "a-valid-jwt-token";
 
   private UserEntity currentUser;
@@ -122,7 +136,7 @@ class SearchControllerTest {
     @DisplayName("shouldReturn200AndResults_happyPath")
     void shouldReturn200AndResults_happyPath() throws Exception {
       // Given
-      when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
       when(searchService.searchUsers(eq("reader"), eq(1), eq(10), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
@@ -150,10 +164,59 @@ class SearchControllerTest {
     }
 
     @Test
+    @DisplayName("shouldIncludeProjectAndRoadmapBranches_andPassTheLikeEscapedTerm")
+    void shouldIncludeProjectAndRoadmapBranches() throws Exception {
+      // Given — B33: /search now answers five lists. The term reaches the two new branches
+      // already LIKE-escaped (SearchQuerySanitizer), so a literal '%' is a '%' and not a wildcard.
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(searchService.searchUsers(
+              any(),
+              org.mockito.ArgumentMatchers.anyInt(),
+              org.mockito.ArgumentMatchers.anyInt(),
+              any(),
+              any()))
+          .thenReturn(
+              SearchResult.<UserDto>builder()
+                  .items(List.of())
+                  .totalHits(0)
+                  .page(1)
+                  .size(10)
+                  .build());
+      when(searchService.searchPostsWithBookInfo(
+              any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
+          .thenReturn(List.of());
+      when(searchService.searchBooks(any(), org.mockito.ArgumentMatchers.anyInt(), any(), any()))
+          .thenReturn(List.of());
+
+      com.socialapp.matchmaking.dto.ProjectResponseDto project =
+          com.socialapp.matchmaking.dto.ProjectResponseDto.builder()
+              .id(11)
+              .title("Java board")
+              .build();
+      com.socialapp.roadmap.dto.RoadmapDto roadmap = new com.socialapp.roadmap.dto.RoadmapDto();
+      roadmap.setId(4);
+      roadmap.setName("Backend Java");
+      when(projectQueryService.searchProjects(
+              eq("50\\% java"), org.mockito.ArgumentMatchers.anyInt()))
+          .thenReturn(List.of(project));
+      when(roadmapService.searchRoadmaps(eq("50\\% java"), org.mockito.ArgumentMatchers.anyInt()))
+          .thenReturn(List.of(roadmap));
+
+      // When / Then
+      mockMvc
+          .perform(authed(get(SEARCH_URL)).param("q", "50% java"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.projects[0].id").value(11))
+          .andExpect(jsonPath("$.projects[0].title").value("Java board"))
+          .andExpect(jsonPath("$.roadmaps[0].id").value(4))
+          .andExpect(jsonPath("$.roadmaps[0].name").value("Backend Java"));
+    }
+
+    @Test
     @DisplayName("shouldPassSizeThrough_whenProvided")
     void shouldPassSizeThrough_whenProvided() throws Exception {
       // Given
-      when(friendshipQueryService.getFriendIds(currentUser.getId())).thenReturn(List.of());
+      when(friendshipService.getFriendIds(currentUser.getId())).thenReturn(List.of());
       when(searchService.searchUsers(eq("java"), eq(1), eq(5), eq(currentUser.getId()), any()))
           .thenReturn(
               SearchResult.<UserDto>builder()
@@ -296,6 +359,72 @@ class SearchControllerTest {
       // Deliberately NOT part of the guest-readable surface: an unauthenticated endpoint that
       // returns people by partial name is a user-directory dump.
       mockMvc.perform(get(SUGGEST_URL).param("q", "a")).andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Nested
+  @DisplayName("GET /v1/api/search/mentions")
+  class MentionSuggestTests {
+
+    @Test
+    @DisplayName("shouldReturn200AndTheHandleAsItsOwnField_happyPath")
+    void shouldReturnHandleAsField() throws Exception {
+      // Given
+      when(mentionSuggestService.suggest(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+          .thenReturn(
+              List.of(
+                  new MentionSuggestionDto(2, "nguyentruc", "Nguyen Truc", null, true),
+                  new MentionSuggestionDto(3, "tranthinh", "Tran Thinh", null, false)));
+
+      // When / Then: the client inserts `username` into the text it is composing, so it comes
+      // back bare and non-null rather than folded into a label
+      mockMvc
+          .perform(authed(get(MENTIONS_URL)).param("q", "tr"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$[0].username").value("nguyentruc"))
+          .andExpect(jsonPath("$[0].isFriend").value(true))
+          .andExpect(jsonPath("$[1].isFriend").value(false));
+    }
+
+    @Test
+    @DisplayName("shouldReturn200AndPassAnEmptyQuery_whenNothingHasBeenTypedYet")
+    void shouldAcceptMissingQuery() throws Exception {
+      // Given: the keystroke right after "@" is exactly when this list is needed most, so unlike
+      // /search and /search/suggest this endpoint's q is optional
+      when(mentionSuggestService.suggest(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+          .thenReturn(List.of());
+
+      // When
+      mockMvc.perform(authed(get(MENTIONS_URL))).andExpect(status().isOk());
+
+      // Then
+      verify(mentionSuggestService).suggest(eq(""), eq(8), eq(currentUser.getId()));
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitExceedsTheCap_boundary")
+    void shouldRejectLimitAboveCap() throws Exception {
+      // BVA: @Max(20), the same ceiling /suggest carries and for the same reason
+      mockMvc
+          .perform(authed(get(MENTIONS_URL)).param("q", "a").param("limit", "21"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn422_whenLimitIsZero_boundary")
+    void shouldRejectZeroLimit() throws Exception {
+      // BVA: @Positive
+      mockMvc
+          .perform(authed(get(MENTIONS_URL)).param("q", "a").param("limit", "0"))
+          .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("shouldReturn401_whenCalledByAGuest")
+    void shouldReturn401ForGuest() throws Exception {
+      // Sharper than on /suggest: with q optional, an open version of this endpoint is a user
+      // directory that needs no query at all.
+      mockMvc.perform(get(MENTIONS_URL)).andExpect(status().isUnauthorized());
     }
   }
 }

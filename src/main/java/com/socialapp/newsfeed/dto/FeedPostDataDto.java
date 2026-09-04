@@ -2,7 +2,9 @@ package com.socialapp.newsfeed.dto;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
+import com.socialapp.moderation.enums.ModerationStatus;
 import com.socialapp.posts.dto.PublicQuizDetailsDto;
 import com.socialapp.posts.entity.ArticleDetails;
 import com.socialapp.posts.entity.CodeSnippetDetails;
@@ -14,6 +16,7 @@ import com.socialapp.posts.entity.QnaDetails;
 import com.socialapp.posts.entity.enums.LocationType;
 import com.socialapp.posts.entity.enums.PostType;
 import com.socialapp.posts.entity.enums.PostVisibility;
+import com.socialapp.posts.entity.enums.ReactionType;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -27,6 +30,17 @@ import lombok.NoArgsConstructor;
 public class FeedPostDataDto {
   private Integer postId;
   private Integer authorId;
+
+  /**
+   * The author's handle, and the only key the public profile page has: {@code GET
+   * /v1/api/users/{username}/profile} is looked up by username, never by id, and no endpoint maps
+   * one to the other. Without this the author's name on a feed card rendered but led nowhere.
+   *
+   * <p>Costs no extra query — {@code FeedPostDataMapper} already holds the author's {@code
+   * UserEntity} to read the four fields below it.
+   */
+  private String authorUsername;
+
   private String authorFullName;
   private String authorProfilePictureUrl;
   private Integer authorEliteScore;
@@ -41,6 +55,19 @@ public class FeedPostDataDto {
 
   private String content;
   private PostVisibility visibility;
+
+  /**
+   * Where this post stands with moderation. Only ever anything other than {@code APPROVED} on the
+   * permalink read by the post's own author — {@code PostVisibilityService} 404s a not-yet-approved
+   * post to everyone else, and every feed entry is approved by the time it is fanned out. It lets
+   * the composer tell "published" from "still pending review" (and from {@code REJECTED}) right
+   * after creating a post, without polling the feed — FE's {@code docs/backend-plan.md} B39.
+   *
+   * <p>Null on feed cache entries written before this field existed; treat that as {@code
+   * APPROVED}, since an entry only reaches the cache once it is.
+   */
+  private ModerationStatus moderationStatus;
+
   private String googlePlaceId;
   private LocationType locationType;
   private LocationDetails locationDetails;
@@ -64,7 +91,8 @@ public class FeedPostDataDto {
   private OffsetDateTime createdAt;
 
   /**
-   * When the post was last written to, or {@code null} for a post nobody has edited.
+   * When the author last edited this post's content, or {@code null} for a post nobody has
+   * edited.
    *
    * <p>Not cosmetic. Three things in this system point at the body of a post and are only true of
    * the body they were computed from: a skill verification whose proof is that post, a stored
@@ -72,11 +100,11 @@ public class FeedPostDataDto {
    * arrives unannounced invalidates all three silently, and a reader has no way to tell that the
    * text in front of them is not the text that was verified.
    *
-   * <p>Null for an unedited post rather than equal to {@code createdAt}: the client shows "edited"
-   * from the presence of this value, and a mapper that always filled it in would mark every post
-   * in the feed as edited. {@code PostEntity.updatedAt} is written by Hibernate's {@code
-   * @UpdateTimestamp}, which fires on insert too, so the comparison against {@code createdAt}
-   * below is what separates "never edited" from "edited".
+   * <p>Sourced from {@code PostEntity#editedAt}, not {@code PostEntity#updatedAt}. The latter is
+   * Hibernate's {@code @UpdateTimestamp} and bumps on any write to the row — including
+   * {@code ModerationEventListener}'s async moderation-status update, 1-2 seconds after every
+   * post is created — which is not an edit. See B28 in {@code docs/backend-plan.md} for the
+   * incident this replaced a timing heuristic with.
    */
   private OffsetDateTime updatedAt;
 
@@ -115,4 +143,27 @@ public class FeedPostDataDto {
   private int likeCount;
 
   private int commentCount;
+
+  /**
+   * How many reactions of each type this post has, e.g. {@code {"LIKE": 4, "INSIGHT": 2}} — the
+   * breakdown behind {@link #likeCount}.
+   *
+   * <p>Exists because the reaction row dropped its text labels. While each chip read "Hữu ích 5"
+   * it explained itself; with only a glyph and a number left, the one question a reader still has
+   * is which reactions make up the five, and {@code likeCount} alone cannot answer it. {@code GET
+   * /posts/{id}/reactions/summary} could, per post — ten cards, ten extra requests, over a
+   * group-by this payload had already run and discarded the detail of.
+   *
+   * <p>Types nobody chose are absent rather than zero, matching {@code
+   * PostReactionService#getReactionSummary}: the client renders one chip per entry and would have
+   * to filter a zero out again.
+   *
+   * <p><b>Rewritten in the cache on every reaction</b> — see {@code
+   * NewsfeedService.updateCachedReactionSummary}. The feed never falls back to Postgres, so a
+   * breakdown written once at fan-out would disagree with the {@code likeCount} sitting beside it
+   * the moment anybody reacted, which is worse than not sending one. Null on entries cached
+   * before this field existed; a client has to treat that as "not known yet", not as "no
+   * reactions" — {@code likeCount} remains the authoritative total.
+   */
+  private Map<ReactionType, Long> reactionSummary;
 }

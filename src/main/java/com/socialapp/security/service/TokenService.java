@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 
+import com.socialapp.common.utils.TokenHasher;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.security.config.JwtProperties;
@@ -38,10 +39,10 @@ public class TokenService {
             .map(UserProfessionalProfileEntity::getJobTitle)
             .orElse(null);
     String accessToken = jwtProvider.generateAccessToken(user.getEmail(), jobTitle);
-    RefreshToken refreshToken = persistRefreshToken(user.getId());
+    String refreshToken = persistRefreshToken(user.getId());
     return new AuthResponseDto(
         accessToken,
-        refreshToken.getToken(),
+        refreshToken,
         TOKEN_TYPE,
         jwtProperties.getAccessTokenExpirationMs() / 1000,
         isAutoLinked,
@@ -52,11 +53,22 @@ public class TokenService {
     return refreshToken.getExpiresAt().isBefore(OffsetDateTime.now());
   }
 
-  private RefreshToken persistRefreshToken(Integer userId) {
+  /**
+   * Issues a refresh token, storing only its hash, and returns the value the client must keep.
+   *
+   * <p>The row's primary key is {@code SHA-256(token)}, so the database never holds anything that
+   * can be replayed — see {@link TokenHasher}. This is the only moment the raw value exists on the
+   * server, which is why it is returned rather than read back off the entity.
+   */
+  private String persistRefreshToken(Integer userId) {
+    String rawToken = UUID.randomUUID().toString();
+
     RefreshToken refreshToken = new RefreshToken();
-    refreshToken.setToken(UUID.randomUUID().toString());
+    refreshToken.setToken(TokenHasher.hash(rawToken));
     refreshToken.setUserId(userId);
     refreshToken.setExpiresAt(OffsetDateTime.now().plus(jwtProperties.refreshTokenTtl()));
-    return refreshTokenRepository.save(refreshToken);
+    refreshTokenRepository.save(refreshToken);
+
+    return rawToken;
   }
 }

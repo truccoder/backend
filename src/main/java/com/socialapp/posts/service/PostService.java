@@ -1,14 +1,15 @@
 package com.socialapp.posts.service;
 
 import java.beans.FeatureDescriptor;
+import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.springframework.beans.BeanUtils;
@@ -33,9 +34,11 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.rule.ModerationRuleEngine;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
+import com.socialapp.posts.entity.EventDetails;
 import com.socialapp.posts.entity.HashtagEntity;
 import com.socialapp.posts.entity.PostEntity;
 import com.socialapp.posts.entity.PostTagEntity;
@@ -72,26 +75,34 @@ public class PostService {
   private final HashtagRepository hashtagRepository;
   private final CommentRepository commentRepository;
   private final ReputationEventPublisher reputationEventPublisher;
+  private final NotificationService notificationService;
 
   private static final int MAX_TAGS = 20;
   private static final Pattern TAG_PLACEHOLDER = Pattern.compile("@\\[(\\d+)]");
   private static final Pattern HASHTAG_PATTERN = Pattern.compile("#(\\w+)");
 
+  /**
+   * @return the saved post — its generated id and moderation status are what the composer needs to
+   *     navigate to what it just published (B39). The entity is returned rather than {@code void}
+   *     purely so the controller can read those two fields.
+   */
   @Transactional
-  public void createPost(Integer authorId, CreatePostRequestDto request) {
+  public PostEntity createPost(Integer authorId, CreatePostRequestDto request) {
     if (PostType.BOOK.equals(request.getPostType())) {
       throw new ValidationException(
           "Use POST /v1/api/posts/books to create a post with an attached book");
     }
-    buildAndSavePost(authorId, request);
+    return buildAndSavePost(authorId, request);
   }
 
   /**
    * Creates a post with an attached book in one call, so callers don't need to create a post
    * first just to obtain a postId to pass into book creation.
+   *
+   * @return the saved post, for the same reason as {@link #createPost}.
    */
   @Transactional
-  public void createBookPost(
+  public PostEntity createBookPost(
       Integer authorId,
       CreatePostRequestDto request,
       MultipartFile bookFile,
@@ -123,6 +134,8 @@ public class PostService {
           authorId);
       newsfeedService.fanOutPost(post.getId());
     }
+
+    return post;
   }
 
   private PostEntity buildAndSavePost(Integer authorId, CreatePostRequestDto request) {
@@ -148,7 +161,11 @@ public class PostService {
     log.info("[authorId={}] createPost: ban check and tag validation passed", authorId);
 
     if (moderationProperties.isEnabled()) {
-      ModerationResult ruleResult = moderationRuleEngine.evaluate(authorId, request.getContent());
+      // The whole post, not just request.getContent(). See PostEntity#moderatableText: seven detail
+      // blocks carry free text that nothing used to read, so an ARTICLE with an empty body and the
+      // real content in articleDetails walked straight past the filter.
+      ModerationResult ruleResult =
+          moderationRuleEngine.evaluate(authorId, moderatableTextOf(request));
       log.info(
           "[authorId={}] createPost: rule engine result status={}, violations={}",
           authorId,
@@ -234,16 +251,28 @@ public class PostService {
     verifyAuthor(actorId, post);
     findUserOrThrow(actorId);
 
-    // An omitted field now means "leave alone", which splits tag validation in two.
-    //
-    // The privacy rule is an invariant of the stored post, so it is judged on the merged result:
-    // flipping an already-tagged post to PRIVATE without resending the tags must still fail.
-    //
-    // The placeholder/duplicate/limit rules describe how a tag list relates to the content it
-    // arrived with, so they only apply to a list the caller actually sent. Judging them on tags
-    // the caller never mentioned would make editing the caption of a tagged post impossible —
-    // the new text has no @[i] placeholders in it, and rejecting that edit is no better than the
-    // old behaviour of silently discarding the tags.
+    validateUpdateTags(request, post);
+    if (request.getQuizDetails() != null) {
+      validateQuizDetails(request.getQuizDetails());
+    }
+
+    mergeAndModerateUpdate(actorId, request, post);
+    applyUpdatedTags(request, post);
+    processHashtags(post);
+    saveUpdatedPost(actorId, postId, request, post);
+  }
+
+  // An omitted field now means "leave alone", which splits tag validation in two.
+  //
+  // The privacy rule is an invariant of the stored post, so it is judged on the merged result:
+  // flipping an already-tagged post to PRIVATE without resending the tags must still fail.
+  //
+  // The placeholder/duplicate/limit rules describe how a tag list relates to the content it
+  // arrived with, so they only apply to a list the caller actually sent. Judging them on tags
+  // the caller never mentioned would make editing the caption of a tagged post impossible —
+  // the new text has no @[i] placeholders in it, and rejecting that edit is no better than the
+  // old behaviour of silently discarding the tags.
+  private void validateUpdateTags(UpdatePostRequestDto request, PostEntity post) {
     PostVisibility effectiveVisibility =
         Objects.nonNull(request.getVisibility()) ? request.getVisibility() : post.getVisibility();
     List<Integer> effectiveTaggedUserIds =
@@ -251,39 +280,51 @@ public class PostService {
             ? request.getTaggedUserIds()
             : extractTaggedUserIds(post);
 
-    if (PostVisibility.PRIVATE.equals(effectiveVisibility)
-        && !CollectionUtils.isEmpty(effectiveTaggedUserIds)) {
-      throw new ValidationException("Private posts cannot tag other users");
-    }
+    rejectPrivateWithTags(effectiveVisibility, effectiveTaggedUserIds);
 
     if (Objects.nonNull(request.getTaggedUserIds())) {
       String effectiveContent =
           Objects.nonNull(request.getContent()) ? request.getContent() : post.getContent();
       validateTags(effectiveVisibility, request.getTaggedUserIds(), effectiveContent);
     }
+  }
 
-    if (request.getQuizDetails() != null) {
-      validateQuizDetails(request.getQuizDetails());
-    }
+  // Merge first, then moderate the result. An edit that leaves a field out means "keep it", so
+  // moderating the request alone re-checked only what the caller happened to resend — and when
+  // `content` was omitted that was nothing at all. The merge is the same one the tag rules above
+  // compute by hand; running it here means the engine judges the post as it will actually be
+  // stored, across every detail block (see PostEntity#moderatableText).
+  //
+  // Safe to do before the check because a rejection throws, and the surrounding @Transactional
+  // rolls the entity back with it.
+  private void mergeAndModerateUpdate(
+      Integer actorId, UpdatePostRequestDto request, PostEntity post) {
+    BeanUtils.copyProperties(request, post, nullPropertyNames(request));
+    // Marks this as an author-driven edit, distinct from updatedAt — see PostEntity#editedAt.
+    // Set unconditionally: even an edit moderation later rejects already changed the content the
+    // author intended to publish.
+    post.setEditedAt(OffsetDateTime.now());
 
     if (moderationProperties.isEnabled()) {
-      ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, request.getContent());
+      ModerationResult ruleResult = moderationRuleEngine.evaluate(actorId, post.moderatableText());
       if (ruleResult.isRejected()) {
         throw new ContentViolationException(ruleResult.getViolations());
       }
     }
+  }
 
-    BeanUtils.copyProperties(request, post, nullPropertyNames(request));
-
-    // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
-    // clearing it made "edit the caption" silently un-tag everybody.
+  // Rebuilding the tag list is only correct when the caller actually sent one. Unconditionally
+  // clearing it made "edit the caption" silently un-tag everybody.
+  private void applyUpdatedTags(UpdatePostRequestDto request, PostEntity post) {
     if (Objects.nonNull(request.getTaggedUserIds())) {
       post.getTags().clear();
       postRepository.flush();
       setTags(post, request.getTaggedUserIds());
     }
-    processHashtags(post);
+  }
 
+  private void saveUpdatedPost(
+      Integer actorId, Integer postId, UpdatePostRequestDto request, PostEntity post) {
     if (moderationProperties.isEnabled()) {
       post.setModerationStatus(ModerationStatus.PENDING_MODERATION);
       postRepository.save(post);
@@ -385,6 +426,8 @@ public class PostService {
 
     List<Integer> taggedUserIds = extractTaggedUserIds(post);
 
+    revokeReputationForDeletedPost(post);
+
     // Before the post, not after: the book is what the post is for, and BookService refuses to
     // delete one that has been sold. Running it first means such a delete fails with the book's
     // own message and the post survives, instead of the post vanishing and the row surviving with
@@ -395,10 +438,50 @@ public class PostService {
 
     postRepository.delete(post);
 
+    // B42: a like/comment/mention notification about this post (or a comment underneath it)
+    // otherwise outlives the post and opens onto a 404 — the only way anyone found out was
+    // clicking a dead link. Same transaction as the delete: either both happen or neither does.
+    notificationService.deleteForPost(postId);
+
     try {
       newsfeedService.removePost(postId, actorId, taggedUserIds);
     } catch (Exception e) {
       log.warn("Failed to remove post {} from feeds: {}", postId, e.getMessage());
+    }
+  }
+
+  /**
+   * Clears the reputation a post earned before the post itself is deleted.
+   *
+   * <p>{@code t_reputation_events} has no foreign key to {@code t_posts} — {@code source_id} is
+   * text — so a deleted post's points would otherwise stay on the ledger forever, and the nightly
+   * reconcile re-sums that same ledger and never notices. Two kinds accrue against a post:
+   *
+   * <ul>
+   *   <li>{@code REACTION_RECEIVED}: one row per reactor for the author, keyed {@code
+   *       "{postId}:{reactorId}"} — bulk-revoked by prefix;
+   *   <li>{@code ACCEPTED_ANSWER}: on a resolved QNA post, one row for whoever wrote the accepted
+   *       reply, keyed by that comment's id. The comment author id is read now, before the
+   *       cascade delete takes the comment with the post.
+   * </ul>
+   *
+   * Comment reactions award no reputation ({@code CommentReactionService}), so the comments that
+   * vanish with the post carry nothing else to settle.
+   */
+  private void revokeReputationForDeletedPost(PostEntity post) {
+    reputationEventPublisher.revokeByPrefix(
+        post.getAuthorId(), RepSourceType.REACTION_RECEIVED, post.getId() + ":");
+
+    if (PostType.QNA.equals(post.getPostType())
+        && post.getQnaDetails() != null
+        && post.getQnaDetails().getAcceptedAnswerId() != null) {
+      Integer answerId = post.getQnaDetails().getAcceptedAnswerId();
+      commentRepository
+          .findById(answerId)
+          .ifPresent(
+              answer ->
+                  reputationEventPublisher.revoke(
+                      answer.getAuthorId(), RepSourceType.ACCEPTED_ANSWER, answerId.toString()));
     }
   }
 
@@ -423,11 +506,23 @@ public class PostService {
         .toArray(String[]::new);
   }
 
+  /**
+   * The text a not-yet-saved post would present to moderation.
+   *
+   * <p>{@code PostEntity#moderatableText} is the single definition of "everything a reader will
+   * see", and the create path has no entity yet when the rule engine runs — it deliberately runs
+   * before anything is written. Rather than keep a second list of fields in sync with the entity's,
+   * this projects the request onto a throwaway entity and asks it. One list, two callers.
+   */
+  private String moderatableTextOf(CreatePostRequestDto request) {
+    PostEntity projection = new PostEntity();
+    BeanUtils.copyProperties(request, projection);
+    return projection.moderatableText();
+  }
+
   private void validateTags(
       PostVisibility visibility, List<Integer> taggedUserIds, String content) {
-    if (PostVisibility.PRIVATE.equals(visibility) && !CollectionUtils.isEmpty(taggedUserIds)) {
-      throw new ValidationException("Private posts cannot tag other users");
-    }
+    rejectPrivateWithTags(visibility, taggedUserIds);
 
     if (!Strings.hasText(content) && !CollectionUtils.isEmpty(taggedUserIds)) {
       throw new ValidationException("Content is required if want to tag users");
@@ -437,6 +532,17 @@ public class PostService {
       return;
     }
 
+    validateTagListShape(taggedUserIds);
+    validateTagPlaceholders(taggedUserIds, content);
+  }
+
+  private void rejectPrivateWithTags(PostVisibility visibility, List<Integer> taggedUserIds) {
+    if (PostVisibility.PRIVATE.equals(visibility) && !CollectionUtils.isEmpty(taggedUserIds)) {
+      throw new ValidationException("Private posts cannot tag other users");
+    }
+  }
+
+  private void validateTagListShape(List<Integer> taggedUserIds) {
     if (taggedUserIds.size() > MAX_TAGS) {
       throw new ValidationException("Cannot tag more than " + MAX_TAGS + " users");
     }
@@ -445,7 +551,9 @@ public class PostService {
     if (uniqueUsers.size() != taggedUserIds.size()) {
       throw new ValidationException("Duplicate users in tag list");
     }
+  }
 
+  private void validateTagPlaceholders(List<Integer> taggedUserIds, String content) {
     Set<Integer> placeholderIndices = new HashSet<>();
     Matcher matcher = TAG_PLACEHOLDER.matcher(content);
     while (matcher.find()) {
@@ -505,20 +613,28 @@ public class PostService {
   }
 
   private void validateEventDetails(CreatePostRequestDto request) {
-    if (request.getEventDetails() == null) {
+    EventDetails eventDetails = request.getEventDetails();
+    if (eventDetails == null) {
       throw new ValidationException("Event details are required for event posts");
     }
-    if (request.getEventDetails().getEventTitle() == null
-        || request.getEventDetails().getEventTitle().isBlank()) {
+    validateEventRequiredFields(eventDetails);
+    validateEventTimeRange(eventDetails);
+  }
+
+  private void validateEventRequiredFields(EventDetails eventDetails) {
+    if (eventDetails.getEventTitle() == null || eventDetails.getEventTitle().isBlank()) {
       throw new ValidationException("Event title is required");
     }
-    if (request.getEventDetails().getStartTime() == null) {
+    if (eventDetails.getStartTime() == null) {
       throw new ValidationException("Event start time is required");
     }
-    if (request.getEventDetails().getEndTime() == null) {
+    if (eventDetails.getEndTime() == null) {
       throw new ValidationException("Event end time is required");
     }
-    if (request.getEventDetails().getEndTime().isBefore(request.getEventDetails().getStartTime())) {
+  }
+
+  private void validateEventTimeRange(EventDetails eventDetails) {
+    if (eventDetails.getEndTime().isBefore(eventDetails.getStartTime())) {
       throw new ValidationException("Event end time must be after start time");
     }
   }
@@ -539,19 +655,28 @@ public class PostService {
     if (CollectionUtils.isEmpty(quizDetails.getQuestions())) {
       throw new ValidationException("Quiz must have at least one question");
     }
-    for (int i = 0; i < quizDetails.getQuestions().size(); i++) {
-      QuizQuestion q = quizDetails.getQuestions().get(i);
-      if (!Strings.hasText(q.getQuestion())) {
-        throw new ValidationException("Question text is required at index " + i);
-      }
-      if (CollectionUtils.isEmpty(q.getOptions()) || q.getOptions().size() < 2) {
-        throw new ValidationException("Question must have at least 2 options at index " + i);
-      }
-      if (q.getCorrectOptionIndex() == null
-          || q.getCorrectOptionIndex() < 0
-          || q.getCorrectOptionIndex() >= q.getOptions().size()) {
-        throw new ValidationException("Invalid correctOptionIndex at index " + i);
-      }
+    List<QuizQuestion> questions = quizDetails.getQuestions();
+    for (int i = 0; i < questions.size(); i++) {
+      validateQuizQuestion(questions.get(i), i);
+    }
+  }
+
+  private void validateQuizQuestion(QuizQuestion question, int index) {
+    if (!Strings.hasText(question.getQuestion())) {
+      throw new ValidationException("Question text is required at index " + index);
+    }
+    if (CollectionUtils.isEmpty(question.getOptions()) || question.getOptions().size() < 2) {
+      throw new ValidationException("Question must have at least 2 options at index " + index);
+    }
+    validateCorrectOptionIndex(question, index);
+  }
+
+  private void validateCorrectOptionIndex(QuizQuestion question, int index) {
+    Integer correctOptionIndex = question.getCorrectOptionIndex();
+    if (correctOptionIndex == null
+        || correctOptionIndex < 0
+        || correctOptionIndex >= question.getOptions().size()) {
+      throw new ValidationException("Invalid correctOptionIndex at index " + index);
     }
   }
 
@@ -560,16 +685,12 @@ public class PostService {
       post.setHashtags(new HashSet<>());
     }
 
-    // Decrease usage count for old hashtags if updating
+    // Decrease usage count for old hashtags if updating. In the database, like the increment
+    // below: read-minus-one-write in Java lost a concurrent decrement on a shared tag, and a
+    // counter nothing recomputes from the join table never recovers from that.
     if (!post.getHashtags().isEmpty()) {
-      post.getHashtags()
-          .forEach(
-              h -> {
-                if (h.getUsageCount() != null && h.getUsageCount() > 0) {
-                  h.setUsageCount(h.getUsageCount() - 1);
-                }
-              });
-      hashtagRepository.saveAll(post.getHashtags());
+      hashtagRepository.decrementUsage(
+          post.getHashtags().stream().map(HashtagEntity::getName).toArray(String[]::new));
     }
 
     Set<HashtagEntity> newHashtags = new HashSet<>();
@@ -577,30 +698,18 @@ public class PostService {
       Matcher matcher = HASHTAG_PATTERN.matcher(post.getContent());
       Set<String> tagNames = new HashSet<>();
       while (matcher.find()) {
-        tagNames.add(matcher.group(1).toLowerCase());
+        tagNames.add(matcher.group(1).toLowerCase(Locale.ROOT));
       }
 
       if (!tagNames.isEmpty()) {
-        List<HashtagEntity> existingTags = hashtagRepository.findByNameIn(tagNames);
-        Set<String> existingNames =
-            existingTags.stream().map(HashtagEntity::getName).collect(Collectors.toSet());
-
-        for (String name : tagNames) {
-          if (!existingNames.contains(name)) {
-            HashtagEntity newTag = new HashtagEntity();
-            newTag.setName(name);
-            newTag.setUsageCount(0);
-            existingTags.add(newTag);
-          }
-        }
-
-        // Increase usage count for tags that will be linked
-        for (HashtagEntity tag : existingTags) {
-          tag.setUsageCount((tag.getUsageCount() == null ? 0 : tag.getUsageCount()) + 1);
-        }
-
-        List<HashtagEntity> savedTags = hashtagRepository.saveAll(existingTags);
-        newHashtags.addAll(savedTags);
+        // Create-then-increment, both in the database. The previous version selected the existing
+        // tags, built the missing ones in memory, incremented every counter in Java and saved the
+        // lot — which lost a concurrent increment on a shared tag, and raced two posters straight
+        // into the UNIQUE constraint on t_hashtags.name. Postgres arbitrates both now.
+        String[] names = tagNames.toArray(String[]::new);
+        hashtagRepository.createMissing(names);
+        hashtagRepository.incrementUsage(names);
+        newHashtags.addAll(hashtagRepository.findByNameIn(tagNames));
       }
     }
 

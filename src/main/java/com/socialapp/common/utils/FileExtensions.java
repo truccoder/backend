@@ -1,5 +1,7 @@
 package com.socialapp.common.utils;
 
+import java.util.Locale;
+
 import lombok.experimental.UtilityClass;
 
 @UtilityClass
@@ -9,6 +11,6 @@ public class FileExtensions {
     if (filename == null || !filename.contains(".")) {
       return defaultExtension;
     }
-    return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+    return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
   }
 }

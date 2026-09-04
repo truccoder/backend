@@ -21,6 +21,14 @@ import lombok.Data;
 public class UserViolationDto {
   private Long id;
   private Integer postId;
+
+  /**
+   * A snapshot of the flagged post's content, taken at the moment the violation was recorded — see
+   * {@code UserViolationEntity.postExcerpt}. Present even when {@link #postId} is {@code null}
+   * because the post was deleted afterward, which is the case this field exists for.
+   */
+  private String postExcerpt;
+
   private ViolationType violationType;
   private ViolationSeverity severity;
   private String description;
@@ -33,6 +41,7 @@ public class UserViolationDto {
     return UserViolationDto.builder()
         .id(violation.getId())
         .postId(violation.getPostId())
+        .postExcerpt(violation.getPostExcerpt())
         .violationType(violation.getViolationType())
         .severity(violation.getSeverity())
         .description(violation.getDescription())

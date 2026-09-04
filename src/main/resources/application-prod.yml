@@ -11,6 +11,60 @@
 # rỗng mà không báo lỗi. logback-spring.xml cũng chọn appender theo đúng profile này, nên nếu nó
 # không được kích hoạt thì log cũng đã sai — xem docker/.env.example trong repo DATN-infra.
 
+# Backend chạy sau Caddy — Caddy terminate TLS rồi reverse_proxy sang cổng 8080 bằng HTTP thuần.
+# Không có dòng này thì với MỌI request: request.getScheme() = "http", request.isSecure() = false,
+# getServerName() = "backend", getServerPort() = 8080.
+#
+# Hôm nay chưa có chỗ nào trong code dựng URL từ các giá trị đó — mọi URL người dùng nhìn thấy
+# (link đặt lại mật khẩu, CORS, redirect URI OAuth, URL ảnh MinIO) đều đến từ ${PUBLIC_BASE_URL}
+# qua biến môi trường, không phải từ request đến. Nên đây là phòng thủ chiều sâu: springdoc suy
+# ra server URL, mọi sendRedirect / Spring Security requiresChannel thêm về sau, và ngữ nghĩa
+# "request này là HTTPS" đều cần scheme đúng.
+#
+# `framework` đăng ký ForwardedHeaderFilter của Spring; Caddy reverse_proxy mặc định đã gửi
+# X-Forwarded-Proto / -Host / -For. Filter này ẩn các header X-Forwarded-* khỏi filter phía sau
+# nhưng ghi đè getRemoteAddr() = entry trái nhất của X-Forwarded-For — trùng cách
+# GuestRateLimitFilter / AuthRateLimitFilter tự lấy IP, nên rate-limit theo IP client vẫn đúng
+# (xác nhận bằng test e2e sau khi cắt domain).
+server:
+  forward-headers-strategy: framework
+
+# Object seed (avatar, ảnh bìa, ảnh bài viết, file/bìa sách) mà db/seed trỏ tới nhưng SQL không
+# tạo được. Máy dev để docker-compose lo (minio-seed-objects + minio-init); production chạy compose
+# của repo DATN-infra, không có service đó — nên MinIOSeedObjectInitializer tự đọc
+# db/seed/seed-manifest.tsv trong jar rồi nạp lên MinIO lúc khởi động. Cùng logic đã đưa
+# Neo4j/newsfeed seeding vào ứng dụng.
+#
+# Chạy nền, idempotent (object đã có ảnh thật thì bỏ qua). Env MINIO_SEED_OBJECTS_ON_START ghi đè
+# được để tắt khẩn cấp mà không cần build lại image.
+minio:
+  seed-objects-on-start: ${MINIO_SEED_OBJECTS_ON_START:true}
+
+  # Ảnh seed thật được NƯỚNG vào image lúc build (stage `seed-objects` trong Dockerfile chạy
+  # generate-seed-objects.py ngay trên runner, nơi đường ra các nguồn ảnh sạch). Initializer đọc
+  # từ đây trước; chỉ khi thiếu file mới tính tới việc tải mạng. Đây là thứ chấm dứt cảnh "deploy
+  # xong ảnh là ô màu": VPS không còn phải tự tải ~980 ảnh từ dịch vụ công cộng lúc khởi động.
+  seed-objects-dir: ${MINIO_SEED_OBJECTS_DIR:/app/seed-objects}
+
+  # Ghi đè ô màu cũ bằng ảnh thật khi lần chạy này lấy được (từ thư mục nướng sẵn hoặc tải mạng).
+  # Để `true` một lần khi cần chữa một kho đã lỡ đóng băng thành ô màu, rồi có thể trả về `false`.
+  seed-objects-replace-placeholders: ${MINIO_SEED_OBJECTS_REPLACE_PLACEHOLDERS:true}
+
+# Đồ thị bạn bè sống trong Neo4j, không phải Postgres — Flyway không quản. Nạp seed xong mà không
+# nạp đồ thị thì hồ sơ hiện "đã là bạn" còn /friendships rỗng, VÀ fan-out bảng tin (đọc chính đồ
+# thị này) chỉ tới được người được tag nên tab Bạn bè cũng trống. Toàn bộ file cypher là MERGE nên
+# nạp lại mỗi lần khởi động là an toàn và rẻ (~500 node, vài nghìn cạnh, vài giây). Cùng lý lẽ đã
+# bật sẵn minio.seed-objects-on-start ở trên.
+neo4j:
+  seed-on-start: ${NEO4J_SEED_ON_START:true}
+
+# Bảng tin đọc DUY NHẤT từ Redis; bài seed INSERT thẳng vào Postgres nên chưa từng fan-out. Cờ này
+# KHÁC newsfeed.rebuild-on-start (đường của dev, luôn xoá-rồi-dựng): nó chỉ dựng lại — trên luồng
+# nền, không dọn — khi SCAN feed:* ra đúng 0 khoá. feed:* rỗng trên production = seed mới hoặc mất
+# Redis, cả hai đều cần đúng một lần dựng lại. Deploy bình thường chỉ tốn một lượt SCAN.
+newsfeed:
+  rebuild-if-empty: ${NEWSFEED_REBUILD_IF_EMPTY:true}
+
 spring:
   jpa:
     # Hibernate `show_sql` ghi thẳng ra System.out, KHÔNG đi qua logback, nên mức WARN của profile
@@ -42,15 +96,16 @@ spring:
 
     # Production CÓ nạp db/seed (quyết định 2026-08-21: cần dữ liệu demo trên môi trường thật).
     #
-    # Điều làm việc này chấp nhận được: ba personal access token — credential dùng được ngay cho
-    # /v1/api/knowledge/sync/** — đã tách sang db/seed-dev, và thư mục đó KHÔNG có ở dòng dưới.
+    # Dòng này GIỐNG HỆT máy dev từ 2026-08-28. Trước đó có một thư mục thứ ba, db/seed-dev, giữ
+    # ba personal access token và cố ý không có ở production. Thư mục đó đã bị XOÁ HẲN: người dùng
+    # tự tạo token qua POST /v1/api/tokens trong vài giây, nên ba token seed sẵn chỉ đổi lấy ba
+    # credential nằm công khai trong repo — mà /v1/api/knowledge/sync/** là permitAll và tự xác
+    # thực bằng chính chuỗi token, tức ai đọc repo là ghi được vào vault của tài khoản tương ứng.
     #
-    # Điều KHÔNG được che giấu: mật khẩu của 60 tài khoản seed vẫn nằm trong repo (xem V51 — tài
-    # khoản thường dùng "12345678", hai tài khoản ADMIN dùng một chuỗi riêng). Tách hai mật khẩu
-    # chỉ chặn được bot dò chuỗi phổ biến, KHÔNG chặn được người đọc repo. Muốn đóng hẳn thì đổi
-    # mật khẩu hai tài khoản ADMIN qua API ngay sau khi seed xong.
-    #
-    # Đừng thêm classpath:db/seed-dev vào dòng này.
+    # Điều KHÔNG được che giấu: mật khẩu của 500 tài khoản seed vẫn nằm trong repo (xem V81 — tài
+    # khoản thường dùng "12qwaszx", hai tài khoản ADMIN dùng "1234qwer"). Tách hai mật khẩu chỉ
+    # chặn được bot dò chuỗi phổ biến, KHÔNG chặn được người đọc repo. Muốn đóng hẳn thì đổi mật
+    # khẩu hai tài khoản ADMIN qua API NGAY SAU KHI SEED XONG — đó là bước bắt buộc của runbook.
     locations: classpath:db/migration,classpath:db/seed
 
 # Đặc tả OpenAPI liệt kê mọi endpoint và mọi trường DTO, còn Swagger UI là một bảng điều khiển

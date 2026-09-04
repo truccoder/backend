@@ -35,6 +35,9 @@ import com.socialapp.moderation.enums.AppealStatus;
 import com.socialapp.moderation.enums.ViolationType;
 import com.socialapp.moderation.repository.ModerationAppealRepository;
 import com.socialapp.moderation.repository.UserViolationRepository;
+import com.socialapp.notifications.dto.SendNotificationRequest;
+import com.socialapp.notifications.entity.enums.NotificationType;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -54,16 +57,19 @@ class AppealServiceTest {
   @Mock private UserViolationRepository violationRepository;
   @Mock private UserRepository userRepository;
   @Mock private UserBanService userBanService;
+  @Mock private NotificationService notificationService;
 
   @InjectMocks private AppealService appealService;
 
   @Captor private ArgumentCaptor<ModerationAppealEntity> appealCaptor;
+  @Captor private ArgumentCaptor<SendNotificationRequest> notificationCaptor;
 
   private static UserViolationEntity violation(Long id, Integer userId) {
     return UserViolationEntity.builder()
         .id(id)
         .userId(userId)
         .postId(11)
+        .postExcerpt("Check out my new project, link in bio!")
         .violationType(ViolationType.SPAM)
         .description("Admin manual review: repeated advertising")
         .build();
@@ -100,8 +106,9 @@ class AppealServiceTest {
       // Given
       when(violationRepository.findByUserIdOrderByCreatedAtDesc(USER_ID))
           .thenReturn(List.of(violation(VIOLATION_ID, USER_ID)));
-      when(appealRepository.existsByViolationIdAndStatus(VIOLATION_ID, AppealStatus.PENDING))
-          .thenReturn(true);
+      // One query for the whole list now, not an exists() per violation.
+      when(appealRepository.findViolationIdsWithStatus(List.of(VIOLATION_ID), AppealStatus.PENDING))
+          .thenReturn(List.of(VIOLATION_ID));
 
       // When
       List<UserViolationDto> result = appealService.getMyViolations(USER_ID);
@@ -110,6 +117,10 @@ class AppealServiceTest {
       assertThat(result).hasSize(1);
       assertThat(result.get(0).isAppealPending()).isTrue();
       assertThat(result.get(0).getViolationType()).isEqualTo(ViolationType.SPAM);
+      // B47: the snapshot taken at record time, not re-derived from postId — it must survive the
+      // post being deleted later.
+      assertThat(result.get(0).getPostExcerpt())
+          .isEqualTo("Check out my new project, link in bio!");
     }
   }
 
@@ -211,6 +222,12 @@ class AppealServiceTest {
       assertThat(result.getStatus()).isEqualTo(AppealStatus.APPROVED);
       assertThat(result.getReviewerNote()).isEqualTo("You were right");
       assertThat(result.getReviewedAt()).isNotNull();
+
+      // B44: the appellant is told they won, not left to notice their own appeal list changed.
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(USER_ID);
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.APPEAL_APPROVED);
     }
 
     @Test
@@ -267,6 +284,12 @@ class AppealServiceTest {
       // Then
       assertThat(result.getStatus()).isEqualTo(AppealStatus.REJECTED);
       verify(userBanService, never()).revokeViolation(any());
+
+      // B44: the appellant is told they lost, not left to notice their own appeal list changed.
+      verify(notificationService).send(notificationCaptor.capture());
+      assertThat(notificationCaptor.getValue().getRecipientId()).isEqualTo(USER_ID);
+      assertThat(notificationCaptor.getValue().getType())
+          .isEqualTo(NotificationType.APPEAL_REJECTED);
     }
   }
 

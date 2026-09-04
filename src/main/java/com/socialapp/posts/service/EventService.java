@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -37,18 +38,30 @@ public class EventService {
   private final UserRepository userRepository;
   private final NotificationService notificationService;
   private final GoogleCalendarService googleCalendarService;
+  private final PostVisibilityService postVisibilityService;
 
   private static final DateTimeFormatter ICS_FORMAT =
       DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
 
   @Transactional
   public void rsvp(Integer userId, Integer postId, RsvpStatus status) {
-    PostEntity post = findEventPostOrThrow(postId);
+    PostEntity post = findEventPostOrThrow(userId, postId);
     EventDetails details = post.getEventDetails();
 
-    if (Objects.nonNull(details.getMaxAttendees())) {
+    if (Objects.nonNull(details.getMaxAttendees()) && RsvpStatus.GOING.equals(status)) {
+      // Lock the event row first: this reads the GOING count and then writes an RSVP, so without
+      // it each concurrent "going" counts against a snapshot missing the others and the cap is
+      // exceeded. Only taken when a cap exists and the answer is GOING — a NOT_GOING never
+      // contends. Same approach as ProjectService.acceptApplication.
+      postRepository.findByIdForUpdate(postId);
       int goingCount = rsvpRepository.countByPostIdAndStatus(postId, RsvpStatus.GOING);
-      if (RsvpStatus.GOING.equals(status) && goingCount >= details.getMaxAttendees()) {
+      boolean alreadyGoing =
+          rsvpRepository
+              .findByPostIdAndUserId(postId, userId)
+              .map(existing -> RsvpStatus.GOING.equals(existing.getStatus()))
+              .orElse(false);
+      // Someone already counted in goingCount is not taking a second seat by re-confirming.
+      if (!alreadyGoing && goingCount >= details.getMaxAttendees()) {
         throw new ValidationException("Event is full");
       }
     }
@@ -92,16 +105,19 @@ public class EventService {
             .orElse("Someone");
     String eventTitle = Objects.toString(post.getEventDetails().getEventTitle(), "your event");
 
+    boolean going = RsvpStatus.GOING.equals(status);
     notificationService.send(
         SendNotificationRequest.builder()
             .recipientId(hostId)
             .actorId(attendeeId)
             .type(NotificationType.EVENT_RSVP)
             .title("New RSVP for your event")
-            .body(
-                attendeeName
-                    + (RsvpStatus.GOING.equals(status) ? " is going to " : " is interested in ")
-                    + eventTitle)
+            .body(attendeeName + (going ? " is going to " : " is interested in ") + eventTitle)
+            .messageKey(
+                going
+                    ? NotificationMessages.EVENT_RSVP_GOING
+                    : NotificationMessages.EVENT_RSVP_INTERESTED)
+            .messageArgs(NotificationMessages.args("actor", attendeeName, "event", eventTitle))
             .referenceId(post.getId())
             .referenceType("POST")
             .build());
@@ -114,8 +130,8 @@ public class EventService {
    * deliberate, callers that want the guest list pass {@code GOING}. The status is on every row so
    * a caller can group them without a second round trip.
    */
-  public List<EventAttendeeDto> getAttendees(Integer postId, RsvpStatus status) {
-    findEventPostOrThrow(postId);
+  public List<EventAttendeeDto> getAttendees(Integer viewerId, Integer postId, RsvpStatus status) {
+    findEventPostOrThrow(viewerId, postId);
 
     List<EventRsvpEntity> rsvps =
         status == null
@@ -144,17 +160,18 @@ public class EventService {
         .toList();
   }
 
-  public int getGoingCount(Integer postId) {
+  public int getGoingCount(Integer viewerId, Integer postId) {
+    findEventPostOrThrow(viewerId, postId);
     return rsvpRepository.countByPostIdAndStatus(postId, RsvpStatus.GOING);
   }
 
   public void addToGoogleCalendar(Integer userId, Integer postId) {
-    PostEntity post = findEventPostOrThrow(postId);
+    PostEntity post = findEventPostOrThrow(userId, postId);
     googleCalendarService.addEventToCalendar(userId, post.getEventDetails());
   }
 
-  public String generateIcsFile(Integer postId) {
-    PostEntity post = findEventPostOrThrow(postId);
+  public String generateIcsFile(Integer viewerId, Integer postId) {
+    PostEntity post = findEventPostOrThrow(viewerId, postId);
     EventDetails event = post.getEventDetails();
 
     String startUtc =
@@ -198,11 +215,26 @@ public class EventService {
         + "END:VCALENDAR\r\n";
   }
 
-  private PostEntity findEventPostOrThrow(Integer postId) {
+  /**
+   * The event post, but only if {@code viewerId} is allowed to read it.
+   *
+   * <p>This used to check existence and {@link PostType#EVENT} and nothing else, so the attendee
+   * list of a PRIVATE event — every attendee's full name and avatar — and its {@code .ics} export
+   * — title, description, location and time — were readable by anyone who guessed the post id.
+   *
+   * <p>404, not 403, matching {@code PostReactionService#requireVisiblePost}. The post-type check
+   * runs after the visibility check so that "not an event" never leaks the existence of a post the
+   * caller may not see.
+   */
+  private PostEntity findEventPostOrThrow(Integer viewerId, Integer postId) {
     PostEntity post =
         postRepository
             .findById(postId)
             .orElseThrow(() -> new NotFoundException("Post not found: " + postId));
+
+    if (!postVisibilityService.isVisibleTo(post, viewerId)) {
+      throw new NotFoundException("Post not found: " + postId);
+    }
 
     if (!PostType.EVENT.equals(post.getPostType())) {
       throw new ValidationException("Post is not an event");
