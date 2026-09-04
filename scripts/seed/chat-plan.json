@@ -3223,6 +3223,108 @@
     "9295",
     "9377"
    ]
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ]
   }
  ],
  "groups": [
@@ -3442,6 +3544,23 @@
     "9475",
     "9463",
     "9001"
+   ]
+  },
+  {
+   "id": "seed-extra-v108-giang-thao",
+   "name": "Backend x Mobile — Giang & Thao",
+   "createdBy": "9001",
+   "members": [
+    "9001",
+    "9133",
+    "9005",
+    "9010",
+    "9012",
+    "9023",
+    "9006",
+    "9013",
+    "9027",
+    "9034"
    ]
   }
  ],
@@ -22663,6 +22782,1116 @@
    "sender": "9237",
    "text": "Cái này mình từng viết ghi chú, để mình tìm lại.",
    "daysAgo": 451
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 14
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 13
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 12
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 11
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 10
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 9
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 8
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 7
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 6,
+   "attachments": [
+    {
+     "type": "image",
+     "image_url": "https://picsum.photos/seed/giang-thao14/640/480"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9133"
+   ],
+   "sender": "9133",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 5,
+   "attachments": [
+    {
+     "type": "file",
+     "asset_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+     "title": "tai-lieu-du-an.pdf"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9005",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9005",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16,
+   "attachments": [
+    {
+     "type": "image",
+     "image_url": "https://picsum.photos/seed/giang90054/640/480"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9005"
+   ],
+   "sender": "9005",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15,
+   "attachments": [
+    {
+     "type": "file",
+     "asset_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+     "title": "tai-lieu-du-an.pdf"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9010",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9010",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9010"
+   ],
+   "sender": "9010",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9012",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9012",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9012"
+   ],
+   "sender": "9012",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9023",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9023",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9023"
+   ],
+   "sender": "9023",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9044",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9044",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9044"
+   ],
+   "sender": "9044",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9048",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9048",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9048"
+   ],
+   "sender": "9048",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9065",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9065",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9065"
+   ],
+   "sender": "9065",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9073",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9073",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9001",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9001",
+    "9073"
+   ],
+   "sender": "9073",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9006",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9006",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16,
+   "attachments": [
+    {
+     "type": "image",
+     "image_url": "https://picsum.photos/seed/thao90064/640/480"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9006"
+   ],
+   "sender": "9006",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15,
+   "attachments": [
+    {
+     "type": "file",
+     "asset_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+     "title": "tai-lieu-du-an.pdf"
+    }
+   ]
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9013",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9013",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9013"
+   ],
+   "sender": "9013",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9027",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9027",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9027"
+   ],
+   "sender": "9027",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9034",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9034",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9034"
+   ],
+   "sender": "9034",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9061",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9061",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9061"
+   ],
+   "sender": "9061",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9096",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9096",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9096"
+   ],
+   "sender": "9096",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9122",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9122",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9122"
+   ],
+   "sender": "9122",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9133",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 20
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9155",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 19
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 18
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9155",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 17
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9133",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 16
+  },
+  {
+   "members": [
+    "9133",
+    "9155"
+   ],
+   "sender": "9155",
+   "text": "Có đó, mình sẽ nhắn địa chỉ sau.",
+   "daysAgo": 15
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9001",
+   "text": "Chào bạn, dạo này dự án thế nào rồi?",
+   "daysAgo": 10
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9133",
+   "text": "Được chứ, bạn hỏi đi.",
+   "daysAgo": 9
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9005",
+   "text": "Nhận được rồi, cảm ơn bạn nhiều!",
+   "daysAgo": 8
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9010",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 7
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9012",
+   "text": "Được chứ, bạn hỏi đi.",
+   "daysAgo": 6
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9023",
+   "text": "Nhận được rồi, cảm ơn bạn nhiều!",
+   "daysAgo": 5
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9006",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 4
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9013",
+   "text": "Được chứ, bạn hỏi đi.",
+   "daysAgo": 3
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9027",
+   "text": "Nhận được rồi, cảm ơn bạn nhiều!",
+   "daysAgo": 2
+  },
+  {
+   "channelId": "seed-extra-v108-giang-thao",
+   "sender": "9034",
+   "text": "Ổn bạn ơi, đang tới giai đoạn cuối rồi.",
+   "daysAgo": 1
   }
+ ],
+ "_manual_additions": [
+  "V108: +17 DM, +1 group, +122 tin nhắn (kèm ảnh/file) cho 9001/9133 — xem scripts/seed/extend_chat_plan_v108.py. Bị XOÁ nếu generate_seed.py chạy lại."
  ]
 }

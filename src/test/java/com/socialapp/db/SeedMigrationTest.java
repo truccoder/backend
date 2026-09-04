@@ -306,21 +306,25 @@ class SeedMigrationTest {
     // Postgres đã từ chối câu INSERT nếu literal không parse được, nên việc migrate chạy xong đã
     // là bằng chứng. Câu này đi xa hơn một bước: đọc NGƯỢC ra một khoá cụ thể của từng loại, tức
     // là chứng minh cấu trúc đúng chứ không chỉ cú pháp đúng.
+    //
+    // Ngưỡng, không đúng-bằng: cùng bài học đã ghi ở postsCoverEveryType — seed bổ sung
+    // (vd V108, thêm bài cho tài khoản demo) hợp lệ tăng các cột này lên, một isEqualTo() ở đây
+    // sẽ biến mọi lần thêm fixture về sau thành một test đỏ vô nghĩa.
     assertThat(
             count(
                 "SELECT COUNT(*) FROM socialapp.t_posts WHERE event_details->>'eventTitle' IS NOT NULL"))
-        .isEqualTo(80);
+        .isGreaterThanOrEqualTo(80);
     assertThat(
             count(
                 "SELECT COUNT(*) FROM socialapp.t_posts WHERE code_snippet_details->>'language' IS NOT NULL"))
-        .isEqualTo(160);
+        .isGreaterThanOrEqualTo(160);
     assertThat(
             count(
                 "SELECT COUNT(*) FROM socialapp.t_posts WHERE poll_details->'options' IS NOT NULL"))
-        .isEqualTo(80);
+        .isGreaterThanOrEqualTo(80);
     assertThat(
             count("SELECT COUNT(*) FROM socialapp.t_posts WHERE link_details->>'url' IS NOT NULL"))
-        .isEqualTo(120);
+        .isGreaterThanOrEqualTo(120);
   }
 
   @Test
@@ -552,7 +556,9 @@ class SeedMigrationTest {
   @Test
   @DisplayName("V85 · 80 quyển sách thật, avg_rating khớp đánh giá thật")
   void bookstoreAggregatesMatchReality() throws Exception {
-    assertThat(count("SELECT COUNT(*) FROM socialapp.t_books")).isEqualTo(80);
+    // Ngưỡng, không đúng-bằng — cùng lý do ở everyDetailColumnIsRealJson: seed bổ sung (V108) hợp
+    // lệ thêm sách cho tài khoản demo.
+    assertThat(count("SELECT COUNT(*) FROM socialapp.t_books")).isGreaterThanOrEqualTo(80);
     assertThat(
             count(
                 "SELECT COUNT(*) FROM socialapp.t_books b"
@@ -643,7 +649,9 @@ class SeedMigrationTest {
   @Test
   @DisplayName("V86 · một bản giải thích chứa Markdown thật, đủ tám loại phần tử")
   void oneExplanationCoversEveryMarkdownElement() throws Exception {
-    assertThat(count("SELECT COUNT(*) FROM socialapp.t_explanations")).isEqualTo(1600);
+    // Ngưỡng, không đúng-bằng — cùng lý do ở everyDetailColumnIsRealJson: seed bổ sung (V108) hợp
+    // lệ thêm bản giải thích cho tài khoản demo.
+    assertThat(count("SELECT COUNT(*) FROM socialapp.t_explanations")).isGreaterThanOrEqualTo(1600);
     for (String needle :
         new String[] {"## ", "**", "* `", "1. ", "```java", "| --- |", "](https://"}) {
       assertThat(
@@ -697,7 +705,9 @@ class SeedMigrationTest {
   @Test
   @DisplayName("dự án phủ đủ ba ca tags: giao được, CLOSED có tags, và tags NULL")
   void projectTagFixtures() throws Exception {
-    assertThat(count("SELECT COUNT(*) FROM socialapp.t_projects")).isEqualTo(50);
+    // Ngưỡng, không đúng-bằng — cùng lý do ở everyDetailColumnIsRealJson: seed bổ sung (V108) hợp
+    // lệ thêm dự án cho tài khoản demo.
+    assertThat(count("SELECT COUNT(*) FROM socialapp.t_projects")).isGreaterThanOrEqualTo(50);
     assertThat(
             count(
                 "SELECT COUNT(*) FROM socialapp.t_projects WHERE status = 'CLOSED' AND tags IS NOT NULL"))

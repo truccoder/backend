@@ -430,6 +430,11 @@ async function main() {
           // mọi tin đều mang dấu thời gian của lúc chạy script, và toàn bộ 18 tháng lịch sử hội
           // thoại dồn vào một phút.
           created_at: isoDaysAgo(message.daysAgo),
+          // "attachments" là trường TUỲ CHỌN trên kế hoạch — phần lớn tin nhắn không có. Chuyển
+          // thẳng nguyên văn cho Stream: mỗi phần tử theo đúng schema attachment của Stream Chat
+          // ({type: "image", image_url: ...} hoặc {type: "file", asset_url: ..., title: ...}).
+          // Thêm bởi scripts/seed/extend_chat_plan_v108.py, xem V108__seed_..._extra.sql.
+          ...(message.attachments ? { attachments: message.attachments } : {}),
         },
       });
       sent += 1;
