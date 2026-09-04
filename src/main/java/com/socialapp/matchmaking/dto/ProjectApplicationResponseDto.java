@@ -22,6 +22,7 @@ public class ProjectApplicationResponseDto {
   private Integer positionId;
   private String positionTitle;
   private Integer applicantId;
+  private String applicantUsername;
   private String applicantFullName;
   private String applicantProfilePictureUrl;
   private String message;
@@ -37,6 +38,9 @@ public class ProjectApplicationResponseDto {
         .positionId(application.getPosition().getId())
         .positionTitle(application.getPosition().getTitle())
         .applicantId(application.getApplicant().getId())
+        // Same reason as authorUsername on ProjectResponseDto: an applicant row names a person the
+        // owner may want to open a profile for, and the profile route needs the handle.
+        .applicantUsername(application.getApplicant().getUsername())
         .applicantFullName(application.getApplicant().getFullName())
         .applicantProfilePictureUrl(application.getApplicant().getProfilePictureUrl())
         .message(application.getMessage())

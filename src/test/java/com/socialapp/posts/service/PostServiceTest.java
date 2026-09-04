@@ -18,7 +18,6 @@ import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -48,6 +47,7 @@ import com.socialapp.moderation.exception.UserBannedException;
 import com.socialapp.moderation.rule.ModerationRuleEngine;
 import com.socialapp.moderation.service.UserBanService;
 import com.socialapp.newsfeed.service.NewsfeedService;
+import com.socialapp.notifications.services.NotificationService;
 import com.socialapp.posts.dto.CreatePostRequestDto;
 import com.socialapp.posts.dto.UpdatePostRequestDto;
 import com.socialapp.posts.entity.CommentEntity;
@@ -103,6 +103,7 @@ class PostServiceTest {
   @Mock private HashtagRepository hashtagRepository;
   @Mock private CommentRepository commentRepository;
   @Mock private ReputationEventPublisher reputationEventPublisher;
+  @Mock private NotificationService notificationService;
 
   @InjectMocks private PostService postService;
 
@@ -1053,6 +1054,21 @@ class PostServiceTest {
     }
 
     @Test
+    @DisplayName(
+        "should delete every notification pointing at the post (B42), so none opens onto a 404")
+    void shouldDeleteDanglingNotifications_whenPostIsDeleted() {
+      // Given
+      PostEntity post = existingPost(POST_ID, AUTHOR_ID);
+      when(postRepository.findById(POST_ID)).thenReturn(Optional.of(post));
+
+      // When
+      postService.deletePost(AUTHOR_ID, POST_ID);
+
+      // Then
+      verify(notificationService).deleteForPost(POST_ID);
+    }
+
+    @Test
     @DisplayName("should remove the post from feeds with tagged users sorted by their tag position")
     void shouldPassSortedTaggedUserIds_whenPostHasTags() {
       // Given
@@ -1435,6 +1451,14 @@ class PostServiceTest {
   @DisplayName("Hashtag Extraction (processHashtags)")
   class HashtagExtractionTests {
 
+    /** A hashtag row as the database returns it — id and count already settled there. */
+    private HashtagEntity tag(String name, int usageCount) {
+      HashtagEntity entity = new HashtagEntity();
+      entity.setName(name);
+      entity.setUsageCount(usageCount);
+      return entity;
+    }
+
     @Test
     @DisplayName("should not interact with hashtag repository when content has no hashtags")
     void shouldNotInteract_whenNoHashtags() {
@@ -1460,32 +1484,27 @@ class PostServiceTest {
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
       when(moderationProperties.isEnabled()).thenReturn(false);
 
-      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
-
-      when(hashtagRepository.saveAll(any()))
-          .thenAnswer(
-              invocation -> {
-                Iterable<HashtagEntity> args = invocation.getArgument(0);
-                List<HashtagEntity> list = new java.util.ArrayList<>();
-                args.forEach(list::add);
-                return list;
-              });
+      // The counters live in the database now, so the service creates-then-increments there and
+      // reads the rows back rather than building entities and counting in memory.
+      when(hashtagRepository.findByNameIn(any()))
+          .thenReturn(new java.util.ArrayList<>(List.of(tag("java", 1), tag("spring", 1))));
 
       // When
       postService.createPost(AUTHOR_ID, request);
 
-      // Then
+      // Then — #Java and #JAVA are the same tag, lower-cased, and asked for once
+      ArgumentCaptor<String[]> namesCaptor = ArgumentCaptor.forClass(String[].class);
+      verify(hashtagRepository).createMissing(namesCaptor.capture());
+      assertThat(namesCaptor.getValue()).containsExactlyInAnyOrder("java", "spring");
+      verify(hashtagRepository).incrementUsage(any(String[].class));
+
       verify(postRepository).save(postCaptor.capture());
       verify(postRepository).saveAndFlush(postCaptor.capture());
       PostEntity savedPost = postCaptor.getValue();
 
-      Set<HashtagEntity> hashtags = savedPost.getHashtags();
-      assertThat(hashtags).hasSize(2); // java and spring
-      assertThat(hashtags)
+      assertThat(savedPost.getHashtags())
           .extracting(HashtagEntity::getName)
           .containsExactlyInAnyOrder("java", "spring");
-
-      assertThat(hashtags).extracting(HashtagEntity::getUsageCount).containsOnly(1);
     }
 
     @Test
@@ -1496,33 +1515,26 @@ class PostServiceTest {
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
       when(moderationProperties.isEnabled()).thenReturn(false);
 
-      HashtagEntity existingTag = new HashtagEntity();
-      existingTag.setName("java");
-      existingTag.setUsageCount(5);
-
+      // The row comes back already incremented — the UPDATE ran in the database, so the count is
+      // never read-modify-written in Java and a concurrent post cannot lose an increment.
       when(hashtagRepository.findByNameIn(any()))
-          .thenReturn(new java.util.ArrayList<>(List.of(existingTag)));
-      when(hashtagRepository.saveAll(any()))
-          .thenAnswer(
-              invocation -> {
-                Iterable<HashtagEntity> args = invocation.getArgument(0);
-                List<HashtagEntity> list = new java.util.ArrayList<>();
-                args.forEach(list::add);
-                return list;
-              });
+          .thenReturn(new java.util.ArrayList<>(List.of(tag("java", 6))));
 
       // When
       postService.createPost(AUTHOR_ID, request);
 
       // Then
+      verify(hashtagRepository).createMissing(any(String[].class));
+      ArgumentCaptor<String[]> namesCaptor = ArgumentCaptor.forClass(String[].class);
+      verify(hashtagRepository).incrementUsage(namesCaptor.capture());
+      assertThat(namesCaptor.getValue()).containsExactly("java");
+
       verify(postRepository).save(postCaptor.capture());
       verify(postRepository).saveAndFlush(postCaptor.capture());
       PostEntity savedPost = postCaptor.getValue();
 
       assertThat(savedPost.getHashtags()).hasSize(1);
-      HashtagEntity tag = savedPost.getHashtags().iterator().next();
-      assertThat(tag.getName()).isEqualTo("java");
-      assertThat(tag.getUsageCount()).isEqualTo(6); // 5 + 1
+      assertThat(savedPost.getHashtags().iterator().next().getName()).isEqualTo("java");
     }
 
     @Test
@@ -1542,30 +1554,27 @@ class PostServiceTest {
       when(userRepository.findById(AUTHOR_ID)).thenReturn(Optional.of(someUser(AUTHOR_ID)));
       when(moderationProperties.isEnabled()).thenReturn(false);
 
-      when(hashtagRepository.findByNameIn(any())).thenReturn(new java.util.ArrayList<>());
-      when(hashtagRepository.saveAll(any()))
-          .thenAnswer(
-              invocation -> {
-                Iterable<HashtagEntity> args = invocation.getArgument(0);
-                List<HashtagEntity> list = new java.util.ArrayList<>();
-                args.forEach(list::add);
-                return list;
-              });
+      when(hashtagRepository.findByNameIn(any()))
+          .thenReturn(new java.util.ArrayList<>(List.of(tag("react", 1))));
 
       // When
       postService.updatePost(AUTHOR_ID, POST_ID, request);
 
-      // Then
-      // verify old tag was decremented
-      assertThat(oldTag.getUsageCount()).isEqualTo(1);
+      // Then — both sides of the counter are now the database's job: the tag the post is losing
+      // is decremented by name, the tag it gains is incremented, and nothing writes usageCount
+      // through the entity any more (which is what lost a concurrent update).
+      ArgumentCaptor<String[]> namesCaptor = ArgumentCaptor.forClass(String[].class);
+      verify(hashtagRepository).decrementUsage(namesCaptor.capture());
+      assertThat(namesCaptor.getValue()).containsExactly("java");
+      assertThat(oldTag.getUsageCount()).isEqualTo(2);
+      verify(hashtagRepository).incrementUsage(any(String[].class));
+      verify(hashtagRepository, never()).saveAll(any());
 
       verify(postRepository).save(postCaptor.capture());
       PostEntity savedPost = postCaptor.getValue();
 
       assertThat(savedPost.getHashtags()).hasSize(1);
-      HashtagEntity newTag = savedPost.getHashtags().iterator().next();
-      assertThat(newTag.getName()).isEqualTo("react");
-      assertThat(newTag.getUsageCount()).isEqualTo(1);
+      assertThat(savedPost.getHashtags().iterator().next().getName()).isEqualTo("react");
     }
   }
 }

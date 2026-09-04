@@ -1,6 +1,7 @@
 package com.socialapp.trending.service;
 
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -28,13 +29,18 @@ public class TrendingCrawlScheduler {
     for (TrendingCrawler crawler : crawlers) {
       try {
         List<CrawledItem> items = crawler.crawl();
+
+        // One query for the whole batch rather than one per crawled item.
+        Set<String> alreadyStored =
+            items.isEmpty()
+                ? Set.of()
+                : Set.copyOf(
+                    trendingItemRepository.findExistingSourceIds(
+                        crawler.getSource(),
+                        items.stream().map(CrawledItem::getSourceId).distinct().toList()));
+
         List<CrawledItem> newItems =
-            items.stream()
-                .filter(
-                    item ->
-                        !trendingItemRepository.existsBySourceAndSourceId(
-                            item.getSource(), item.getSourceId()))
-                .toList();
+            items.stream().filter(item -> !alreadyStored.contains(item.getSourceId())).toList();
 
         if (newItems.isEmpty()) {
           log.debug("No new items from {}", crawler.getSource());
@@ -61,6 +67,10 @@ public class TrendingCrawlScheduler {
             .title(crawled.getTitle())
             .summary(truncate(crawled.getSummary(), 500))
             .url(crawled.getUrl())
+            // Truncated to the column width like the summary above it. An image URL is normally
+            // far shorter than this, but it comes from somebody else's API, and a row lost to a
+            // 2049-character CDN link would take the whole crawl cycle's batch down with it.
+            .imageUrl(truncate(crawled.getImageUrl(), 2048))
             .source(crawled.getSource())
             .sourceId(crawled.getSourceId())
             .category(classification.category())

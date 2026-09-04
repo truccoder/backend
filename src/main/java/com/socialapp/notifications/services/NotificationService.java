@@ -68,24 +68,36 @@ public class NotificationService {
 
     NotificationChannel channel = request.getChannel();
 
+    // Push and email are best-effort side channels; the stored row and the SSE event are the
+    // notification. OneSignal being down, or SMTP refusing, used to throw straight out of this
+    // method — leaving the row saved but never marked sent and, worse, never published, so the
+    // in-app bell silently missed a notification because an unrelated channel failed.
     if (shouldSendPush(channel, prefs)) {
-      pushService.sendToPlayer(
-          prefs.getOnesignalPlayerId(),
-          request.getTitle(),
-          request.getBody(),
-          Objects.requireNonNullElse(request.getPushData(), Map.of()));
-      entity.setSentAt(OffsetDateTime.now());
+      try {
+        pushService.sendToPlayer(
+            prefs.getOnesignalPlayerId(),
+            request.getTitle(),
+            request.getBody(),
+            Objects.requireNonNullElse(request.getPushData(), Map.of()));
+        entity.setSentAt(OffsetDateTime.now());
+      } catch (Exception e) {
+        log.warn("Push delivery failed for user {}", request.getRecipientId(), e);
+      }
     }
 
     if (shouldSendEmail(channel, prefs)) {
-      UserEntity recipient = userRepository.findById(request.getRecipientId()).orElse(null);
-      if (Objects.nonNull(recipient) && Objects.nonNull(recipient.getEmail())) {
-        mailService.sendNotificationEmail(
-            recipient.getEmail(),
-            Objects.toString(recipient.getFullName(), "User"),
-            request.getTitle(),
-            request.getBody());
-        entity.setSentAt(OffsetDateTime.now());
+      try {
+        UserEntity recipient = userRepository.findById(request.getRecipientId()).orElse(null);
+        if (Objects.nonNull(recipient) && Objects.nonNull(recipient.getEmail())) {
+          mailService.sendNotificationEmail(
+              recipient.getEmail(),
+              Objects.toString(recipient.getFullName(), "User"),
+              request.getTitle(),
+              request.getBody());
+          entity.setSentAt(OffsetDateTime.now());
+        }
+      } catch (Exception e) {
+        log.warn("Email delivery failed for user {}", request.getRecipientId(), e);
       }
     }
 
@@ -123,6 +135,26 @@ public class NotificationService {
   @Transactional
   public void markAllAsRead(Integer userId) {
     notificationRepository.markAllAsRead(userId);
+  }
+
+  /**
+   * Deletes every notification a deleted post leaves dangling (B42) — one that pointed straight at
+   * the post, or at a comment underneath it. Without this, a like/comment/mention notification
+   * outlived the post it named and opened onto a 404.
+   */
+  @Transactional
+  public void deleteForPost(Integer postId) {
+    notificationRepository.deleteAllForPost(postId);
+  }
+
+  /**
+   * Deletes every notification pointing at one comment (B42), for a single comment deleted on its
+   * own. A post-wide delete already covers the comments a post takes with it — see {@link
+   * #deleteForPost}.
+   */
+  @Transactional
+  public void deleteForComment(Integer commentId) {
+    notificationRepository.deleteByReferenceTypeAndReferenceId("COMMENT", commentId);
   }
 
   public NotificationPreferenceResponseDto updatePreference(
@@ -163,8 +195,11 @@ public class NotificationService {
             .type(request.getType())
             .title(request.getTitle())
             .body(request.getBody())
+            .messageKey(request.getMessageKey())
+            .messageArgs(request.getMessageArgs())
             .referenceId(request.getReferenceId())
             .referenceType(request.getReferenceType())
+            .postId(request.getPostId())
             .channel(request.getChannel())
             .build();
     return notificationRepository.save(entity);
@@ -208,8 +243,11 @@ public class NotificationService {
         .type(entity.getType())
         .title(entity.getTitle())
         .body(entity.getBody())
+        .messageKey(entity.getMessageKey())
+        .messageArgs(entity.getMessageArgs())
         .referenceId(entity.getReferenceId())
         .referenceType(entity.getReferenceType())
+        .postId(entity.getPostId())
         .channel(entity.getChannel())
         .isRead(entity.getIsRead())
         .createdAt(entity.getCreatedAt())

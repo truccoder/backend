@@ -2,17 +2,22 @@ package com.socialapp.chat.service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
+import com.socialapp.blocks.entity.UserBlockId;
 import com.socialapp.blocks.service.BlockQueryService;
 import com.socialapp.chat.client.StreamChatClient;
 import com.socialapp.chat.config.StreamChatProperties;
 import com.socialapp.chat.dto.ChatTokenResponse;
+import com.socialapp.chat.dto.GroupChatResponse;
 import com.socialapp.common.exception.MissingConfigurationException;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
@@ -27,6 +32,13 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RequiredArgsConstructor
 public class StreamChatService {
+
+  /**
+   * Below this, a "group" is a direct message with a name on it. Routing one through here would
+   * create a second channel between two people who already have one and split their unread count
+   * across the two — the frontend creates direct messages against Stream itself.
+   */
+  private static final int MIN_OTHER_MEMBERS = 2;
 
   private final StreamChatProperties properties;
   private final StreamTokenSigner tokenSigner;
@@ -72,7 +84,9 @@ public class StreamChatService {
    *     deliberately does not say "blocked" — same reasoning as the friend-request rejection: the
    *     product does not confirm to a blocked person that they were blocked.
    */
-  @Transactional(readOnly = true)
+  // No @Transactional: the only database work is one findAllById, which manages its own, and the
+  // method then makes an HTTP round trip to Stream. Wrapping the two together held a Postgres
+  // connection open for the duration of somebody else's network latency, for no isolation benefit.
   public void ensureChatParticipants(Integer callerId, Integer otherUserId) {
     if (callerId.equals(otherUserId)) {
       throw new ValidationException("You cannot start a conversation with yourself");
@@ -201,5 +215,123 @@ public class StreamChatService {
           user.getId(),
           e);
     }
+  }
+
+  /**
+   * Creates a named group channel with the caller as its owner.
+   *
+   * <p>The pair endpoint could get a group open — call it once per member, then let the browser
+   * create the channel — and that is what a frontend has to do without this. It costs one request
+   * per member, and it leaves two things wrong that no amount of client code can fix. The browser
+   * decides the channel's owner, because {@code created_by_id} is whatever the client sends. And
+   * the only blocks checked are the ones involving the caller: invite two people who have blocked
+   * each other and the group is created anyway, putting them in a room together, which is the one
+   * outcome blocking exists to prevent.
+   *
+   * <p>So the whole membership is settled here, in one pass: one lookup for existence, one for
+   * blocks across every pair, one upsert for the batch, one channel create.
+   *
+   * <p><b>The caller is not asked for.</b> They are added as a member and named as owner from the
+   * authenticated principal, so a request cannot build a group it is not part of, nor hand
+   * ownership to someone else.
+   *
+   * @throws ValidationException if the group is too small once duplicates and the caller are
+   *     removed, or if a block stands between any two members
+   * @throws NotFoundException if any member id has no user behind it
+   */
+  // No @Transactional, for the same reason as ensureChatParticipants: the database work is two
+  // self-managing reads, and holding a connection across the two HTTP round trips to Stream buys
+  // no isolation — the channel create is not undone by a rollback either way.
+  public GroupChatResponse createGroupChat(
+      Integer callerId, String name, String imageUrl, List<Integer> requestedMemberIds) {
+    if (!properties.isConfigured()) {
+      throw new MissingConfigurationException(
+          "Stream Chat is not configured (missing stream.chat.api-key/api-secret); cannot create a"
+              + " group chat");
+    }
+
+    // LinkedHashSet, not a plain distinct(): the frontend's member picker can legitimately produce
+    // the same person twice, and the caller may or may not have included themselves. Order is kept
+    // so the response lists members the way they were chosen.
+    LinkedHashSet<Integer> otherIds = new LinkedHashSet<>(requestedMemberIds);
+    otherIds.remove(callerId);
+
+    if (otherIds.size() < MIN_OTHER_MEMBERS) {
+      // Deliberately after de-duplication rather than as a @Size on the DTO, which cannot see that
+      // [7, 7] or [7, callerId] is one person. The bean validation ceiling still applies first and
+      // keeps an absurd list from reaching the database.
+      throw new ValidationException(
+          "A group needs at least " + MIN_OTHER_MEMBERS + " other people besides yourself");
+    }
+
+    LinkedHashSet<Integer> allIds = new LinkedHashSet<>();
+    allIds.add(callerId);
+    allIds.addAll(otherIds);
+
+    List<UserEntity> members = userRepository.findAllById(allIds);
+    if (members.size() != allIds.size()) {
+      Set<Integer> found = members.stream().map(UserEntity::getId).collect(Collectors.toSet());
+      List<Integer> missing = allIds.stream().filter(id -> !found.contains(id)).toList();
+      throw new NotFoundException("User not found with ID: " + missing);
+    }
+
+    rejectIfAnyPairIsBlocked(callerId, allIds);
+
+    streamChatClient.upsertUsers(members);
+
+    // Random rather than derived from the membership: two people can want two different groups
+    // with the same members, and a derived id would silently hand the second one the first one's
+    // channel — Stream's create verb is get-or-create, so it would not even error.
+    String channelId = "grp-" + UUID.randomUUID();
+    streamChatClient.createGroupChannel(channelId, name, imageUrl, callerId, allIds);
+
+    log.info(
+        "Created Stream group channel {} with {} member(s) for user {}",
+        channelId,
+        allIds.size(),
+        callerId);
+
+    return GroupChatResponse.builder()
+        .channelType(StreamChatClient.GROUP_CHANNEL_TYPE)
+        .channelId(channelId)
+        .cid(StreamChatClient.GROUP_CHANNEL_TYPE + ":" + channelId)
+        .name(name)
+        .memberIds(allIds.stream().map(String::valueOf).toList())
+        .createdBy(String.valueOf(callerId))
+        .build();
+  }
+
+  /**
+   * Refuses a membership that puts two blocked people in one room.
+   *
+   * <p>What may be said about it differs by who is involved. A block between the caller and someone
+   * they picked is already discoverable one pair at a time through {@code ensureChatParticipants},
+   * so naming those ids tells them nothing new and lets the member picker mark them. A block
+   * between two <em>other</em> members is a fact about two third parties; saying which two would
+   * hand anyone a way to probe for blocks between people they know, by building groups and reading
+   * the error. That case gets a message that names nobody — awkward for whoever is trying to
+   * assemble the group, and the right trade.
+   *
+   * <p>Neither message says "blocked", following the same rule as the friend-request rejection.
+   */
+  private void rejectIfAnyPairIsBlocked(Integer callerId, Set<Integer> allIds) {
+    List<UserBlockId> blocks = blockQueryService.blocksAmong(allIds);
+    if (blocks.isEmpty()) {
+      return;
+    }
+
+    // TreeSet so the ids come out in a stable order; the message is asserted on in tests and read
+    // by a human in a support ticket.
+    Set<Integer> unreachable =
+        blocks.stream()
+            .filter(b -> b.getBlockerId().equals(callerId) || b.getBlockedId().equals(callerId))
+            .map(b -> b.getBlockerId().equals(callerId) ? b.getBlockedId() : b.getBlockerId())
+            .collect(Collectors.toCollection(TreeSet::new));
+
+    if (!unreachable.isEmpty()) {
+      throw new ValidationException(
+          "You cannot start a conversation with these users: " + unreachable);
+    }
+    throw new ValidationException("Some of the people you selected cannot be in the same group");
   }
 }

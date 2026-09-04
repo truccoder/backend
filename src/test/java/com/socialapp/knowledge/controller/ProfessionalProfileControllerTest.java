@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -22,7 +23,6 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.knowledge.dto.ProfessionalProfileResponseDto;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.entity.enums.SeniorityLevel;
@@ -120,17 +120,17 @@ class ProfessionalProfileControllerTest {
     }
 
     @Test
-    @DisplayName("shouldReturn404_whenProfileDoesNotExist")
-    void shouldReturn404_whenProfileDoesNotExist() throws Exception {
-      // Given
-      when(profileService.getProfile(currentUser.getId()))
-          .thenThrow(new NotFoundException("Professional profile not found for user: 1"));
+    @DisplayName("shouldReturn200WithEmptyBody_whenProfileHasNotBeenSetUpYet")
+    void shouldReturn200WithEmptyBody_whenProfileHasNotBeenSetUpYet() throws Exception {
+      // Given: B43 — not-set-up is not not-found, so a brand-new account no longer 404s on every
+      // load of /profile just for lacking a professional profile.
+      when(profileService.getProfile(currentUser.getId())).thenReturn(null);
 
       // When / Then
       mockMvc
           .perform(authed(get(PROFILE_URL)))
-          .andExpect(status().isNotFound())
-          .andExpect(jsonPath("$.message").value("Professional profile not found for user: 1"));
+          .andExpect(status().isOk())
+          .andExpect(content().string(""));
     }
 
     @Test

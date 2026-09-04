@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,11 +44,13 @@ import com.socialapp.friendships.entity.FriendRequestEntity;
 import com.socialapp.friendships.entity.enums.FriendRequestStatus;
 import com.socialapp.friendships.repository.FriendRequestRepository;
 import com.socialapp.friendships.repository.FriendshipRepository;
+import com.socialapp.hashtags.dto.AuthorHashtagDto;
 import com.socialapp.knowledge.entity.UserProfessionalProfileEntity;
 import com.socialapp.knowledge.entity.enums.PrimaryRole;
 import com.socialapp.knowledge.repository.UserProfessionalProfileRepository;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.services.NotificationService;
+import com.socialapp.posts.repository.HashtagRepository;
 import com.socialapp.security.entity.UserEntity;
 import com.socialapp.security.repository.UserRepository;
 
@@ -79,6 +82,7 @@ class FriendshipServiceTest {
   @Mock private UserProfessionalProfileRepository professionalProfileRepository;
   @Mock private Neo4jClient neo4jClient;
   @Mock private BlockQueryService blockQueryService;
+  @Mock private HashtagRepository hashtagRepository;
 
   @InjectMocks private FriendshipService friendshipService;
 
@@ -740,6 +744,89 @@ class FriendshipServiceTest {
       verify(userProfileCache).getOrLoadAll(eq(Set.of(2)), any());
     }
 
+    @Test
+    @DisplayName("should expose the caller's shared role and matched skills as suggestion reasons")
+    void shouldExposeSharedRoleAndMatchedSkills_asReasons() {
+      // Given — same pool and profiles as shouldRankByPrimaryRoleMatch_whenCallerHasProfile, but
+      // this test asserts on the reason fields rather than on ordering.
+      List<MutualFriendCountDto> pool =
+          List.of(new MutualFriendCountDto(2, 1L), new MutualFriendCountDto(3, 1L));
+      when(friendSuggestionCache.getOrLoad(eq(ACTOR_ID), any())).thenReturn(pool);
+
+      UserProfessionalProfileEntity caller =
+          professionalProfile(ACTOR_ID, PrimaryRole.BACKEND, List.of("Java", "Kotlin"));
+      UserProfessionalProfileEntity sameRoleCandidate =
+          professionalProfile(3, PrimaryRole.BACKEND, List.of("Java"));
+      UserProfessionalProfileEntity differentRoleCandidate =
+          professionalProfile(2, PrimaryRole.FRONTEND, List.of("Python"));
+      when(professionalProfileRepository.findById(ACTOR_ID)).thenReturn(Optional.of(caller));
+      when(professionalProfileRepository.findAllById(Set.of(2, 3)))
+          .thenReturn(List.of(sameRoleCandidate, differentRoleCandidate));
+      when(userProfileCache.getOrLoadAll(eq(Set.of(2, 3)), any()))
+          .thenReturn(Map.of(2, profile(2), 3, profile(3)));
+
+      // When
+      List<FriendSuggestionDto> result = friendshipService.getSuggestions(ACTOR_ID, 10);
+
+      // Then — candidate 3 shares the caller's BACKEND role and "Java"; candidate 2 shares neither.
+      FriendSuggestionDto forThree =
+          result.stream().filter(dto -> dto.profile().userId().equals(3)).findFirst().orElseThrow();
+      FriendSuggestionDto forTwo =
+          result.stream().filter(dto -> dto.profile().userId().equals(2)).findFirst().orElseThrow();
+
+      assertThat(forThree.sharedRole()).isEqualTo(PrimaryRole.BACKEND);
+      assertThat(forThree.matchedSkills()).containsExactly("Java");
+      assertThat(forTwo.sharedRole()).isNull();
+      assertThat(forTwo.matchedSkills()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should expose hashtags both the caller and a candidate posted publicly")
+    void shouldExposeSharedHashtags_fromBothPeoplesPublicPosts() {
+      // Given — neither person needs a professional profile for this reason to show up.
+      List<MutualFriendCountDto> pool = List.of(new MutualFriendCountDto(2, 1L));
+      when(friendSuggestionCache.getOrLoad(eq(ACTOR_ID), any())).thenReturn(pool);
+      when(professionalProfileRepository.findById(ACTOR_ID)).thenReturn(Optional.empty());
+      when(userProfileCache.getOrLoadAll(eq(Set.of(2)), any())).thenReturn(Map.of(2, profile(2)));
+      when(hashtagRepository.findHashtagsByAuthors(Set.of(ACTOR_ID, 2)))
+          .thenReturn(
+              List.of(
+                  new AuthorHashtagDto(ACTOR_ID, "java"),
+                  new AuthorHashtagDto(ACTOR_ID, "spring"),
+                  new AuthorHashtagDto(2, "java"),
+                  new AuthorHashtagDto(2, "docker")));
+
+      // When
+      List<FriendSuggestionDto> result = friendshipService.getSuggestions(ACTOR_ID, 10);
+
+      // Then — "java" is the only tag both people used; "spring" and "docker" are one-sided.
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).sharedHashtags()).containsExactly("java");
+    }
+
+    @Test
+    @DisplayName("should cap shared hashtags even when more than five overlap")
+    void shouldCapSharedHashtagsAtFive() {
+      // Given
+      List<MutualFriendCountDto> pool = List.of(new MutualFriendCountDto(2, 1L));
+      when(friendSuggestionCache.getOrLoad(eq(ACTOR_ID), any())).thenReturn(pool);
+      when(professionalProfileRepository.findById(ACTOR_ID)).thenReturn(Optional.empty());
+      when(userProfileCache.getOrLoadAll(eq(Set.of(2)), any())).thenReturn(Map.of(2, profile(2)));
+
+      List<AuthorHashtagDto> rows = new java.util.ArrayList<>();
+      for (String tag : List.of("a", "b", "c", "d", "e", "f")) {
+        rows.add(new AuthorHashtagDto(ACTOR_ID, tag));
+        rows.add(new AuthorHashtagDto(2, tag));
+      }
+      when(hashtagRepository.findHashtagsByAuthors(Set.of(ACTOR_ID, 2))).thenReturn(rows);
+
+      // When
+      List<FriendSuggestionDto> result = friendshipService.getSuggestions(ACTOR_ID, 10);
+
+      // Then — six tags overlap but the reason is capped at five, per MAX_SHARED_HASHTAGS.
+      assertThat(result.get(0).sharedHashtags()).hasSize(5);
+    }
+
     private UserProfessionalProfileEntity professionalProfile(
         Integer userId, PrimaryRole role, List<String> techStack) {
       UserProfessionalProfileEntity profile = new UserProfessionalProfileEntity();
@@ -854,15 +941,16 @@ class FriendshipServiceTest {
       fromStranger.setAddresseeId(ACTOR_ID);
       fromStranger.setStatus(FriendRequestStatus.PENDING);
 
-      when(friendRequestRepository.findByAddresseeIdAndStatusOrderByCreatedAtDesc(
-              ACTOR_ID, FriendRequestStatus.PENDING))
+      when(friendRequestRepository.findIncomingForPage(
+              eq(ACTOR_ID), eq(FriendRequestStatus.PENDING), isNull(), any()))
           .thenReturn(List.of(fromBlocked, fromStranger));
       when(blockQueryService.blockedPairIds(ACTOR_ID)).thenReturn(Set.of(OTHER_ID));
       when(userProfileCache.getOrLoadAll(eq(Set.of(THIRD_ID)), any()))
           .thenReturn(Map.of(THIRD_ID, new UserProfileDto(THIRD_ID, "u3", "Three", null)));
 
       // When
-      List<PendingFriendRequestDto> pending = friendshipService.getPendingRequests(ACTOR_ID);
+      List<PendingFriendRequestDto> pending =
+          friendshipService.getPendingRequests(ACTOR_ID, null, 20).requests();
 
       // Then — this screen is where a leftover row would put a blocked user's name back in front
       // of the person who blocked them

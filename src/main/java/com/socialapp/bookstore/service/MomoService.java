@@ -2,6 +2,7 @@ package com.socialapp.bookstore.service;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +14,7 @@ import com.socialapp.bookstore.entity.enums.PaymentStatus;
 import com.socialapp.bookstore.repository.BookPurchaseRepository;
 import com.socialapp.common.exception.NotFoundException;
 import com.socialapp.common.exception.ValidationException;
+import com.socialapp.notifications.NotificationMessages;
 import com.socialapp.notifications.dto.SendNotificationRequest;
 import com.socialapp.notifications.entity.enums.NotificationType;
 import com.socialapp.notifications.services.NotificationService;
@@ -37,10 +39,30 @@ public class MomoService {
   private final UserRepository userRepository;
   private final NotificationService notificationService;
 
-  private static final String DEFAULT_PAYMENT_METHOD = "ATM";
+  /**
+   * Fallback label for {@code payment_method} when MoMo's answer carries no {@code payType}.
+   *
+   * <p>Was {@code "ATM"}, which stopped being true once the request type became configurable (see
+   * {@code MomoProperties#requestType}): the same code now serves the wallet flow and the card
+   * flow, so guessing either one is wrong half the time. The gateway's own name is the honest
+   * answer when the gateway declines to be more specific.
+   */
+  private static final String DEFAULT_PAYMENT_METHOD = "MOMO";
+
+  /**
+   * {@code payment_method} written by {@link #settleAsPaidForDevelopment}, so a row settled by hand
+   * on a developer machine can never be mistaken for one MoMo actually collected money for.
+   */
+  private static final String DEV_PAYMENT_METHOD = "DEV";
+
   private static final int SUCCESS_RESULT_CODE = 0;
-  // MoMo's hosted payWithATM link is short-lived; matches the window we're willing to assume a
-  // pending transactionRef might still be paid against before treating it as abandoned.
+  // How long a pending transactionRef is assumed to still be payable before it is treated as
+  // abandoned and overwritten. Kept in step with MomoProperties.orderExpireMinutes, which is what
+  // MoMo is told; an order that outlives this window is one a customer can still pay after this
+  // side has forgotten the reference.
+  //
+  // IT IS ALSO HOW LONG A BUYER IS LOCKED OUT OF RETRYING, which is why the rejection below names
+  // the orderId and says when to come back rather than failing blankly.
   private static final long PENDING_PAYMENT_STALE_MINUTES = 15;
 
   @Transactional
@@ -130,6 +152,21 @@ public class MomoService {
       return false;
     }
 
+    // A signed IPN naming an orderId this database has no row for means money may have moved with
+    // nothing on this side to attach it to — the one failure in this flow that loses evidence
+    // rather than just an update. Logged at ERROR with the whole payload before the exception
+    // leaves, because that payload carries MoMo's own signature and is the only record of the
+    // transaction we will ever hold. Rethrown unchanged so the caller still sees a 404 and MoMo
+    // still retries; the point is that the retries are now visible.
+    if (!purchaseRepository.findByTransactionRef(orderId).isPresent()) {
+      log.error(
+          "[orderId={}] MoMo IPN passed signature verification but no purchase holds this"
+              + " transaction ref. If resultCode is 0 this is a PAID order with no local record —"
+              + " reconcile by hand. Signed payload: {}",
+          orderId,
+          payload);
+    }
+
     return applyResult(
         orderId,
         resultCode,
@@ -142,8 +179,16 @@ public class MomoService {
    * development, where MoMo cannot reach an IPN URL on localhost.
    */
   @Transactional
-  public boolean syncPaymentStatus(String transactionRef) {
-    findPurchaseOrThrow(transactionRef);
+  public boolean syncPaymentStatus(Integer callerId, String transactionRef) {
+    BookPurchaseEntity purchase = findPurchaseOrThrow(transactionRef);
+
+    // The transaction ref comes straight off the path and used to be trusted on its own, so any
+    // signed-in user could drive somebody else's purchase to COMPLETED or FAILED — and trigger the
+    // author's "your book sold" notification with it. 404, not 403: someone else's order ref is
+    // not theirs to confirm the existence of.
+    if (!purchase.getBuyerId().equals(callerId)) {
+      throw new NotFoundException("Purchase not found: " + transactionRef);
+    }
 
     Map<String, Object> response = momoApiClient.queryPaymentStatus(transactionRef);
 
@@ -152,12 +197,73 @@ public class MomoService {
         transactionRef,
         response.get("resultCode"));
 
+    // Same guard as handleWebhook: a malformed resultCode from MoMo is their bad data, not a
+    // reason to throw NumberFormatException out of a user-facing endpoint.
+    int resultCode;
+    try {
+      resultCode = asInt(response.get("resultCode"));
+    } catch (NumberFormatException e) {
+      log.warn("[orderId={}] MoMo query returned a malformed resultCode", transactionRef);
+      return false;
+    }
+
+    return applyResult(
+        transactionRef, resultCode, String.valueOf(response.getOrDefault("transId", "")), null);
+  }
+
+  /**
+   * Settles one of the caller's own purchases as if MoMo had reported it paid. <b>DEVELOPMENT
+   * ONLY.</b>
+   *
+   * <p>Exists because neither flow MoMo offers can be finished by one person at a desk: the QR of
+   * {@code captureWallet} needs a phone with the MoMo app, and {@code payWithATM} — the card-entry
+   * screen that is easy to fill in by hand — never leaves result code 7002 on the sandbox. Without
+   * this, "buy a book" cannot be demonstrated end to end at all.
+   *
+   * <p><b>Its only guard is the {@code dev} profile</b>, applied at
+   * {@code DevPaymentController}, which is the one bean that reaches this method. That gate is
+   * off by default everywhere — including production, where {@code SPRING_PROFILES_ACTIVE} comes
+   * from an {@code .env} maintained in the infra repo and can silently arrive empty (see the
+   * warning at the top of {@code application-prod.yml}). Gating on {@code !prod} would therefore
+   * have handed every signed-in user a free copy of any book the day that variable went missing;
+   * requiring {@code dev} to be named explicitly fails in the harmless direction instead.
+   *
+   * <p>Ownership is still checked, and still 404s rather than 403s, for the same reason
+   * {@link #syncPaymentStatus} does: even on a developer machine this must not be a way to settle —
+   * or merely confirm the existence of — somebody else's order.
+   */
+  @Transactional
+  public boolean settleAsPaidForDevelopment(Integer callerId, String transactionRef) {
+    BookPurchaseEntity purchase = findPurchaseOrThrow(transactionRef);
+
+    if (!purchase.getBuyerId().equals(callerId)) {
+      throw new NotFoundException("Purchase not found: " + transactionRef);
+    }
+
+    log.warn(
+        "[orderId={}] settleAsPaidForDevelopment: marking this purchase PAID WITHOUT ANY MONEY"
+            + " HAVING MOVED, on the caller's own request. This is only reachable under the `dev`"
+            + " profile.",
+        transactionRef);
+
+    // Deliberately the same applyResult the IPN uses, with the resultCode MoMo would have sent:
+    // the point of the endpoint is to exercise the real settlement path — COMPLETED, paidAt, the
+    // author's notification, the idempotency short-circuit — not a shortcut past it.
     return applyResult(
         transactionRef,
-        asInt(response.get("resultCode")),
-        String.valueOf(response.getOrDefault("transId", "")),
-        null);
+        SUCCESS_RESULT_CODE,
+        "DEV-" + System.currentTimeMillis(),
+        DEV_PAYMENT_METHOD);
   }
+
+  /**
+   * MoMo result codes that mean "not finished yet", as opposed to "finished and failed".
+   *
+   * <p>{@code 1000} is "Giao dịch đã được khởi tạo, chờ người dùng xác nhận thanh toán" and
+   * {@code 7000}/{@code 7002} are "đang được xử lý" — a payment still in flight, which is the most
+   * likely thing MoMo has to say at the exact moment this is asked.
+   */
+  private static final Set<Integer> IN_FLIGHT_RESULT_CODES = Set.of(1000, 7000, 7002);
 
   private boolean applyResult(String orderId, int resultCode, String transId, String payType) {
     BookPurchaseEntity purchase = findPurchaseOrThrow(orderId);
@@ -170,6 +276,27 @@ public class MomoService {
     if (purchase.getPaymentStatus() == PaymentStatus.COMPLETED) {
       log.info("[orderId={}] applyResult: already COMPLETED, ignoring duplicate callback", orderId);
       return true;
+    }
+
+    /**
+     * NOT SUCCESS IS NOT THE SAME AS FAILED, and treating it as such destroyed live payments.
+     *
+     * <p>This method used to be `success ? COMPLETED : FAILED` on a single equality test against 0.
+     * Every other code MoMo can answer with went to FAILED — including the ones that mean the
+     * payment is still running. `/payment/success` polls `syncPaymentStatus` on arrival precisely
+     * because the browser usually beats the settlement, so the FIRST poll of a perfectly healthy
+     * purchase would routinely read 1000 or 7002 and write FAILED over a payment that then went on
+     * to succeed. The money arrives against a row that says it did not.
+     *
+     * <p>Leaving the row PENDING and returning false is what the caller already expects: the panel
+     * keeps polling on its bounded interval, and the IPN — or the next poll — settles it for real.
+     */
+    if (!success && IN_FLIGHT_RESULT_CODES.contains(resultCode)) {
+      log.info(
+          "[orderId={}] applyResult: resultCode={} is not final, leaving purchase PENDING",
+          orderId,
+          resultCode);
+      return false;
     }
 
     if (success) {
@@ -200,6 +327,10 @@ public class MomoService {
             .type(NotificationType.BOOK_PURCHASED)
             .title("Your book was purchased")
             .body(buyerName(purchase.getBuyerId()) + " purchased \"" + book.getTitle() + "\"")
+            .messageKey(NotificationMessages.BOOK_PURCHASED)
+            .messageArgs(
+                NotificationMessages.args(
+                    "actor", buyerName(purchase.getBuyerId()), "book", book.getTitle()))
             .referenceId(book.getId())
             .referenceType("BOOK")
             .build());

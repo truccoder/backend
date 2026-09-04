@@ -27,6 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.socialapp.common.enums.LearningCategory;
 import com.socialapp.moderation.service.BanDetailsService;
 import com.socialapp.roadmap.dto.RoadmapDto;
 import com.socialapp.roadmap.dto.RoadmapNodeDto;
@@ -119,6 +120,7 @@ class RoadmapControllerTest {
     RoadmapDto dto = new RoadmapDto();
     dto.setName("Backend");
     dto.setDescription("Java track");
+    dto.setCategory(LearningCategory.BACKEND);
     return dto;
   }
 
@@ -151,7 +153,21 @@ class RoadmapControllerTest {
                   .content(json(roadmapRequest())))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.id").value(7))
-          .andExpect(jsonPath("$.name").value("Backend"));
+          .andExpect(jsonPath("$.name").value("Backend"))
+          .andExpect(jsonPath("$.category").value("BACKEND"));
+    }
+
+    @Test
+    @DisplayName("shouldReturn400_whenCategoryIsNotAValidEnumValue")
+    void shouldRejectUnknownCategory() throws Exception {
+      // EP: category phải là một hằng số của LearningCategory. Nhận bừa rồi lặng lẽ lưu OTHER sẽ
+      // tạo ra một lộ trình nằm sai tab mà không ai được báo.
+      mockMvc
+          .perform(
+              asAdmin(post(URL))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"name\":\"Backend\",\"category\":\"KHONG_CO_THAT\"}"))
+          .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -218,7 +234,9 @@ class RoadmapControllerTest {
       mockMvc
           .perform(asRegularUser(get(URL)))
           .andExpect(status().isOk())
-          .andExpect(jsonPath("$[0].name").value("Backend"));
+          .andExpect(jsonPath("$[0].name").value("Backend"))
+          // FE dựng tab từ chính danh sách này, nên thiếu trường là hỏng cả màn hình phân loại.
+          .andExpect(jsonPath("$[0].category").value("BACKEND"));
     }
 
     @Test
