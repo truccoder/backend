@@ -349,6 +349,7 @@ public class FriendshipService {
                   return new PendingFriendRequestDto(
                       request.getId(),
                       request.getRequesterId(),
+                      profile != null ? profile.username() : null,
                       profile != null ? profile.fullName() : null,
                       profile != null ? profile.profilePictureUrl() : null,
                       request.getStatus(),
@@ -381,6 +382,7 @@ public class FriendshipService {
                   return new SentFriendRequestDto(
                       request.getId(),
                       request.getAddresseeId(),
+                      profile != null ? profile.username() : null,
                       profile != null ? profile.fullName() : null,
                       profile != null ? profile.profilePictureUrl() : null,
                       request.getStatus(),

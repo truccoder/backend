@@ -259,6 +259,7 @@ class FriendshipControllerTest {
           new PendingFriendRequestDto(
               5,
               2,
+              "friendtwo",
               "Friend Two",
               "http://cdn.example.com/avatar2.png",
               FriendRequestStatus.PENDING,
@@ -272,6 +273,7 @@ class FriendshipControllerTest {
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.requests[0].id").value(5))
           .andExpect(jsonPath("$.requests[0].requesterId").value(2))
+          .andExpect(jsonPath("$.requests[0].requesterUsername").value("friendtwo"))
           .andExpect(jsonPath("$.requests[0].requesterFullName").value("Friend Two"))
           .andExpect(jsonPath("$.requests[0].status").value("PENDING"));
     }
@@ -318,6 +320,7 @@ class FriendshipControllerTest {
           new SentFriendRequestDto(
               7,
               3,
+              "friendthree",
               "Friend Three",
               null,
               FriendRequestStatus.PENDING,
@@ -331,6 +334,7 @@ class FriendshipControllerTest {
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.requests[0].id").value(7))
           .andExpect(jsonPath("$.requests[0].addresseeId").value(3))
+          .andExpect(jsonPath("$.requests[0].addresseeUsername").value("friendthree"))
           .andExpect(jsonPath("$.requests[0].addresseeFullName").value("Friend Three"))
           .andExpect(jsonPath("$.requests[0].status").value("PENDING"));
     }
